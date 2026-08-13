@@ -1,0 +1,71 @@
+import pkg from 'pg';
+const { Pool } = pkg;
+import dotenv from 'dotenv';
+
+dotenv.config();
+
+// Create connection pool
+const pool = new Pool({
+    user: process.env.DB_USER,
+    password: process.env.DB_PASSWORD,
+    host: process.env.DB_HOST,
+    port: process.env.DB_PORT,
+    database: process.env.DB_NAME,
+    max: 20,
+    idleTimeoutMillis: 30000,
+    connectionTimeoutMillis: 2000,
+});
+
+// Test database connection
+export const testConnection = async () => {
+    try {
+        const client = await pool.connect();
+        console.log('✅ Database connected successfully');
+        client.release();
+        return true;
+    } catch (error) {
+        console.error('❌ Database connection error:', error.message);
+        return false;
+    }
+};
+
+// Create companies table only
+export const createTables = async () => {
+    try {
+
+        // company table
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS companies (
+                company_id BIGSERIAL PRIMARY KEY,
+                company_name VARCHAR(255) NOT NULL,
+                company_code VARCHAR(50) NOT NULL UNIQUE,
+                logo_url VARCHAR(500),
+                establishment_year INTEGER,
+                pan VARCHAR(10) UNIQUE,
+                cin VARCHAR(21) UNIQUE,
+                gst_no VARCHAR(15) UNIQUE,
+                full_address TEXT,
+                phone_number VARCHAR(20),
+                email_id VARCHAR(255),
+                company_type VARCHAR(100),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        `);
+
+
+
+        
+
+        await pool.query(`CREATE INDEX IF NOT EXISTS idx_company_code ON companies(company_code)`);
+        await pool.query(`CREATE INDEX IF NOT EXISTS idx_company_name ON companies(company_name)`);
+        console.log('✅ Indexes created');
+
+        console.log('✅ All tables created successfully');
+    } catch (error) {
+        console.error('❌ Error creating tables:', error);
+        throw error;
+    }
+};
+
+// Export pool for queries
+export default pool;
