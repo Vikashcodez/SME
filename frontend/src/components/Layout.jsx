@@ -4,26 +4,34 @@ import Sidebar from './Sidebar';
 import Header from './Header';
 
 const Layout = () => {
-  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const [isCollapsed, setIsCollapsed] = useState(false);
+  const [isMobileOpen, setIsMobileOpen] = useState(false);
 
-  const toggleSidebar = () => {
-    setIsSidebarOpen(!isSidebarOpen);
-  };
+  const sidebarWidth = isCollapsed ? 62 : 236;
 
   return (
-    <div className="flex h-screen bg-gray-50">
+    <div style={{ minHeight: '100vh', background: '#fafbfc' }}>
       {/* Sidebar */}
-      <div className={`${isSidebarOpen ? 'block' : 'hidden'} lg:block`}>
-        <Sidebar />
-      </div>
+      <Sidebar
+        isCollapsed={isCollapsed}
+        onToggleCollapse={() => setIsCollapsed(!isCollapsed)}
+      />
 
-      {/* Main Content Area */}
-      <div className="flex-1 flex flex-col overflow-hidden lg:ml-64">
-        {/* Header */}
-        <Header toggleSidebar={toggleSidebar} />
+      {/* Main Content */}
+      <div
+        style={{
+          marginLeft: sidebarWidth,
+          transition: 'margin-left 0.2s cubic-bezier(0.22,1,0.36,1)',
+          minHeight: '100vh',
+          display: 'flex',
+          flexDirection: 'column'
+        }}
+      >
+        {/* Header — fixed at top */}
+        <Header toggleSidebar={() => setIsMobileOpen(!isMobileOpen)} />
 
         {/* Page Content */}
-        <main className="flex-1 overflow-y-auto p-6 bg-gray-50">
+        <main style={{ flex: 1 }}>
           <Outlet />
         </main>
       </div>

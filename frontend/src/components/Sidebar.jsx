@@ -3,8 +3,7 @@ import { NavLink } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import Logo from '../assets/logo.png';
 
-const Sidebar = () => {
-  const [isCollapsed, setIsCollapsed] = useState(false);
+const Sidebar = ({ isCollapsed, onToggleCollapse }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const { user } = useAuth();
 
@@ -200,14 +199,14 @@ const Sidebar = () => {
           borderRight: '1px solid #f0f0f0'
         }}
       >
-        {/* ── TOP ACCENT LINE ── */}
+        {/* Top accent line */}
         <div style={{
           height: '2px',
           background: 'linear-gradient(90deg, #2563eb 0%, #3b82f6 40%, #6366f1 100%)',
           flexShrink: 0
         }} />
 
-        {/* ── HEADER — fixed height, always visible ── */}
+        {/* Header — fixed 52px height, never changes */}
         <div style={{
           display: 'flex',
           alignItems: 'center',
@@ -218,7 +217,6 @@ const Sidebar = () => {
           maxHeight: '52px',
           flexShrink: 0
         }}>
-          {/* Logo */}
           <div style={{
             display: 'flex',
             alignItems: 'center',
@@ -231,11 +229,10 @@ const Sidebar = () => {
               src={Logo}
               alt="Tectum SME"
               style={{
-                width: isCollapsed ? '28px' : '28px',
-                height: isCollapsed ? '28px' : '28px',
+                width: '28px',
+                height: '28px',
                 objectFit: 'contain',
-                flexShrink: 0,
-                transition: 'width 0.2s, height 0.2s'
+                flexShrink: 0
               }}
             />
             {!isCollapsed && (
@@ -252,9 +249,8 @@ const Sidebar = () => {
             )}
           </div>
 
-          {/* Collapse toggle — always same position */}
           <button
-            onClick={() => setIsCollapsed(!isCollapsed)}
+            onClick={onToggleCollapse}
             className="crm-col-btn"
             title={isCollapsed ? 'Expand' : 'Collapse'}
           >
@@ -262,7 +258,7 @@ const Sidebar = () => {
           </button>
         </div>
 
-        {/* ── SEARCH ── */}
+        {/* Search */}
         {!isCollapsed && (
           <div style={{ padding: '0 16px 12px' }}>
             <input
@@ -275,7 +271,7 @@ const Sidebar = () => {
           </div>
         )}
 
-        {/* ── NAVIGATION ── */}
+        {/* Navigation */}
         <nav style={{ flex: 1, overflowY: 'auto', padding: '2px 0' }}>
           {menuSections.map((section, sIdx) => (
             <div key={section.label}>
@@ -293,11 +289,7 @@ const Sidebar = () => {
               ) : (
                 <>
                   {sIdx > 0 && (
-                    <div style={{
-                      margin: '6px 14px',
-                      height: '1px',
-                      background: '#f3f4f6'
-                    }} />
+                    <div style={{ margin: '6px 14px', height: '1px', background: '#f3f4f6' }} />
                   )}
                 </>
               )}
@@ -362,7 +354,7 @@ const Sidebar = () => {
           ))}
         </nav>
 
-        {/* ── BOTTOM — version only ── */}
+        {/* Bottom — version only */}
         <div style={{
           padding: '10px 16px',
           marginTop: 'auto',
