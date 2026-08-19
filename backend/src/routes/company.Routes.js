@@ -1,25 +1,14 @@
 import express from 'express';
-import {
-    createCompany,
-    getAllCompanies,
-    getCompanyById,
-    updateCompany,
-    deleteCompany
-} from '../controllers/company.Controller.js';
-import { authenticate, isSuperAdmin } from '../middleware/auth.js';
+import { createCompany, updateCompany, getCompanies } from '../controllers/company.Controller.js';
+import { uploadLogo } from '../middleware/upload.js';
+import { authenticate} from '../middleware/auth.js';
 
 const router = express.Router();
 
-// All routes require authentication
+
 router.use(authenticate);
-
-// Public routes (for all authenticated users)
-router.get('/', getAllCompanies);
-router.get('/:id', getCompanyById);
-
-// Super admin only routes
-router.post('/', isSuperAdmin, createCompany);
-router.put('/:id', isSuperAdmin, updateCompany);
-router.delete('/:id', isSuperAdmin, deleteCompany);
+router.get('/:id?', getCompanies);
+router.post('/', uploadLogo, createCompany);
+router.put('/:id', uploadLogo, updateCompany);
 
 export default router;
