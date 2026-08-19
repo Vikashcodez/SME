@@ -44,17 +44,37 @@ export const createTables = async () => {
                 pan VARCHAR(10) UNIQUE,
                 cin VARCHAR(21) UNIQUE,
                 gst_no VARCHAR(15) UNIQUE,
-                full_address TEXT,
-                phone_number VARCHAR(20),
-                email_id VARCHAR(255),
+                address TEXT,
+                phone_number VARCHAR(20) UNIQUE NOT NULL,
+                email_id VARCHAR(255) UNIQUE NOT NULL,
                 company_type VARCHAR(100),
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         `);
 
 
-
-        
+        // employee table
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS employees (
+                employee_id BIGSERIAL PRIMARY KEY,
+                company_id BIGINT REFERENCES companies(company_id) ON DELETE CASCADE,
+                first_name VARCHAR(100) NOT NULL,
+                last_name VARCHAR(100),
+                employee_code VARCHAR(50) UNIQUE NOT NULL,
+                email VARCHAR(255) UNIQUE NOT NULL,
+                phone_number VARCHAR(20) UNIQUE NOT NULL,
+                dob DATE,
+                gender VARCHAR(10),
+                department VARCHAR(100),
+                role VARCHAR(100),
+                date_of_joining DATE,
+                address TEXT,
+                password VARCHAR(255) NOT NULL,
+                is_company_admin BOOLEAN DEFAULT FALSE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        `);
+ 
 
         await pool.query(`CREATE INDEX IF NOT EXISTS idx_company_code ON companies(company_code)`);
         await pool.query(`CREATE INDEX IF NOT EXISTS idx_company_name ON companies(company_name)`);
