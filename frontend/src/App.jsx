@@ -6,6 +6,7 @@ import ProtectedRoute from './components/ProtectedRoute';
 import Layout from './components/Layout';
 import Login from './pages/Login';
 import SuperAdminDashboard from './pages/SuperAdminDashboard';
+import CompanyPage from './pages/Company';
 
 const AppContent = () => {
   const { isAuthenticated } = useAuth();
@@ -13,16 +14,20 @@ const AppContent = () => {
   return (
     <Routes>
       <Route path="/login" element={<Login />} />
+      
+      {/* Dashboard Routes with Layout */}
       <Route
-        path="/dashboard"
         element={
           <ProtectedRoute requiredRole="super_admin">
             <Layout />
           </ProtectedRoute>
         }
       >
-        <Route index element={<SuperAdminDashboard />} />
+        <Route path="/dashboard" element={<SuperAdminDashboard />} />
+        <Route path="/companies" element={<CompanyPage />} />
       </Route>
+      
+      {/* Redirects */}
       <Route
         path="/"
         element={
