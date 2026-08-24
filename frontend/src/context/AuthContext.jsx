@@ -54,13 +54,22 @@ export const AuthProvider = ({ children }) => {
       const response = await auth.login({ email, password });
       if (response.data.success) {
         const { token, user } = response.data.data;
+        
+        // Set user data with all fields
+        const userData = {
+          ...user,
+          is_super_admin: user.is_super_admin || false,
+          is_company_admin: user.is_company_admin || false,
+          role: user.role || 'employee'
+        };
+        
         setToken(token);
-        setUser(user);
-        setRole(user.role);
+        setUser(userData);
+        setRole(userData.role);
         localStorage.setItem('token', token);
-        localStorage.setItem('user', JSON.stringify(user));
+        localStorage.setItem('user', JSON.stringify(userData));
         toast.success('Login successful!');
-        return { success: true, user };
+        return { success: true, user: userData };
       }
     } catch (error) {
       const message = error.response?.data?.message || 'Login failed';
@@ -86,7 +95,8 @@ export const AuthProvider = ({ children }) => {
     login,
     logout,
     isAuthenticated: !!token,
-    isSuperAdmin: role === 'super_admin',
+    isSuperAdmin: role === 'super_admin' || user?.is_super_admin === true,
+    isCompanyAdmin: user?.is_company_admin === true || role === 'company_admin',
   };
 
   return (

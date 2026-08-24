@@ -2,8 +2,8 @@ import React from 'react';
 import { Navigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 
-const ProtectedRoute = ({ children, requiredRole }) => {
-  const { isAuthenticated, role, loading } = useAuth();
+const ProtectedRoute = ({ children, requiredRole, allowedRoles }) => {
+  const { isAuthenticated, role, isCompanyAdmin, loading } = useAuth();
 
   if (loading) {
     return (
@@ -17,7 +17,13 @@ const ProtectedRoute = ({ children, requiredRole }) => {
     return <Navigate to="/login" replace />;
   }
 
-  if (requiredRole && role !== requiredRole) {
+  const hasRequiredRole = requiredRole === 'company_admin'
+    ? isCompanyAdmin
+    : requiredRole
+      ? role === requiredRole
+      : !allowedRoles || allowedRoles.includes(role);
+
+  if (!hasRequiredRole) {
     return <Navigate to="/dashboard" replace />;
   }
 

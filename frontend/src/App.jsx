@@ -7,9 +7,10 @@ import Layout from './components/Layout';
 import Login from './pages/Login';
 import SuperAdminDashboard from './pages/SuperAdminDashboard';
 import CompanyPage from './pages/Company';
+import CompanyDashboard from './pages/CompanyDashboard';
 
 const AppContent = () => {
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, isCompanyAdmin } = useAuth();
 
   return (
     <Routes>
@@ -26,13 +27,23 @@ const AppContent = () => {
         <Route path="/dashboard" element={<SuperAdminDashboard />} />
         <Route path="/companies" element={<CompanyPage />} />
       </Route>
+
+      <Route
+        element={
+          <ProtectedRoute requiredRole="company_admin">
+            <Layout />
+          </ProtectedRoute>
+        }
+      >
+        <Route path="/company-dashboard" element={<CompanyDashboard />} />
+      </Route>
       
       {/* Redirects */}
       <Route
         path="/"
         element={
           isAuthenticated ? (
-            <Navigate to="/dashboard" replace />
+            <Navigate to={isCompanyAdmin ? "/company-dashboard" : "/dashboard"} replace />
           ) : (
             <Navigate to="/login" replace />
           )

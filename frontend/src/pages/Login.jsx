@@ -16,11 +16,41 @@ const Login = () => {
   const handleSubmit = async (e) => {
     e.preventDefault();
     setLoading(true);
-    const result = await login(email, password);
-    setLoading(false);
-    if (result.success) navigate('/dashboard');
+    
+    try {
+      const result = await login(email, password);
+      
+      if (result.success) {
+        // Role-based navigation
+        const user = result.user;
+        
+        // Check if user is super admin
+        if (user.is_super_admin === true || user.role === 'super_admin') {
+          navigate('/dashboard');
+          setLoading(false);
+          return;
+        }
+        
+        // Check if user is company admin
+        if (user.is_company_admin === true || user.role === 'company_admin') {
+          navigate('/company-dashboard');
+          setLoading(false);
+          return;
+        }
+        
+        // Default for regular employees
+        navigate('/employee-dashboard');
+        setLoading(false);
+      } else {
+        setLoading(false);
+      }
+    } catch (error) {
+      console.error('Login error:', error);
+      setLoading(false);
+    }
   };
 
+  // Rest of the component remains the same...
   return (
     <>
       <style>{`
