@@ -3,7 +3,8 @@ import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-d
 import { Toaster } from 'react-hot-toast';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import ProtectedRoute from './components/ProtectedRoute';
-import Layout from './components/Layout';
+import AdminLayout from './components/layout/SuperAdmin/Layout';
+import CompanyAdminLayout from './components/layout/CompanyAdmin/Layout';
 import Login from './pages/Login';
 import SuperAdminDashboard from './pages/SuperAdminDashboard';
 import CompanyPage from './pages/Company';
@@ -16,27 +17,40 @@ const AppContent = () => {
     <Routes>
       <Route path="/login" element={<Login />} />
       
-      {/* Dashboard Routes with Layout */}
+      {/* Super Admin Routes - Each with its own AdminLayout */}
       <Route
+        path="/dashboard"
         element={
           <ProtectedRoute requiredRole="super_admin">
-            <Layout />
+            <AdminLayout>
+              <SuperAdminDashboard />
+            </AdminLayout>
           </ProtectedRoute>
         }
-      >
-        <Route path="/dashboard" element={<SuperAdminDashboard />} />
-        <Route path="/companies" element={<CompanyPage />} />
-      </Route>
-
+      />
+      
       <Route
+        path="/companies"
+        element={
+          <ProtectedRoute requiredRole="super_admin">
+            <AdminLayout>
+              <CompanyPage />
+            </AdminLayout>
+          </ProtectedRoute>
+        }
+      />
+
+      {/* Company Admin Routes - Each with its own CompanyAdminLayout */}
+      <Route
+        path="/company-dashboard"
         element={
           <ProtectedRoute requiredRole="company_admin">
-            <Layout />
+            <CompanyAdminLayout>
+              <CompanyDashboard />
+            </CompanyAdminLayout>
           </ProtectedRoute>
         }
-      >
-        <Route path="/company-dashboard" element={<CompanyDashboard />} />
-      </Route>
+      />
       
       {/* Redirects */}
       <Route

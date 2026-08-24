@@ -3,7 +3,7 @@ import { Outlet } from 'react-router-dom';
 import Sidebar from './Sidebar';
 import Header from './Header';
 
-const Layout = () => {
+const Layout = ({ children }) => {
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [isMobileOpen, setIsMobileOpen] = useState(false);
 
@@ -32,7 +32,7 @@ const Layout = () => {
 
         {/* Page Content */}
         <main style={{ flex: 1 }}>
-          <Outlet />
+          {children || <Outlet />}
         </main>
       </div>
     </div>

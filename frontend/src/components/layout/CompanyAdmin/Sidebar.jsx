@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { NavLink } from 'react-router-dom';
-import { useAuth } from '../context/AuthContext';
-import Logo from '../assets/logo.png';
+import { useAuth } from '../../../context/AuthContext';
+import Logo from '../../../assets/logo.png';
 
 const Sidebar = ({ isCollapsed, onToggleCollapse }) => {
   const [searchQuery, setSearchQuery] = useState('');
@@ -11,8 +11,8 @@ const Sidebar = ({ isCollapsed, onToggleCollapse }) => {
     {
       label: 'Overview',
       items: [
-        { path: '/dashboard', label: 'Dashboard' },
-        { path: '/companies', label: 'Companies' },
+        { path: '/company-dashboard', label: 'Dashboard' },
+        { path: '/branches', label: 'Branches' },
       ]
     },
     {
