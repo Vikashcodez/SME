@@ -52,12 +52,27 @@ export const createTables = async () => {
             )
         `);
 
+        //Branches table
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS branches (
+                branch_id BIGSERIAL PRIMARY KEY,
+                company_id BIGINT REFERENCES companies(company_id) ON DELETE CASCADE,
+                branch_name VARCHAR(255) NOT NULL,
+                branch_code VARCHAR(50) NOT NULL UNIQUE,
+                address TEXT,
+                phone_number VARCHAR(20) UNIQUE NOT NULL,
+                email_id VARCHAR(255) UNIQUE NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        `);
+
 
         // employee table
         await pool.query(`
             CREATE TABLE IF NOT EXISTS employees (
                 employee_id BIGSERIAL PRIMARY KEY,
                 company_id BIGINT REFERENCES companies(company_id) ON DELETE CASCADE,
+                branch_id BIGINT REFERENCES branches(branch_id) ON DELETE CASCADE,
                 first_name VARCHAR(100) NOT NULL,
                 last_name VARCHAR(100),
                 employee_code VARCHAR(50) UNIQUE NOT NULL,
@@ -71,6 +86,7 @@ export const createTables = async () => {
                 address TEXT,
                 password VARCHAR(255) NOT NULL,
                 is_company_admin BOOLEAN DEFAULT FALSE,
+                is_baranch_admin BOOLEAN DEFAULT FALSE,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         `);
