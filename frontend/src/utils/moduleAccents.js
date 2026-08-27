@@ -1,0 +1,146 @@
+import {
+  Sparkles, Building2, ShoppingCart, Truck, Warehouse, Users, HandCoins, Banknote, Receipt,
+  ShieldCheck, Factory, ClipboardCheck, Route as RouteIcon, Boxes, Star, Landmark, Globe2, Ship,
+  Cog, FileSignature, Megaphone, GraduationCap, Building, HeartPulse, Server,
+} from "lucide-react";
+
+export const MODULE_ICONS = {
+  Global: Sparkles,
+  "Module 1: Platform Foundation & Governance": Building2,
+  "Module 2: Financial Management & Budgeting": Landmark,
+  "Module 3: Supply Chain Management": Ship,
+  "Module 4: Sales, Order-to-Cash & Commerce": ShoppingCart,
+  "Module 5: Manufacturing & Quality Management": Factory,
+  "Module 6: Asset Management, Maintenance & Real Estate": Building,
+  "Module 7: Project & Program Management": RouteIcon,
+  "Module 8: Human Capital Management (HR & Payroll)": Users,
+  "Module 9: CRM & Field Service": Megaphone,
+  "Module 10: Global Trade, Regulatory Compliance & EHS": ShieldCheck,
+  "Common Master Data": Building2,
+  "Sales Management": ShoppingCart,
+  "Purchase Management": Truck,
+  "Inventory Management": Warehouse,
+  "Employee & Workforce Management": Users,
+  "Rental Management": HandCoins,
+  "Banking Management": Banknote,
+  "Expense Management": Receipt,
+  "Governance & Compliance": ShieldCheck,
+  "Production Management": Factory,
+  "Quality Management": ClipboardCheck,
+  "Delivery & Performance Management": RouteIcon,
+  "Raw Materials Master": Boxes,
+  "OEM Readiness Management": Star,
+  "Foundation, Access & Master Data": Building2,
+  "Advanced Financials, Treasury & Corporate Governance": Landmark,
+  "Global Taxation & Compliance": Globe2,
+  "Procurement, Sourcing & Supplier Management": Truck,
+  "Supply Chain, Logistics & Global Trade": Ship,
+  "Manufacturing, Production & PLM": Cog,
+  "Sales, CPQ, & Revenue Management": FileSignature,
+  "CRM, Marketing & Customer Experience": Megaphone,
+  "HR, Payroll & Talent Management": GraduationCap,
+  "Projects, Real Estate, & Specialized Services": Building,
+  "Quality, Safety, Compliance & ESG": HeartPulse,
+  "IT Operations, Data, & AI Platform": Server,
+};
+
+export const MODULE_SHORT_NAMES = {
+  "Module 1: Platform Foundation & Governance": "Platform Foundation",
+  "Module 2: Financial Management & Budgeting": "Financial Mgmt",
+  "Module 3: Supply Chain Management": "Supply Chain",
+  "Module 4: Sales, Order-to-Cash & Commerce": "Sales & Commerce",
+  "Module 5: Manufacturing & Quality Management": "Manufacturing & QC",
+  "Module 6: Asset Management, Maintenance & Real Estate": "Asset Mgmt",
+  "Module 7: Project & Program Management": "Project Mgmt",
+  "Module 8: Human Capital Management (HR & Payroll)": "HCM & Payroll",
+  "Module 9: CRM & Field Service": "CRM & Service",
+  "Module 10: Global Trade, Regulatory Compliance & EHS": "Trade & EHS",
+  "Employee & Workforce Management": "HR & Workforce",
+  "Governance & Compliance": "Compliance",
+  "Delivery & Performance Management": "Delivery & Performance",
+  "OEM Readiness Management": "OEM Readiness",
+  "Common Master Data": "Master Data",
+  "Raw Materials Master": "Raw Materials",
+  "Foundation, Access & Master Data": "Foundation & Access",
+  "Advanced Financials, Treasury & Corporate Governance": "Financials & Treasury",
+  "Global Taxation & Compliance": "Global Taxation",
+  "Procurement, Sourcing & Supplier Management": "Procurement",
+  "Supply Chain, Logistics & Global Trade": "Supply Chain",
+  "Manufacturing, Production & PLM": "Manufacturing & PLM",
+  "Sales, CPQ, & Revenue Management": "Sales & CPQ",
+  "CRM, Marketing & Customer Experience": "CRM & Marketing",
+  "HR, Payroll & Talent Management": "HR & Talent",
+  "Projects, Real Estate, & Specialized Services": "Projects & Real Estate",
+  "Quality, Safety, Compliance & ESG": "Quality & ESG",
+  "IT Operations, Data, & AI Platform": "IT & AI Platform",
+};
+
+export const shortModuleName = (mod) => MODULE_SHORT_NAMES[mod] || mod;
+export const iconForModule = (mod) => MODULE_ICONS[mod] || Boxes;
+
+const TONES = {
+  emerald: { key: "emerald", solidBg: "bg-emerald-500", solidBgHover: "hover:bg-emerald-600", gradient: "from-emerald-400 to-emerald-600", softBg: "bg-emerald-50", softText: "text-emerald-600", softTextStrong: "text-emerald-700", ring: "ring-emerald-500/15", border: "border-emerald-200", textEyebrow: "text-emerald-600", tableHeadBg: "bg-emerald-50/80", tableHeadText: "text-emerald-700", barFill: "#10B981", dot: "bg-emerald-500" },
+  teal: { key: "teal", solidBg: "bg-teal-500", solidBgHover: "hover:bg-teal-600", gradient: "from-teal-400 to-teal-600", softBg: "bg-teal-50", softText: "text-teal-600", softTextStrong: "text-teal-700", ring: "ring-teal-500/15", border: "border-teal-200", textEyebrow: "text-teal-600", tableHeadBg: "bg-teal-50/80", tableHeadText: "text-teal-700", barFill: "#14B8A6", dot: "bg-teal-500" },
+  blue: { key: "blue", solidBg: "bg-blue-500", solidBgHover: "hover:bg-blue-600", gradient: "from-blue-400 to-blue-600", softBg: "bg-blue-50", softText: "text-blue-600", softTextStrong: "text-blue-700", ring: "ring-blue-500/15", border: "border-blue-200", textEyebrow: "text-blue-600", tableHeadBg: "bg-blue-50/80", tableHeadText: "text-blue-700", barFill: "#3B82F6", dot: "bg-blue-500" },
+  sky: { key: "sky", solidBg: "bg-sky-500", solidBgHover: "hover:bg-sky-600", gradient: "from-sky-400 to-sky-600", softBg: "bg-sky-50", softText: "text-sky-600", softTextStrong: "text-sky-700", ring: "ring-sky-500/15", border: "border-sky-200", textEyebrow: "text-sky-600", tableHeadBg: "bg-sky-50/80", tableHeadText: "text-sky-700", barFill: "#0EA5E9", dot: "bg-sky-500" },
+  indigo: { key: "indigo", solidBg: "bg-indigo-500", solidBgHover: "hover:bg-indigo-600", gradient: "from-indigo-400 to-indigo-600", softBg: "bg-indigo-50", softText: "text-indigo-600", softTextStrong: "text-indigo-700", ring: "ring-indigo-500/15", border: "border-indigo-200", textEyebrow: "text-indigo-600", tableHeadBg: "bg-indigo-50/80", tableHeadText: "text-indigo-700", barFill: "#6366F1", dot: "bg-indigo-500" },
+  violet: { key: "violet", solidBg: "bg-violet-500", solidBgHover: "hover:bg-violet-600", gradient: "from-violet-400 to-violet-600", softBg: "bg-violet-50", softText: "text-violet-600", softTextStrong: "text-violet-700", ring: "ring-violet-500/15", border: "border-violet-200", textEyebrow: "text-violet-600", tableHeadBg: "bg-violet-50/80", tableHeadText: "text-violet-700", barFill: "#8B5CF6", dot: "bg-violet-500" },
+  purple: { key: "purple", solidBg: "bg-purple-500", solidBgHover: "hover:bg-purple-600", gradient: "from-purple-400 to-purple-600", softBg: "bg-purple-50", softText: "text-purple-600", softTextStrong: "text-purple-700", ring: "ring-purple-500/15", border: "border-purple-200", textEyebrow: "text-purple-600", tableHeadBg: "bg-purple-50/80", tableHeadText: "text-purple-700", barFill: "#A855F7", dot: "bg-purple-500" },
+  amber: { key: "amber", solidBg: "bg-amber-500", solidBgHover: "hover:bg-amber-600", gradient: "from-amber-400 to-amber-600", softBg: "bg-amber-50", softText: "text-amber-600", softTextStrong: "text-amber-700", ring: "ring-amber-500/15", border: "border-amber-200", textEyebrow: "text-amber-600", tableHeadBg: "bg-amber-50/80", tableHeadText: "text-amber-700", barFill: "#F59E0B", dot: "bg-amber-500" },
+  orange: { key: "orange", solidBg: "bg-orange-500", solidBgHover: "hover:bg-orange-600", gradient: "from-orange-400 to-orange-600", softBg: "bg-orange-50", softText: "text-orange-600", softTextStrong: "text-orange-700", ring: "ring-orange-500/15", border: "border-orange-200", textEyebrow: "text-orange-600", tableHeadBg: "bg-orange-50/80", tableHeadText: "text-orange-700", barFill: "#F97316", dot: "bg-orange-500" },
+  rose: { key: "rose", solidBg: "bg-rose-500", solidBgHover: "hover:bg-rose-600", gradient: "from-rose-400 to-rose-600", softBg: "bg-rose-50", softText: "text-rose-600", softTextStrong: "text-rose-700", ring: "ring-rose-500/15", border: "border-rose-200", textEyebrow: "text-rose-600", tableHeadBg: "bg-rose-50/80", tableHeadText: "text-rose-700", barFill: "#F43F5E", dot: "bg-rose-500" },
+  pink: { key: "pink", solidBg: "bg-pink-500", solidBgHover: "hover:bg-pink-600", gradient: "from-pink-400 to-pink-600", softBg: "bg-pink-50", softText: "text-pink-600", softTextStrong: "text-pink-700", ring: "ring-pink-500/15", border: "border-pink-200", textEyebrow: "text-pink-600", tableHeadBg: "bg-pink-50/80", tableHeadText: "text-pink-700", barFill: "#EC4899", dot: "bg-pink-500" },
+  cyan: { key: "cyan", solidBg: "bg-cyan-500", solidBgHover: "hover:bg-cyan-600", gradient: "from-cyan-400 to-cyan-600", softBg: "bg-cyan-50", softText: "text-cyan-600", softTextStrong: "text-cyan-700", ring: "ring-cyan-500/15", border: "border-cyan-200", textEyebrow: "text-cyan-600", tableHeadBg: "bg-cyan-50/80", tableHeadText: "text-cyan-700", barFill: "#06B6D4", dot: "bg-cyan-500" },
+  slate: { key: "slate", solidBg: "bg-slate-500", solidBgHover: "hover:bg-slate-600", gradient: "from-slate-400 to-slate-600", softBg: "bg-slate-100", softText: "text-slate-600", softTextStrong: "text-slate-700", ring: "ring-slate-500/15", border: "border-slate-200", textEyebrow: "text-slate-500", tableHeadBg: "bg-slate-50", tableHeadText: "text-slate-600", barFill: "#64748B", dot: "bg-slate-500" },
+};
+
+const MODULE_TONE = {
+  Global: "emerald",
+  "Module 1: Platform Foundation & Governance": "slate",
+  "Module 2: Financial Management & Budgeting": "indigo",
+  "Module 3: Supply Chain Management": "amber",
+  "Module 4: Sales, Order-to-Cash & Commerce": "blue",
+  "Module 5: Manufacturing & Quality Management": "purple",
+  "Module 6: Asset Management, Maintenance & Real Estate": "cyan",
+  "Module 7: Project & Program Management": "teal",
+  "Module 8: Human Capital Management (HR & Payroll)": "rose",
+  "Module 9: CRM & Field Service": "pink",
+  "Module 10: Global Trade, Regulatory Compliance & EHS": "emerald",
+  "Common Master Data": "violet",
+  "Sales Management": "blue",
+  "Purchase Management": "amber",
+  "Inventory Management": "orange",
+  "Employee & Workforce Management": "rose",
+  "Rental Management": "cyan",
+  "Banking Management": "indigo",
+  "Expense Management": "pink",
+  "Governance & Compliance": "emerald",
+  "Production Management": "purple",
+  "Quality Management": "violet",
+  "Delivery & Performance Management": "teal",
+  "Raw Materials Master": "emerald",
+  "OEM Readiness Management": "amber",
+  "Foundation, Access & Master Data": "slate",
+  "Advanced Financials, Treasury & Corporate Governance": "indigo",
+  "Global Taxation & Compliance": "emerald",
+  "Procurement, Sourcing & Supplier Management": "blue",
+  "Supply Chain, Logistics & Global Trade": "amber",
+  "Manufacturing, Production & PLM": "purple",
+  "Sales, CPQ, & Revenue Management": "blue",
+  "CRM, Marketing & Customer Experience": "purple",
+  "HR, Payroll & Talent Management": "rose",
+  "Projects, Real Estate, & Specialized Services": "cyan",
+  "Quality, Safety, Compliance & ESG": "violet",
+  "IT Operations, Data, & AI Platform": "sky",
+};
+
+export function accentForModule(moduleName) {
+  const tone = MODULE_TONE[moduleName] || "emerald";
+  return TONES[tone];
+}
+
+export function accentByTone(tone) {
+  return TONES[tone] || TONES.emerald;
+}
+
+export const ACCENT_TONES = TONES;
