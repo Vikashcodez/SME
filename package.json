@@ -1,0 +1,16 @@
+{
+  "name": "chandra-precision-erp-root",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Chandra Precision ERP Enterprise System Monorepo",
+  "scripts": {
+    "dev:backend": "cd backend && npm run dev",
+    "dev:frontend": "cd frontend && npm run dev",
+    "build:frontend": "cd frontend && npm run build",
+    "db:migrate": "cd backend && node scripts/migrate_all.mjs",
+    "db:seed:users": "cd backend && node scripts/seed_users.mjs",
+    "db:verify": "cd backend && node scripts/verify_schema.mjs",
+    "test:backend": "cd backend && npm test",
+    "test": "cd backend && npm test"
+  }
+}

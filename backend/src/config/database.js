@@ -1,71 +1,84 @@
 import pkg from 'pg';
 const { Pool } = pkg;
-import dotenv from 'dotenv';
+import { config } from './env.js';
+import { logger } from './logger.js';
 
-dotenv.config();
-
-// Create connection pool
 const pool = new Pool({
-    user: process.env.DB_USER,
-    password: process.env.DB_PASSWORD,
-    host: process.env.DB_HOST,
-    port: process.env.DB_PORT,
-    database: process.env.DB_NAME,
-    max: 20,
-    idleTimeoutMillis: 30000,
-    connectionTimeoutMillis: 2000,
+  user: config.db.user,
+  password: config.db.password,
+  host: config.db.host,
+  port: config.db.port,
+  database: config.db.database,
+  max: 25, 
+  idleTimeoutMillis: 30000,
+  connectionTimeoutMillis: 5000,
+  ssl: config.db.ssl
+    ? {
+        rejectUnauthorized: config.nodeEnv === 'production',
+      }
+    : false,
 });
 
-// Test database connection
-export const testConnection = async () => {
+pool.on('error', (err) => {
+  logger.error({ err }, 'Unexpected PostgreSQL pool error on idle client');
+});
+
+export const query = async (text, params) => {
+  const start = Date.now();
+  try {
+    const res = await pool.query(text, params);
+    const duration = Date.now() - start;
+    if (duration > 200) {
+      logger.warn({ duration, query: text.substring(0, 100) }, 'Slow query detected');
+    }
+    return res;
+  } catch (error) {
+    logger.error({ err: error, query: text.substring(0, 100) }, 'Database query error');
+    throw error;
+  }
+};
+
+export const withTransaction = async (callback) => {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const result = await callback(client);
+    await client.query('COMMIT');
+    return result;
+  } catch (error) {
+    await client.query('ROLLBACK');
+    logger.error({ err: error }, 'Transaction rolled back due to error');
+    throw error;
+  } finally {
+    client.release();
+  }
+};
+
+export const testConnection = async (maxRetries = 5, initialDelay = 1000) => {
+  let attempt = 1;
+  let delay = initialDelay;
+
+  while (attempt <= maxRetries) {
     try {
-        const client = await pool.connect();
-        console.log('✅ Database connected successfully');
-        client.release();
-        return true;
+      const client = await pool.connect();
+      logger.info('✅ PostgreSQL database connected successfully');
+      client.release();
+      return true;
     } catch (error) {
-        console.error('❌ Database connection error:', error.message);
+      logger.warn(
+        { attempt, maxRetries, delay, err: error.message },
+        `Database connection attempt failed. Retrying in ${delay}ms...`
+      );
+      if (attempt === maxRetries) {
+        logger.error({ err: error }, '❌ Exhausted all database connection retry attempts.');
         return false;
+      }
+      await new Promise((resolve) => setTimeout(resolve, delay));
+      delay *= 2; 
+      attempt++;
     }
+  }
+  return false;
 };
 
-// Create companies table only
-export const createTables = async () => {
-    try {
-
-        // company table
-        await pool.query(`
-            CREATE TABLE IF NOT EXISTS companies (
-                company_id BIGSERIAL PRIMARY KEY,
-                company_name VARCHAR(255) NOT NULL,
-                company_code VARCHAR(50) NOT NULL UNIQUE,
-                logo_url VARCHAR(500),
-                establishment_year INTEGER,
-                pan VARCHAR(10) UNIQUE,
-                cin VARCHAR(21) UNIQUE,
-                gst_no VARCHAR(15) UNIQUE,
-                full_address TEXT,
-                phone_number VARCHAR(20),
-                email_id VARCHAR(255),
-                company_type VARCHAR(100),
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        `);
-
-
-
-        
-
-        await pool.query(`CREATE INDEX IF NOT EXISTS idx_company_code ON companies(company_code)`);
-        await pool.query(`CREATE INDEX IF NOT EXISTS idx_company_name ON companies(company_name)`);
-        console.log('✅ Indexes created');
-
-        console.log('✅ All tables created successfully');
-    } catch (error) {
-        console.error('❌ Error creating tables:', error);
-        throw error;
-    }
-};
-
-// Export pool for queries
 export default pool;

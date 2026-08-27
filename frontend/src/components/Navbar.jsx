@@ -9,7 +9,7 @@ const Navbar = () => {
 
   const handleLogout = () => {
     logout();
-    navigate('/login');
+    navigate('/auth');
   };
 
   return (
@@ -17,7 +17,7 @@ const Navbar = () => {
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex justify-between h-16">
           <div className="flex items-center">
-            <Link to="/dashboard" className="flex items-center space-x-2">
+            <Link to="/app/dashboard" className="flex items-center space-x-2">
               <div className="bg-blue-600 p-2 rounded-lg">
                 <FiHome className="text-white text-xl" />
               </div>
