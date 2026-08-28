@@ -11,11 +11,11 @@ import {
 const BranchRouter = express.Router();
 
 // Routes
-BranchRouter.post('/branches', createBranch);
-BranchRouter.get('/branches', getBranches); // Optional company_id filter
-BranchRouter.get('/branches/company', getBranchesByCompany); // REQUIRED company_id
-BranchRouter.get('/branches/:id', getBranchById);
-BranchRouter.put('/branches/:id', updateBranch);
-BranchRouter.delete('/branches/:id', deleteBranch);
+BranchRouter.post('/', createBranch);
+BranchRouter.get('/', getBranches); // Optional company_id filter
+BranchRouter.get('/company', getBranchesByCompany); // REQUIRED company_id
+BranchRouter.get('/:id', getBranchById);
+BranchRouter.put('/:id', updateBranch);
+BranchRouter.delete('/:id', deleteBranch);
 
 export default BranchRouter;

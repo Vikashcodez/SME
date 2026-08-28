@@ -9,6 +9,7 @@ import Login from './pages/Login';
 import SuperAdminDashboard from './pages/SuperAdminDashboard';
 import CompanyPage from './pages/Company';
 import CompanyDashboard from './pages/CompanyDashboard';
+import BranchManagement from './pages/BranchManagement';
 
 const AppContent = () => {
   const { isAuthenticated, isCompanyAdmin } = useAuth();
@@ -47,6 +48,17 @@ const AppContent = () => {
           <ProtectedRoute requiredRole="company_admin">
             <CompanyAdminLayout>
               <CompanyDashboard />
+            </CompanyAdminLayout>
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/branch"
+        element={
+          <ProtectedRoute requiredRole="company_admin">
+            <CompanyAdminLayout>
+              <BranchManagement />
             </CompanyAdminLayout>
           </ProtectedRoute>
         }
