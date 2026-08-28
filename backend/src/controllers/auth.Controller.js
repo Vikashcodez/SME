@@ -28,7 +28,10 @@ export const login = async (req, res) => {
                 { 
                     email: SUPER_ADMIN.email,
                     role: SUPER_ADMIN.role,
-                    is_super_admin: true
+                    is_super_admin: true,
+                    is_company_admin: false,
+                    is_branch_admin: false,
+                    is_baranch_admin: false
                 },
                 config.jwt.secret,
                 { expiresIn: config.jwt.expire }
@@ -42,23 +45,28 @@ export const login = async (req, res) => {
                     user: {
                         email: SUPER_ADMIN.email,
                         role: SUPER_ADMIN.role,
-                        is_super_admin: true
+                        is_super_admin: true,
+                        is_company_admin: false,
+                        is_branch_admin: false,
+                        is_baranch_admin: false
                     }
                 }
             });
         }
 
-        // Check if it's a company admin (employee)
+        // Check if it's a company admin / branch admin / employee
         const employeeResult = await pool.query(
             `SELECT 
                 e.employee_id,
                 e.company_id,
+                e.branch_id,
                 e.first_name,
                 e.last_name,
                 e.email,
                 e.phone_number,
                 e.password,
                 e.is_company_admin,
+                e.is_baranch_admin,
                 e.role,
                 e.department,
                 e.dob,
@@ -67,9 +75,12 @@ export const login = async (req, res) => {
                 e.address,
                 c.company_name,
                 c.company_code,
-                c.logo_url
+                c.logo_url,
+                b.branch_name,
+                b.branch_code
              FROM employees e
              LEFT JOIN companies c ON e.company_id = c.company_id
+             LEFT JOIN branches b ON e.branch_id = b.branch_id
              WHERE e.email = $1`,
             [email]
         );
@@ -89,16 +100,23 @@ export const login = async (req, res) => {
             const isPasswordValid = await bcrypt.compare(password, employee.password);
             
             if (isPasswordValid) {
+                const isBranchAdmin = employee.is_baranch_admin === true || employee.is_branch_admin === true;
+
                 // Generate token with all employee data
                 const token = jwt.sign(
                     {
                         employee_id: employee.employee_id,
                         company_id: employee.company_id,
+                        branch_id: employee.branch_id || null,
                         email: employee.email,
                         first_name: employee.first_name,
                         last_name: employee.last_name,
-                        role: employee.role || 'employee',
-                        is_company_admin: employee.is_company_admin,
+                        role: employee.role || (isBranchAdmin ? 'branch_admin' : 'employee'),
+                        is_company_admin: employee.is_company_admin || false,
+                        is_branch_admin: isBranchAdmin,
+                        is_baranch_admin: isBranchAdmin,
+                        branch_name: employee.branch_name || null,
+                        branch_code: employee.branch_code || null,
                         company_name: employee.company_name,
                         company_code: employee.company_code,
                         phone_number: employee.phone_number,
@@ -119,11 +137,16 @@ export const login = async (req, res) => {
                         user: {
                             employee_id: employee.employee_id,
                             company_id: employee.company_id,
+                            branch_id: employee.branch_id || null,
                             email: employee.email,
                             first_name: employee.first_name,
                             last_name: employee.last_name,
-                            role: employee.role || 'employee',
-                            is_company_admin: employee.is_company_admin,
+                            role: employee.role || (isBranchAdmin ? 'branch_admin' : 'employee'),
+                            is_company_admin: employee.is_company_admin || false,
+                            is_branch_admin: isBranchAdmin,
+                            is_baranch_admin: isBranchAdmin,
+                            branch_name: employee.branch_name || null,
+                            branch_code: employee.branch_code || null,
                             company_name: employee.company_name,
                             company_code: employee.company_code,
                             logo_url: employee.logo_url,
