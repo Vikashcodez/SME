@@ -31,6 +31,13 @@ const Login = () => {
           return;
         }
         
+        // Check if user is branch admin
+        if (user.is_branch_admin === true || user.is_baranch_admin === true || user.role === 'branch_admin') {
+          navigate('/branch-dashboard');
+          setLoading(false);
+          return;
+        }
+
         // Check if user is company admin
         if (user.is_company_admin === true || user.role === 'company_admin') {
           navigate('/company-dashboard');

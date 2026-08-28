@@ -56,11 +56,14 @@ export const AuthProvider = ({ children }) => {
         const { token, user } = response.data.data;
         
         // Set user data with all fields
+        const isBranchAdmin = user.is_branch_admin === true || user.is_baranch_admin === true || user.role === 'branch_admin';
         const userData = {
           ...user,
           is_super_admin: user.is_super_admin || false,
           is_company_admin: user.is_company_admin || false,
-          role: user.role || 'employee'
+          is_branch_admin: isBranchAdmin,
+          is_baranch_admin: isBranchAdmin,
+          role: user.role || (isBranchAdmin ? 'branch_admin' : 'employee')
         };
         
         setToken(token);
@@ -97,6 +100,7 @@ export const AuthProvider = ({ children }) => {
     isAuthenticated: !!token,
     isSuperAdmin: role === 'super_admin' || user?.is_super_admin === true,
     isCompanyAdmin: user?.is_company_admin === true || role === 'company_admin',
+    isBranchAdmin: user?.is_branch_admin === true || user?.is_baranch_admin === true || role === 'branch_admin',
   };
 
   return (

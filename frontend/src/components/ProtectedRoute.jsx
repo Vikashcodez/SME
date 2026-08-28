@@ -3,7 +3,7 @@ import { Navigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 
 const ProtectedRoute = ({ children, requiredRole, allowedRoles }) => {
-  const { isAuthenticated, role, isCompanyAdmin, loading } = useAuth();
+  const { isAuthenticated, role, isSuperAdmin, isCompanyAdmin, isBranchAdmin, loading } = useAuth();
 
   if (loading) {
     return (
@@ -17,14 +17,29 @@ const ProtectedRoute = ({ children, requiredRole, allowedRoles }) => {
     return <Navigate to="/login" replace />;
   }
 
-  const hasRequiredRole = requiredRole === 'company_admin'
-    ? isCompanyAdmin
-    : requiredRole
-      ? role === requiredRole
-      : !allowedRoles || allowedRoles.includes(role);
+  let hasRequiredRole = true;
+
+  if (requiredRole === 'super_admin') {
+    hasRequiredRole = isSuperAdmin;
+  } else if (requiredRole === 'company_admin') {
+    hasRequiredRole = isCompanyAdmin;
+  } else if (requiredRole === 'branch_admin') {
+    hasRequiredRole = isBranchAdmin;
+  } else if (requiredRole) {
+    hasRequiredRole = role === requiredRole;
+  } else if (allowedRoles && allowedRoles.length > 0) {
+    hasRequiredRole = allowedRoles.includes(role);
+  }
 
   if (!hasRequiredRole) {
-    return <Navigate to="/dashboard" replace />;
+    const fallbackPath = isSuperAdmin
+      ? '/dashboard'
+      : isBranchAdmin
+      ? '/branch-dashboard'
+      : isCompanyAdmin
+      ? '/company-dashboard'
+      : '/employee-dashboard';
+    return <Navigate to={fallbackPath} replace />;
   }
 
   return children;
