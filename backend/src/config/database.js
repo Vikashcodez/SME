@@ -104,6 +104,19 @@ export const createTables = async () => {
             )
         `);
 
+        //department table 
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS departments (
+                department_id BIGSERIAL PRIMARY KEY,
+                company_id BIGINT REFERENCES companies(company_id) ON DELETE CASCADE,
+                branch_id BIGINT REFERENCES branches(branch_id) ON DELETE CASCADE,
+                department_name VARCHAR(100) NOT NULL,
+                department_description VARCHAR(255),
+                is_active BOOLEAN DEFAULT TRUE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        `);
+
 
         await pool.query(`CREATE INDEX IF NOT EXISTS idx_company_code ON companies(company_code)`);
         await pool.query(`CREATE INDEX IF NOT EXISTS idx_company_name ON companies(company_name)`);
