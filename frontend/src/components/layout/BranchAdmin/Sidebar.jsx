@@ -15,7 +15,7 @@ const Sidebar = ({ isCollapsed, onToggleCollapse }) => {
       ]
     },
     {
-      label: 'Branch Operations',
+      label: 'Master Data',
       items: [
         { path: '/branch-dashboard#staff', label: 'Staff & Attendance', badge: '18 Active' },
         { path: '/branch-dashboard#tasks', label: 'Tasks & Workflow', badge: '4 Pending' },
