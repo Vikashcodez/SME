@@ -12,6 +12,7 @@ import CompanyPage from './pages/Company';
 import CompanyDashboard from './pages/CompanyDashboard';
 import BranchManagement from './pages/BranchManagement';
 import BranchAdminDashboard from './pages/BranchAdminDashboard';
+import RolesMaster from './pages/Master Data/RolesMaster';
 
 const AppContent = () => {
   const { isAuthenticated, isSuperAdmin, isCompanyAdmin, isBranchAdmin } = useAuth();
@@ -66,6 +67,17 @@ const AppContent = () => {
         }
       />
 
+      <Route
+        path="/roles"
+        element={
+          <ProtectedRoute requiredRole="company_admin">
+            <CompanyAdminLayout>
+              <RolesMaster />
+            </CompanyAdminLayout>
+          </ProtectedRoute>
+        }
+      />
+
       {/* Branch Admin Routes - Each with its own BranchAdminLayout */}
       <Route
         path="/branch-dashboard"
@@ -73,6 +85,17 @@ const AppContent = () => {
           <ProtectedRoute requiredRole="branch_admin">
             <BranchAdminLayout>
               <BranchAdminDashboard />
+            </BranchAdminLayout>
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/branch/roles"
+        element={
+          <ProtectedRoute requiredRole="branch_admin">
+            <BranchAdminLayout>
+              <RolesMaster />
             </BranchAdminLayout>
           </ProtectedRoute>
         }

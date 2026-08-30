@@ -50,4 +50,22 @@ export const companies = {
   delete: (id) => api.delete(`/companies/${id}`),
 };
 
+export const branches = {
+  getAll: (params) => api.get('/branches', { params }),
+  getByCompany: (companyId) => api.get('/branches/company', { params: { company_id: companyId } }),
+  getById: (id) => api.get(`/branches/${id}`),
+  create: (data) => api.post('/branches', data),
+  update: (id, data) => api.put(`/branches/${id}`, data),
+  delete: (id) => api.delete(`/branches/${id}`),
+};
+
+export const roles = {
+  create: (data) => api.post('/roles/createRole', data),
+  update: (id, data) => api.put(`/roles/updateRole/${id}`, data),
+  getByBranch: (branchId, params) => api.get(`/roles/getRolesByBranch/${branchId}`, { params }),
+  getById: (id) => api.get(`/roles/getRoleById/${id}`),
+  softDelete: (id) => api.delete(`/roles/softDeleteRole/${id}`),
+  restore: (id) => api.put(`/roles/restoreRole/${id}`),
+};
+
 export default api;
