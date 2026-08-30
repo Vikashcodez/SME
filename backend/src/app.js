@@ -6,6 +6,7 @@ import { testConnection, createTables } from './config/database.js';
 import authRoutes from './routes/auth.Routes.js';
 import companyRoutes from './routes/company.Routes.js';
 import BranchRouter from './routes/Branch.Routes.js';
+import RolesRouter from './routes/Roles.Routes.js';
 
 const app = express();
 
@@ -19,6 +20,7 @@ app.use('/uploads', express.static(path.resolve(process.cwd(), 'uploads')));
 app.use('/api/auth', authRoutes);
 app.use('/api/companies', companyRoutes);
 app.use('/api/branches', BranchRouter); 
+app.use('/api/roles', RolesRouter);
 
 // Health check
 app.get('/health', (req, res) => {
