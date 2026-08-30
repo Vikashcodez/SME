@@ -90,7 +90,20 @@ export const createTables = async () => {
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         `);
- 
+
+        //roles table
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS roles (
+                role_id BIGSERIAL PRIMARY KEY,
+                company_id BIGINT REFERENCES companies(company_id) ON DELETE CASCADE,
+                branch_id BIGINT REFERENCES branches(branch_id) ON DELETE CASCADE,
+                role_name VARCHAR(100) NOT NULL,
+                role_description VARCHAR(255),
+                is_active BOOLEAN DEFAULT TRUE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        `);
+
 
         await pool.query(`CREATE INDEX IF NOT EXISTS idx_company_code ON companies(company_code)`);
         await pool.query(`CREATE INDEX IF NOT EXISTS idx_company_name ON companies(company_name)`);
