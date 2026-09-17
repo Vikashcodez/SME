@@ -16,6 +16,13 @@ const Sidebar = ({ isCollapsed, onToggleCollapse }) => {
       ]
     },
     {
+      label: 'Master Data',
+      items: [
+        { path: '/roles', label: 'Roles Master' },
+        { path: '/departments', label: 'Departments' },
+      ]
+    },
+    {
       label: 'Management',
       items: [
         { path: '/users', label: 'Users', badge: 3 },

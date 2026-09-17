@@ -68,4 +68,15 @@ export const roles = {
   restore: (id) => api.put(`/roles/restoreRole/${id}`),
 };
 
+export const departments = {
+  create: (data) => api.post('/departments', data),
+  update: (id, data) => api.put(`/departments/${id}`, data),
+  getByBranch: (branchId, params) => api.get(`/departments/branch/${branchId}`, { params }),
+  getByBranchWithCount: (branchId, params) => api.get(`/departments/branch/${branchId}/with-count`, { params }),
+  getById: (id) => api.get(`/departments/${id}`),
+  softDelete: (id) => api.delete(`/departments/${id}`),
+  restore: (id) => api.put(`/departments/${id}/restore`),
+  bulkDelete: (data) => api.delete('/departments/bulk/delete', { data }),
+};
+
 export default api;
