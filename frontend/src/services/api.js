@@ -79,4 +79,14 @@ export const departments = {
   bulkDelete: (data) => api.delete('/departments/bulk/delete', { data }),
 };
 
+export const employees = {
+  getAll: (params) => api.get('/employees', { params }),
+  getById: (id) => api.get(`/employees/${id}`),
+  create: (data) => api.post('/employees', data),
+  update: (id, data) => api.put(`/employees/${id}`, data),
+  delete: (id) => api.delete(`/employees/${id}`),
+  resetPassword: (id) => api.put(`/employees/reset-password/${id}`),
+  changePassword: (id, data) => api.put(`/employees/change-password/${id}`, data),
+};
+
 export default api;

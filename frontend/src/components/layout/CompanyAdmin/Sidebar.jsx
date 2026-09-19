@@ -20,6 +20,7 @@ const Sidebar = ({ isCollapsed, onToggleCollapse }) => {
       items: [
         { path: '/roles', label: 'Roles Master' },
         { path: '/departments', label: 'Departments' },
+        { path: '/employees', label: 'Employees' },
       ]
     },
     {
