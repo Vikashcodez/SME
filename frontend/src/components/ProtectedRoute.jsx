@@ -3,7 +3,7 @@ import { Navigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 
 const ProtectedRoute = ({ children, requiredRole, allowedRoles }) => {
-  const { isAuthenticated, role, isSuperAdmin, isCompanyAdmin, isBranchAdmin, loading } = useAuth();
+  const { isAuthenticated, role, isSuperAdmin, isCompanyAdmin, isBranchAdmin, isEmployee, loading } = useAuth();
 
   if (loading) {
     return (
@@ -25,6 +25,8 @@ const ProtectedRoute = ({ children, requiredRole, allowedRoles }) => {
     hasRequiredRole = isCompanyAdmin;
   } else if (requiredRole === 'branch_admin') {
     hasRequiredRole = isBranchAdmin;
+  } else if (requiredRole === 'employee') {
+    hasRequiredRole = isEmployee || (!isSuperAdmin && !isCompanyAdmin && !isBranchAdmin);
   } else if (requiredRole) {
     hasRequiredRole = role === requiredRole;
   } else if (allowedRoles && allowedRoles.length > 0) {

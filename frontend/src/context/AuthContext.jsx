@@ -56,14 +56,19 @@ export const AuthProvider = ({ children }) => {
         const { token, user } = response.data.data;
         
         // Set user data with all fields
+        const isSuperAdmin = user.is_super_admin === true || user.role === 'super_admin';
+        const isCompanyAdmin = user.is_company_admin === true || user.role === 'company_admin';
         const isBranchAdmin = user.is_branch_admin === true || user.is_baranch_admin === true || user.role === 'branch_admin';
+        const isEmployee = !isSuperAdmin && !isCompanyAdmin && !isBranchAdmin;
+
         const userData = {
           ...user,
-          is_super_admin: user.is_super_admin || false,
-          is_company_admin: user.is_company_admin || false,
+          is_super_admin: isSuperAdmin,
+          is_company_admin: isCompanyAdmin,
           is_branch_admin: isBranchAdmin,
           is_baranch_admin: isBranchAdmin,
-          role: user.role || (isBranchAdmin ? 'branch_admin' : 'employee')
+          is_employee: isEmployee,
+          role: user.role || (isSuperAdmin ? 'super_admin' : isCompanyAdmin ? 'company_admin' : isBranchAdmin ? 'branch_admin' : 'employee')
         };
         
         setToken(token);
@@ -90,6 +95,11 @@ export const AuthProvider = ({ children }) => {
     toast.success('Logged out successfully');
   };
 
+  const isSuperAdmin = role === 'super_admin' || user?.is_super_admin === true;
+  const isCompanyAdmin = user?.is_company_admin === true || role === 'company_admin';
+  const isBranchAdmin = user?.is_branch_admin === true || user?.is_baranch_admin === true || role === 'branch_admin';
+  const isEmployee = user?.is_employee === true || (!isSuperAdmin && !isCompanyAdmin && !isBranchAdmin);
+
   const value = {
     user,
     token,
@@ -98,9 +108,10 @@ export const AuthProvider = ({ children }) => {
     login,
     logout,
     isAuthenticated: !!token,
-    isSuperAdmin: role === 'super_admin' || user?.is_super_admin === true,
-    isCompanyAdmin: user?.is_company_admin === true || role === 'company_admin',
-    isBranchAdmin: user?.is_branch_admin === true || user?.is_baranch_admin === true || role === 'branch_admin',
+    isSuperAdmin,
+    isCompanyAdmin,
+    isBranchAdmin,
+    isEmployee,
   };
 
   return (

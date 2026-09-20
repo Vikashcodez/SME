@@ -6,18 +6,20 @@ import ProtectedRoute from './components/ProtectedRoute';
 import AdminLayout from './components/layout/SuperAdmin/Layout';
 import CompanyAdminLayout from './components/layout/CompanyAdmin/Layout';
 import BranchAdminLayout from './components/layout/BranchAdmin/Layout';
+import EmployeeLayout from './components/layout/Employee/Layout';
 import Login from './pages/Login';
 import SuperAdminDashboard from './pages/SuperAdminDashboard';
 import CompanyPage from './pages/Company';
 import CompanyDashboard from './pages/CompanyDashboard';
 import BranchManagement from './pages/BranchManagement';
 import BranchAdminDashboard from './pages/BranchAdminDashboard';
+import EmployeeDashboard from './pages/EmployeeDashboard';
 import RolesMaster from './pages/Master Data/RolesMaster';
 import DepartmentsMaster from './pages/Master Data/DepartmentsMaster';
 import Employees from './pages/Master Data/Employees';
 
 const AppContent = () => {
-  const { isAuthenticated, isSuperAdmin, isCompanyAdmin, isBranchAdmin } = useAuth();
+  const { isAuthenticated, isSuperAdmin, isCompanyAdmin, isBranchAdmin, isEmployee } = useAuth();
 
   return (
     <Routes>
@@ -150,6 +152,18 @@ const AppContent = () => {
       <Route
         path="/branch-admin-dashboard"
         element={<Navigate to="/branch-dashboard" replace />}
+      />
+
+      {/* Employee Routes - Each with its own EmployeeLayout */}
+      <Route
+        path="/employee-dashboard"
+        element={
+          <ProtectedRoute requiredRole="employee">
+            <EmployeeLayout>
+              <EmployeeDashboard />
+            </EmployeeLayout>
+          </ProtectedRoute>
+        }
       />
       
       {/* Redirects */}

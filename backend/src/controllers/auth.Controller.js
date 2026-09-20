@@ -62,6 +62,7 @@ export const login = async (req, res) => {
                 e.branch_id,
                 e.first_name,
                 e.last_name,
+                e.employee_code,
                 e.email,
                 e.phone_number,
                 e.password,
@@ -88,19 +89,14 @@ export const login = async (req, res) => {
         const employee = employeeResult.rows[0];
 
         if (employee) {
-            // Check if employee is active
-            // if (employee.is_active === false) {
-            //     return res.status(401).json({
-            //         success: false,
-            //         message: 'Your account is deactivated. Please contact admin.'
-            //     });
-            // }
-
             // Verify password
             const isPasswordValid = await bcrypt.compare(password, employee.password);
             
             if (isPasswordValid) {
+                const isCompanyAdmin = employee.is_company_admin === true;
                 const isBranchAdmin = employee.is_baranch_admin === true || employee.is_branch_admin === true;
+                const isEmployee = !isCompanyAdmin && !isBranchAdmin;
+                const effectiveRole = employee.role || (isCompanyAdmin ? 'company_admin' : isBranchAdmin ? 'branch_admin' : 'employee');
 
                 // Generate token with all employee data
                 const token = jwt.sign(
@@ -111,10 +107,13 @@ export const login = async (req, res) => {
                         email: employee.email,
                         first_name: employee.first_name,
                         last_name: employee.last_name,
-                        role: employee.role || (isBranchAdmin ? 'branch_admin' : 'employee'),
-                        is_company_admin: employee.is_company_admin || false,
+                        employee_code: employee.employee_code || null,
+                        role: effectiveRole,
+                        is_super_admin: false,
+                        is_company_admin: isCompanyAdmin,
                         is_branch_admin: isBranchAdmin,
                         is_baranch_admin: isBranchAdmin,
+                        is_employee: isEmployee,
                         branch_name: employee.branch_name || null,
                         branch_code: employee.branch_code || null,
                         company_name: employee.company_name,
@@ -141,10 +140,13 @@ export const login = async (req, res) => {
                             email: employee.email,
                             first_name: employee.first_name,
                             last_name: employee.last_name,
-                            role: employee.role || (isBranchAdmin ? 'branch_admin' : 'employee'),
-                            is_company_admin: employee.is_company_admin || false,
+                            employee_code: employee.employee_code || null,
+                            role: effectiveRole,
+                            is_super_admin: false,
+                            is_company_admin: isCompanyAdmin,
                             is_branch_admin: isBranchAdmin,
                             is_baranch_admin: isBranchAdmin,
+                            is_employee: isEmployee,
                             branch_name: employee.branch_name || null,
                             branch_code: employee.branch_code || null,
                             company_name: employee.company_name,
