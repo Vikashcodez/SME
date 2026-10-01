@@ -9,6 +9,10 @@ import BranchRouter from './routes/Branch.Routes.js';
 import RolesRouter from './routes/Roles.Routes.js';
 import departmentRouter from './routes/Department.Routes.js';
 import employeesRouter from './routes/employees.Routes.js';
+import vendorRouter from './routes/Vendor.Routes.js';
+import rawMaterialRouter from './routes/RawMaterial.Routes.js';
+import rawMaterialInventoryRouter from './routes/RawMaterialInventory.Routes.js';
+import assetRouter from './routes/Asset.Routes.js';
 
 const app = express();
 
@@ -25,6 +29,10 @@ app.use('/api/branches', BranchRouter);
 app.use('/api/roles', RolesRouter);
 app.use('/api/departments', departmentRouter);
 app.use('/api/employees', employeesRouter);
+app.use('/api/vendors', vendorRouter);
+app.use('/api/raw-materials', rawMaterialRouter);
+app.use('/api/raw-material-inventory', rawMaterialInventoryRouter);
+app.use('/api/assets', assetRouter);
 // Health check
 app.get('/health', (req, res) => {
     res.json({

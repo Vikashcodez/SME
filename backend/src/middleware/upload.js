@@ -2,13 +2,18 @@ import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
 
-// Ensure upload directory exists
+// Ensure upload directories exist
 const uploadDir = 'uploads/companies';
 if (!fs.existsSync(uploadDir)) {
     fs.mkdirSync(uploadDir, { recursive: true });
 }
 
-// Configure storage
+const invoiceUploadDir = 'uploads/invoices';
+if (!fs.existsSync(invoiceUploadDir)) {
+    fs.mkdirSync(invoiceUploadDir, { recursive: true });
+}
+
+// Configure storage for logos
 const storage = multer.diskStorage({
     destination: (req, file, cb) => {
         cb(null, uploadDir);
@@ -19,13 +24,40 @@ const storage = multer.diskStorage({
     }
 });
 
-// File filter
+// Configure storage for invoices & documents
+const invoiceStorage = multer.diskStorage({
+    destination: (req, file, cb) => {
+        cb(null, invoiceUploadDir);
+    },
+    filename: (req, file, cb) => {
+        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+        cb(null, 'inv-' + uniqueSuffix + path.extname(file.originalname));
+    }
+});
+
+// File filter for logos
 const fileFilter = (req, file, cb) => {
     const allowedTypes = ['image/jpeg', 'image/png', 'image/jpg', 'image/gif', 'image/webp', 'image/svg+xml'];
     if (allowedTypes.includes(file.mimetype)) {
         cb(null, true);
     } else {
         cb(new Error('Only image files are allowed (jpeg, png, jpg, gif, webp, svg)'), false);
+    }
+};
+
+// File filter for invoices (allows PDF, images)
+const invoiceFileFilter = (req, file, cb) => {
+    const allowedTypes = [
+        'application/pdf',
+        'image/jpeg',
+        'image/png',
+        'image/jpg',
+        'image/webp'
+    ];
+    if (allowedTypes.includes(file.mimetype)) {
+        cb(null, true);
+    } else {
+        cb(new Error('Only PDF and image files (jpg, png, webp, pdf) are allowed for invoices'), false);
     }
 };
 
@@ -38,5 +70,14 @@ export const upload = multer({
     fileFilter: fileFilter
 });
 
-// Single file upload middleware
+export const uploadInvoiceMiddleware = multer({
+    storage: invoiceStorage,
+    limits: {
+        fileSize: 15 * 1024 * 1024 // 15MB limit for invoices
+    },
+    fileFilter: invoiceFileFilter
+});
+
+// Single file upload middlewares
 export const uploadLogo = upload.single('logo');
+export const uploadInvoice = uploadInvoiceMiddleware.single('invoice_file');

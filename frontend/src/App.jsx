@@ -17,6 +17,10 @@ import EmployeeDashboard from './pages/EmployeeDashboard';
 import RolesMaster from './pages/Master Data/RolesMaster';
 import DepartmentsMaster from './pages/Master Data/DepartmentsMaster';
 import Employees from './pages/Master Data/Employees';
+import VendorMaster from './pages/Master Data/VendorMaster';
+import RawMaterialMaster from './pages/Master Data/RawMaterialMaster';
+import RawMaterialsInventory from './pages/Inventory/RawMaterialsInventory';
+import AssetsInventory from './pages/Inventory/AssetsInventory';
 
 const AppContent = () => {
   const { isAuthenticated, isSuperAdmin, isCompanyAdmin, isBranchAdmin, isEmployee } = useAuth();
@@ -104,6 +108,50 @@ const AppContent = () => {
         }
       />
 
+      <Route
+        path="/vendors"
+        element={
+          <ProtectedRoute requiredRole="company_admin">
+            <CompanyAdminLayout>
+              <VendorMaster />
+            </CompanyAdminLayout>
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/raw-materials"
+        element={
+          <ProtectedRoute requiredRole="company_admin">
+            <CompanyAdminLayout>
+              <RawMaterialMaster />
+            </CompanyAdminLayout>
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/raw-material-inventory"
+        element={
+          <ProtectedRoute requiredRole="company_admin">
+            <CompanyAdminLayout>
+              <RawMaterialsInventory />
+            </CompanyAdminLayout>
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/assets-inventory"
+        element={
+          <ProtectedRoute requiredRole="company_admin">
+            <CompanyAdminLayout>
+              <AssetsInventory />
+            </CompanyAdminLayout>
+          </ProtectedRoute>
+        }
+      />
+
       {/* Branch Admin Routes - Each with its own BranchAdminLayout */}
       <Route
         path="/branch-dashboard"
@@ -144,6 +192,50 @@ const AppContent = () => {
           <ProtectedRoute requiredRole="branch_admin">
             <BranchAdminLayout>
               <Employees />
+            </BranchAdminLayout>
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/branch/vendors"
+        element={
+          <ProtectedRoute requiredRole="branch_admin">
+            <BranchAdminLayout>
+              <VendorMaster />
+            </BranchAdminLayout>
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/branch/raw-materials"
+        element={
+          <ProtectedRoute requiredRole="branch_admin">
+            <BranchAdminLayout>
+              <RawMaterialMaster />
+            </BranchAdminLayout>
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/branch/raw-material-inventory"
+        element={
+          <ProtectedRoute requiredRole="branch_admin">
+            <BranchAdminLayout>
+              <RawMaterialsInventory />
+            </BranchAdminLayout>
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/branch/assets-inventory"
+        element={
+          <ProtectedRoute requiredRole="branch_admin">
+            <BranchAdminLayout>
+              <AssetsInventory />
             </BranchAdminLayout>
           </ProtectedRoute>
         }
