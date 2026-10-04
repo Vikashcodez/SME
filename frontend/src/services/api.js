@@ -141,4 +141,36 @@ export const assets = {
   getStats: (params) => api.get('/assets/stats/summary', { params }),
 };
 
+export const products = {
+  getAll: (params) => api.get('/products', { params }),
+  getById: (id) => api.get(`/products/${id}`),
+  create: (data) => {
+    if (data instanceof FormData) {
+      return api.post('/products', data, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+      });
+    }
+    return api.post('/products', data);
+  },
+  update: (id, data) => {
+    if (data instanceof FormData) {
+      return api.put(`/products/${id}`, data, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+      });
+    }
+    return api.put(`/products/${id}`, data);
+  },
+  delete: (id) => api.delete(`/products/${id}`),
+  restore: (id) => api.put(`/products/${id}/restore`),
+  getCategories: (params) => api.get('/products/categories', { params }),
+};
+
+export const production = {
+  checkMaterials: (params) => api.get('/production/check-materials', { params }),
+  recordRun: (data) => api.post('/production', data),
+  getAll: (params) => api.get('/production', { params }),
+  getById: (id) => api.get(`/production/${id}`),
+  getStats: (params) => api.get('/production/stats/summary', { params }),
+};
+
 export default api;

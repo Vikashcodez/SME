@@ -13,6 +13,11 @@ if (!fs.existsSync(invoiceUploadDir)) {
     fs.mkdirSync(invoiceUploadDir, { recursive: true });
 }
 
+const productUploadDir = 'uploads/products';
+if (!fs.existsSync(productUploadDir)) {
+    fs.mkdirSync(productUploadDir, { recursive: true });
+}
+
 // Configure storage for logos
 const storage = multer.diskStorage({
     destination: (req, file, cb) => {
@@ -21,6 +26,17 @@ const storage = multer.diskStorage({
     filename: (req, file, cb) => {
         const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
         cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname));
+    }
+});
+
+// Configure storage for product images (2-3 photos)
+const productStorage = multer.diskStorage({
+    destination: (req, file, cb) => {
+        cb(null, productUploadDir);
+    },
+    filename: (req, file, cb) => {
+        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+        cb(null, 'prd-' + uniqueSuffix + path.extname(file.originalname));
     }
 });
 
@@ -78,6 +94,20 @@ export const uploadInvoiceMiddleware = multer({
     fileFilter: invoiceFileFilter
 });
 
-// Single file upload middlewares
+export const uploadProductMiddleware = multer({
+    storage: productStorage,
+    limits: {
+        fileSize: 10 * 1024 * 1024 // 10MB limit per photo
+    },
+    fileFilter: fileFilter
+});
+
+// Single & Multiple file upload middlewares
 export const uploadLogo = upload.single('logo');
 export const uploadInvoice = uploadInvoiceMiddleware.single('invoice_file');
+export const uploadProductImages = uploadProductMiddleware.fields([
+    { name: 'photo_1', maxCount: 1 },
+    { name: 'photo_2', maxCount: 1 },
+    { name: 'photo_3', maxCount: 1 },
+    { name: 'photos', maxCount: 5 }
+]);

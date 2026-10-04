@@ -23,12 +23,14 @@ const Sidebar = ({ isCollapsed, onToggleCollapse }) => {
         { path: '/employees', label: 'Employees' },
         { path: '/vendors', label: 'Vendor Master' },
         { path: '/raw-materials', label: 'Raw Material Master' },
+        { path: '/products', label: 'Product Master' },
       ]
     },
     {
-      label: 'Inventory & Assets',
+      label: 'Inventory & Production',
       items: [
         { path: '/raw-material-inventory', label: 'Raw Materials Stock' },
+        { path: '/production', label: 'Raw Material Production' },
         { path: '/assets-inventory', label: 'Assets Inventory' },
       ]
     },

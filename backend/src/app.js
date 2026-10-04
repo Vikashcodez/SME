@@ -13,6 +13,14 @@ import vendorRouter from './routes/Vendor.Routes.js';
 import rawMaterialRouter from './routes/RawMaterial.Routes.js';
 import rawMaterialInventoryRouter from './routes/RawMaterialInventory.Routes.js';
 import assetRouter from './routes/Asset.Routes.js';
+import productRouter from './routes/Product.Routes.js';
+import productionRouter from './routes/Production.Routes.js';
+import categoryRouter from './routes/Category.Routes.js';
+import grnRouter from './routes/Grn.Routes.js';
+import productionMasterRouter from './routes/ProductionMaster.Routes.js';
+import productionOrderRouter from './routes/ProductionOrder.Routes.js';
+import qualityCheckRouter from './routes/QualityCheck.Routes.js';
+import productInventoryRouter from './routes/ProductInventory.Routes.js';
 
 const app = express();
 
@@ -33,6 +41,14 @@ app.use('/api/vendors', vendorRouter);
 app.use('/api/raw-materials', rawMaterialRouter);
 app.use('/api/raw-material-inventory', rawMaterialInventoryRouter);
 app.use('/api/assets', assetRouter);
+app.use('/api/products', productRouter);
+app.use('/api/production', productionRouter);
+app.use('/api/categories', categoryRouter);
+app.use('/api/grn', grnRouter);
+app.use('/api/production-masters', productionMasterRouter);
+app.use('/api/production-orders', productionOrderRouter);
+app.use('/api/quality-checks', qualityCheckRouter);
+app.use('/api/product-inventory', productInventoryRouter);
 // Health check
 app.get('/health', (req, res) => {
     res.json({
