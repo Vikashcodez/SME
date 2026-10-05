@@ -1,6 +1,7 @@
 import express from 'express';
 import {
     getInventoryOverview,
+    getInventoryBatches,
     recordStockMovement,
     getStockMovements,
     recordRawMaterialReturn,
@@ -16,6 +17,7 @@ const router = express.Router();
 router.use(authenticate);
 
 router.get('/stats/summary', getInventorySummaryStats);
+router.get('/batches', getInventoryBatches);
 router.get('/', getInventoryOverview);
 
 // Stock Movement / Inward (GRN) with optional invoice file upload

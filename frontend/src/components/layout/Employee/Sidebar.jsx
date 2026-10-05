@@ -69,6 +69,26 @@ const Sidebar = ({ isCollapsed, onToggleCollapse }) => {
 
         .emp-sidebar::-webkit-scrollbar { width: 0; }
 
+        .emp-nav-scroll {
+          overflow-y: auto;
+          overflow-x: hidden;
+          scrollbar-width: thin;
+          scrollbar-color: #cbd5e1 transparent;
+        }
+        .emp-nav-scroll::-webkit-scrollbar {
+          width: 4px;
+        }
+        .emp-nav-scroll::-webkit-scrollbar-track {
+          background: transparent;
+        }
+        .emp-nav-scroll::-webkit-scrollbar-thumb {
+          background: #cbd5e1;
+          border-radius: 4px;
+        }
+        .emp-nav-scroll::-webkit-scrollbar-thumb:hover {
+          background: #94a3b8;
+        }
+
         .emp-nav-link {
           display: flex;
           align-items: center;
@@ -180,11 +200,13 @@ const Sidebar = ({ isCollapsed, onToggleCollapse }) => {
         className="emp-sidebar"
         style={{
           width: sidebarWidth,
-          minHeight: '100vh',
+          height: '100vh',
+          maxHeight: '100vh',
           background: '#ffffff',
           position: 'fixed',
           left: 0,
           top: 0,
+          bottom: 0,
           zIndex: 50,
           display: 'flex',
           flexDirection: 'column',
@@ -282,7 +304,7 @@ const Sidebar = ({ isCollapsed, onToggleCollapse }) => {
 
         {/* Search */}
         {!isCollapsed && (
-          <div style={{ padding: '12px 14px 6px' }}>
+          <div style={{ padding: '12px 14px 6px', flexShrink: 0 }}>
             <input
               type="text"
               value={searchQuery}
@@ -303,7 +325,8 @@ const Sidebar = ({ isCollapsed, onToggleCollapse }) => {
             borderRadius: '10px',
             display: 'flex',
             alignItems: 'center',
-            gap: '10px'
+            gap: '10px',
+            flexShrink: 0
           }}>
             <div style={{
               width: '32px',
@@ -347,7 +370,16 @@ const Sidebar = ({ isCollapsed, onToggleCollapse }) => {
         )}
 
         {/* Navigation Sections */}
-        <nav style={{ flex: 1, overflowY: 'auto', padding: '6px 0' }}>
+        <nav
+          className="emp-nav-scroll"
+          style={{
+            flex: '1 1 0%',
+            minHeight: 0,
+            overflowY: 'auto',
+            overflowX: 'hidden',
+            padding: '6px 0 20px 0'
+          }}
+        >
           {filteredSections.map((section, sIdx) => (
             <div key={section.label} style={{ marginBottom: '8px' }}>
               {!isCollapsed ? (
@@ -386,6 +418,7 @@ const Sidebar = ({ isCollapsed, onToggleCollapse }) => {
                             className={({ isActive }) =>
                               `emp-nav-link-collapsed${isActive ? ' active' : ''}`
                             }
+                            title={item.label}
                           >
                             <Icon size={18} />
                           </NavLink>
@@ -403,7 +436,8 @@ const Sidebar = ({ isCollapsed, onToggleCollapse }) => {
                             flex: 1,
                             whiteSpace: 'nowrap',
                             overflow: 'hidden',
-                            textOverflow: 'ellipsis'
+                            textOverflow: 'ellipsis',
+                            minWidth: 0
                           }}>
                             {item.label}
                           </span>
@@ -433,12 +467,13 @@ const Sidebar = ({ isCollapsed, onToggleCollapse }) => {
         {/* Footer — Employee Code & Branch Meta */}
         <div style={{
           padding: '12px 14px',
-          marginTop: 'auto',
           borderTop: '1px solid #f1f5f9',
           background: '#fafbfc',
+          flexShrink: 0,
           display: 'flex',
           alignItems: 'center',
-          justifyContent: isCollapsed ? 'center' : 'space-between'
+          justifyContent: isCollapsed ? 'center' : 'space-between',
+          zIndex: 10
         }}>
           {!isCollapsed ? (
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px', overflow: 'hidden' }}>

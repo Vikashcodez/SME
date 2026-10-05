@@ -123,7 +123,6 @@ const RawMaterialMaster = () => {
     minimum_stock_level: '10',
     reorder_quantity: '50',
     lead_time_days: '7',
-    preferred_vendor_id: '',
     description: '',
     initial_stock: '0',
     warehouse_location: 'Rack A1',
@@ -254,7 +253,6 @@ const RawMaterialMaster = () => {
       minimum_stock_level: material.minimum_stock_level || '0.00',
       reorder_quantity: material.reorder_quantity || '0.00',
       lead_time_days: material.lead_time_days || '0',
-      preferred_vendor_id: material.preferred_vendor_id || '',
       description: material.description || '',
       status: material.status || 'Active',
       is_active: material.is_active !== undefined ? material.is_active : true
@@ -545,7 +543,6 @@ const RawMaterialMaster = () => {
                   <th className="py-3 px-4">HSN / GST</th>
                   <th className="py-3 px-4 text-right">Standard Price</th>
                   <th className="py-3 px-4 text-right">Reorder Point</th>
-                  <th className="py-3 px-4">Preferred Vendor</th>
                   <th className="py-3 px-4 text-center">Status</th>
                   <th className="py-3 px-4 text-right">Actions</th>
                 </tr>
@@ -582,17 +579,6 @@ const RawMaterialMaster = () => {
                     <td className="py-3 px-4 text-right">
                       <div className="font-bold text-amber-600">{mat.minimum_stock_level} {mat.unit_of_measure?.split(' ')[0]}</div>
                       <div className="text-[10px] text-slate-400">Lead: {mat.lead_time_days || 0}d</div>
-                    </td>
-
-                    <td className="py-3 px-4">
-                      {mat.preferred_vendor_name ? (
-                        <span className="inline-flex items-center gap-1 text-slate-800 font-medium">
-                          <Truck size={12} className="text-blue-500" />
-                          {mat.preferred_vendor_name}
-                        </span>
-                      ) : (
-                        <span className="text-slate-400 italic">Not Assigned</span>
-                      )}
                     </td>
 
                     <td className="py-3 px-4 text-center">
@@ -677,10 +663,6 @@ const RawMaterialMaster = () => {
                   <div className="flex justify-between">
                     <span className="text-slate-400">Reorder Level:</span>
                     <span className="font-bold text-amber-600">{mat.minimum_stock_level}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-slate-400">Preferred Vendor:</span>
-                    <span className="font-medium text-slate-800">{mat.preferred_vendor_name || 'N/A'}</span>
                   </div>
                 </div>
               </div>
@@ -899,22 +881,6 @@ const RawMaterialMaster = () => {
                   />
                 </div>
 
-                <div className="sm:col-span-2">
-                  <label className="block font-semibold text-slate-700 mb-1">
-                    Preferred Vendor / Supplier
-                  </label>
-                  <select
-                    value={formData.preferred_vendor_id}
-                    onChange={(e) => setFormData({ ...formData, preferred_vendor_id: e.target.value })}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-slate-800 focus:bg-white focus:ring-2 focus:ring-blue-500 outline-none font-medium"
-                  >
-                    <option value="">-- Select Preferred Vendor --</option>
-                    {vendorsList.map(v => (
-                      <option key={v.vendor_id} value={v.vendor_id}>{v.vendor_name} ({v.vendor_code || `VND-${v.vendor_id}`})</option>
-                    ))}
-                  </select>
-                </div>
-
                 <div className="sm:col-span-3">
                   <label className="block font-semibold text-slate-700 mb-1">
                     Description & Technical Specifications
@@ -1076,20 +1042,6 @@ const RawMaterialMaster = () => {
                     onChange={(e) => setEditFormData({ ...editFormData, lead_time_days: e.target.value })}
                     className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-slate-800 focus:bg-white focus:ring-2 focus:ring-amber-500 outline-none"
                   />
-                </div>
-
-                <div className="sm:col-span-2">
-                  <label className="block font-semibold text-slate-700 mb-1">Preferred Vendor</label>
-                  <select
-                    value={editFormData.preferred_vendor_id || ''}
-                    onChange={(e) => setEditFormData({ ...editFormData, preferred_vendor_id: e.target.value })}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-slate-800 focus:bg-white focus:ring-2 focus:ring-amber-500 outline-none font-medium"
-                  >
-                    <option value="">-- No Preferred Vendor --</option>
-                    {vendorsList.map(v => (
-                      <option key={v.vendor_id} value={v.vendor_id}>{v.vendor_name} ({v.vendor_code || `VND-${v.vendor_id}`})</option>
-                    ))}
-                  </select>
                 </div>
 
                 <div className="sm:col-span-3">

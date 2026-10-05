@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { Link } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { 
   rawMaterialInventory as inventoryApi, 
@@ -737,12 +738,20 @@ const RawMaterialsInventory = () => {
             <span>Export CSV</span>
           </button>
 
+          <Link
+            to="/grn"
+            className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-lg shadow-md flex items-center gap-1.5 transition-all"
+          >
+            <Boxes size={15} />
+            <span>+ Multi-Material GRN Inward</span>
+          </Link>
+
           <button
             onClick={() => handleOpenMovementModal(null, 'Raw Material')}
-            className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-lg shadow-md flex items-center gap-1.5 transition-all"
+            className="px-3.5 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-lg shadow-sm flex items-center gap-1.5 transition-all"
           >
             <Plus size={15} />
-            <span>+ GRN / Stock Movement</span>
+            <span>Quick Movement</span>
           </button>
 
           <button
@@ -1360,6 +1369,22 @@ const RawMaterialsInventory = () => {
             </div>
 
             <div className="p-6 space-y-5 text-xs max-h-[75vh] overflow-y-auto">
+              {/* Tip for Multi-Material GRN */}
+              {movementForm.movement_type === 'Stock In / GRN' && (
+                <div className="p-3 bg-blue-50 border border-blue-200 rounded-xl flex items-center justify-between gap-3 text-xs text-blue-900">
+                  <div className="flex items-center gap-2">
+                    <Boxes size={16} className="text-blue-600 shrink-0" />
+                    <span><strong>Receiving multiple materials from one vendor invoice?</strong> Use the dedicated Multi-Material GRN Inward tool.</span>
+                  </div>
+                  <Link
+                    to="/grn"
+                    className="shrink-0 px-2.5 py-1 bg-blue-600 hover:bg-blue-700 text-white font-bold text-[11px] rounded-lg shadow-xs transition"
+                  >
+                    Open GRN Manager →
+                  </Link>
+                </div>
+              )}
+
               {/* Top Item Type Switcher: Raw Material vs Asset */}
               <div className="bg-slate-100 p-1.5 rounded-xl flex items-center gap-1.5 border border-slate-200">
                 <button

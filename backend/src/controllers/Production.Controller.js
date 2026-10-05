@@ -39,7 +39,21 @@ export const checkMaterialAvailability = async (req, res) => {
                 COALESCE(inv.average_unit_cost, rm.unit_price) as average_unit_cost
             FROM product_bom pb
             JOIN raw_materials rm ON pb.material_id = rm.material_id
-            LEFT JOIN raw_material_inventory inv ON pb.material_id = inv.material_id 
+            LEFT JOIN (
+                SELECT 
+                    COALESCE(raw_material_id, material_id) as material_id,
+                    branch_id,
+                    COALESCE(SUM(available_quantity), SUM(current_stock), 0) as current_stock,
+                    COALESCE(SUM(available_quantity - reserved_quantity), SUM(available_stock), 0) as available_stock,
+                    CASE 
+                        WHEN SUM(COALESCE(available_quantity, current_stock, 0)) > 0 
+                        THEN SUM(COALESCE(available_quantity, current_stock, 0) * COALESCE(unit_cost, average_unit_cost, 0)) / SUM(COALESCE(available_quantity, current_stock, 0))
+                        ELSE MAX(COALESCE(unit_cost, average_unit_cost, 0))
+                    END as average_unit_cost
+                FROM raw_material_inventory
+                WHERE status != 'DEPLETED' AND status != 'EXHAUSTED'
+                GROUP BY COALESCE(raw_material_id, material_id), branch_id
+            ) inv ON pb.material_id = inv.material_id 
                 AND (inv.branch_id = $2 OR $2 IS NULL)
             WHERE pb.product_id = $1
             ORDER BY rm.material_name ASC
@@ -200,17 +214,25 @@ export const recordProductionRun = async (req, res) => {
 
             // Fetch live inventory for this raw material in this branch with row locking
             const invRes = await client.query(`
-                SELECT * FROM raw_material_inventory 
-                WHERE branch_id = $1 AND material_id = $2 
-                FOR UPDATE
+                SELECT 
+                    COALESCE(SUM(available_quantity), SUM(current_stock), 0) as total_available,
+                    CASE 
+                        WHEN SUM(COALESCE(available_quantity, current_stock, 0)) > 0 
+                        THEN SUM(COALESCE(available_quantity, current_stock, 0) * COALESCE(unit_cost, average_unit_cost, 0)) / SUM(COALESCE(available_quantity, current_stock, 0))
+                        ELSE MAX(COALESCE(unit_cost, average_unit_cost, 0))
+                    END as avg_cost
+                FROM raw_material_inventory 
+                WHERE (branch_id = $1 OR $1 IS NULL) 
+                  AND (material_id = $2 OR raw_material_id = $2)
+                  AND status != 'DEPLETED' AND status != 'EXHAUSTED'
             `, [effectiveBranchId, bomItem.material_id]);
 
             let currentStock = 0;
             let avgCost = parseFloat(bomItem.unit_price) || 0;
 
-            if (invRes.rows.length > 0) {
-                currentStock = parseFloat(invRes.rows[0].current_stock) || 0;
-                avgCost = parseFloat(invRes.rows[0].average_unit_cost) || avgCost;
+            if (invRes.rows.length > 0 && invRes.rows[0].total_available !== null) {
+                currentStock = parseFloat(invRes.rows[0].total_available) || 0;
+                avgCost = parseFloat(invRes.rows[0].avg_cost) || avgCost;
             }
 
             if (currentStock < totalRequired) {
@@ -280,19 +302,34 @@ export const recordProductionRun = async (req, res) => {
 
         // 6. Deduct Inventory & Create Stock Movement / Consumption Logs for each raw material
         for (const item of deductions) {
-            // Update raw_material_inventory
-            await client.query(`
-                UPDATE raw_material_inventory
-                SET current_stock = $1,
-                    available_stock = $1 - allocated_stock,
-                    total_value = $1 * average_unit_cost,
-                    last_stock_update = CURRENT_TIMESTAMP
-                WHERE branch_id = $2 AND material_id = $3
-            `, [
-                item.new_stock_after,
-                effectiveBranchId,
-                item.material_id
-            ]);
+            // Deduct from batches FIFO
+            const batchesToDeduct = await client.query(`
+                SELECT * FROM raw_material_inventory
+                WHERE (branch_id = $1 OR $1 IS NULL)
+                  AND (material_id = $2 OR raw_material_id = $2)
+                  AND available_quantity > 0
+                  AND status = 'AVAILABLE'
+                ORDER BY expiry_date ASC NULLS LAST, inventory_id ASC
+                FOR UPDATE
+            `, [effectiveBranchId, item.material_id]);
+
+            let remainingDeduct = item.total_quantity_deducted;
+            for (const b of batchesToDeduct.rows) {
+                if (remainingDeduct <= 0) break;
+                const bAvail = parseFloat(b.available_quantity) || 0;
+                const toTake = Math.min(bAvail, remainingDeduct);
+                remainingDeduct -= toTake;
+                const newB = bAvail - toTake;
+                await client.query(`
+                    UPDATE raw_material_inventory
+                    SET available_quantity = $1,
+                        current_stock = $1,
+                        available_stock = $1,
+                        status = CASE WHEN $1 <= 0.0001 THEN 'DEPLETED' ELSE 'AVAILABLE' END,
+                        last_stock_update = CURRENT_TIMESTAMP
+                    WHERE inventory_id = $2
+                `, [newB, b.inventory_id]);
+            }
 
             // Create Stock Movement Issue / Out log
             await client.query(`

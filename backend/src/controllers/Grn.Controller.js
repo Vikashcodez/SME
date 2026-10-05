@@ -154,8 +154,9 @@ export const createGrn = async (req, res) => {
                     company_id, branch_id, raw_material_id, material_id,
                     grn_item_id, batch_number, received_quantity,
                     available_quantity, reserved_quantity, unit_cost,
+                    current_stock, available_stock, average_unit_cost, total_value,
                     expiry_date, warehouse_location, status
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
                 RETURNING *
             `;
 
@@ -170,6 +171,10 @@ export const createGrn = async (req, res) => {
                 totalReceivedBatchQty,
                 0,
                 unitCost,
+                totalReceivedBatchQty,
+                totalReceivedBatchQty,
+                unitCost,
+                totalReceivedBatchQty * unitCost,
                 expiryDate,
                 item.warehouse_location || 'Main Store',
                 'AVAILABLE'

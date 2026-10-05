@@ -111,6 +111,7 @@ export const rawMaterials = {
 
 export const rawMaterialInventory = {
   getOverview: (params) => api.get('/raw-material-inventory', { params }),
+  getBatches: (params) => api.get('/raw-material-inventory/batches', { params }),
   recordMovement: (data) => {
     if (data instanceof FormData) {
       return api.post('/raw-material-inventory/movement', data, {
@@ -171,6 +172,64 @@ export const production = {
   getAll: (params) => api.get('/production', { params }),
   getById: (id) => api.get(`/production/${id}`),
   getStats: (params) => api.get('/production/stats/summary', { params }),
+};
+
+// ==========================================
+// 17-TABLE MANUFACTURING & INVENTORY MODULES
+// ==========================================
+
+export const categories = {
+  getRawMaterials: (params) => api.get('/categories/raw-materials', { params }),
+  createRawMaterial: (data) => api.post('/categories/raw-materials', data),
+  updateRawMaterial: (id, data) => api.put(`/categories/raw-materials/${id}`, data),
+  deleteRawMaterial: (id) => api.delete(`/categories/raw-materials/${id}`),
+  getProducts: (params) => api.get('/categories/products', { params }),
+  createProduct: (data) => api.post('/categories/products', data),
+  updateProduct: (id, data) => api.put(`/categories/products/${id}`, data),
+  deleteProduct: (id) => api.delete(`/categories/products/${id}`),
+};
+
+export const grn = {
+  getAll: (params) => api.get('/grn', { params }),
+  getById: (id) => api.get(`/grn/${id}`),
+  create: (data) => {
+    if (data instanceof FormData) {
+      return api.post('/grn', data, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+      });
+    }
+    return api.post('/grn', data);
+  },
+  update: (id, data) => api.put(`/grn/${id}`, data),
+};
+
+export const productionMasters = {
+  getAll: (params) => api.get('/production-masters', { params }),
+  getById: (id) => api.get(`/production-masters/${id}`),
+  create: (data) => api.post('/production-masters', data),
+  update: (id, data) => api.put(`/production-masters/${id}`, data),
+};
+
+export const productionOrders = {
+  calculateRequirements: (params) => api.get('/production-orders/calculate-requirements', { params }),
+  getAll: (params) => api.get('/production-orders', { params }),
+  getById: (id) => api.get(`/production-orders/${id}`),
+  create: (data) => api.post('/production-orders', data),
+  start: (id) => api.post(`/production-orders/${id}/start`),
+  completeBatch: (batchId, data) => api.post(`/production-orders/batches/${batchId}/complete`, data),
+};
+
+export const qualityChecks = {
+  getAll: (params) => api.get('/quality-checks', { params }),
+  record: (data) => api.post('/quality-checks', data),
+  getReworks: (params) => api.get('/quality-checks/reworks', { params }),
+  completeRework: (reworkId, data) => api.post(`/quality-checks/reworks/${reworkId}/complete`, data),
+};
+
+export const productInventory = {
+  getAll: (params) => api.get('/product-inventory', { params }),
+  getSummary: (params) => api.get('/product-inventory/summary', { params }),
+  updateBatch: (id, data) => api.put(`/product-inventory/${id}`, data),
 };
 
 export default api;

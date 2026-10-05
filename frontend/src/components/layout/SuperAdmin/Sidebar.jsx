@@ -50,6 +50,26 @@ const Sidebar = ({ isCollapsed, onToggleCollapse }) => {
 
         .crm-sidebar::-webkit-scrollbar { width: 0; }
 
+        .crm-nav-scroll {
+          overflow-y: auto;
+          overflow-x: hidden;
+          scrollbar-width: thin;
+          scrollbar-color: #cbd5e1 transparent;
+        }
+        .crm-nav-scroll::-webkit-scrollbar {
+          width: 4px;
+        }
+        .crm-nav-scroll::-webkit-scrollbar-track {
+          background: transparent;
+        }
+        .crm-nav-scroll::-webkit-scrollbar-thumb {
+          background: #cbd5e1;
+          border-radius: 4px;
+        }
+        .crm-nav-scroll::-webkit-scrollbar-thumb:hover {
+          background: #94a3b8;
+        }
+
         .crm-nav-link {
           display: flex;
           align-items: center;
@@ -186,11 +206,13 @@ const Sidebar = ({ isCollapsed, onToggleCollapse }) => {
         className="crm-sidebar"
         style={{
           width: sidebarWidth,
-          minHeight: '100vh',
+          height: '100vh',
+          maxHeight: '100vh',
           background: '#ffffff',
           position: 'fixed',
           left: 0,
           top: 0,
+          bottom: 0,
           zIndex: 50,
           display: 'flex',
           flexDirection: 'column',
@@ -260,7 +282,7 @@ const Sidebar = ({ isCollapsed, onToggleCollapse }) => {
 
         {/* Search */}
         {!isCollapsed && (
-          <div style={{ padding: '0 16px 12px' }}>
+          <div style={{ padding: '0 16px 12px', flexShrink: 0 }}>
             <input
               type="text"
               value={searchQuery}
@@ -272,7 +294,16 @@ const Sidebar = ({ isCollapsed, onToggleCollapse }) => {
         )}
 
         {/* Navigation */}
-        <nav style={{ flex: 1, overflowY: 'auto', padding: '2px 0' }}>
+        <nav
+          className="crm-nav-scroll"
+          style={{
+            flex: '1 1 0%',
+            minHeight: 0,
+            overflowY: 'auto',
+            overflowX: 'hidden',
+            padding: '2px 0 20px 0'
+          }}
+        >
           {menuSections.map((section, sIdx) => (
             <div key={section.label}>
               {!isCollapsed ? (
@@ -311,6 +342,7 @@ const Sidebar = ({ isCollapsed, onToggleCollapse }) => {
                           className={({ isActive }) =>
                             `crm-nav-link-collapsed${isActive ? ' active' : ''}`
                           }
+                          title={item.label}
                         >
                           {item.label.charAt(0)}
                         </NavLink>
@@ -327,7 +359,8 @@ const Sidebar = ({ isCollapsed, onToggleCollapse }) => {
                           flex: 1,
                           whiteSpace: 'nowrap',
                           overflow: 'hidden',
-                          textOverflow: 'ellipsis'
+                          textOverflow: 'ellipsis',
+                          minWidth: 0
                         }}>
                           {item.label}
                         </span>
@@ -357,10 +390,12 @@ const Sidebar = ({ isCollapsed, onToggleCollapse }) => {
         {/* Bottom — version only */}
         <div style={{
           padding: '10px 16px',
-          marginTop: 'auto',
           borderTop: '1px solid #f5f5f5',
+          background: '#ffffff',
+          flexShrink: 0,
           display: 'flex',
-          justifyContent: isCollapsed ? 'center' : 'flex-end'
+          justifyContent: isCollapsed ? 'center' : 'flex-end',
+          zIndex: 10
         }}>
           <span style={{
             fontSize: '9px',

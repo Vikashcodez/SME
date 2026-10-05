@@ -23,6 +23,11 @@ import ProductMaster from './pages/Master Data/ProductMaster';
 import RawMaterialsInventory from './pages/Inventory/RawMaterialsInventory';
 import AssetsInventory from './pages/Inventory/AssetsInventory';
 import ProductionInventory from './pages/Inventory/ProductionInventory';
+import GrnManagement from './pages/Inventory/GrnManagement';
+import ProductionMasterManagement from './pages/Master Data/ProductionMasterManagement';
+import ProductionOrderManagement from './pages/Inventory/ProductionOrderManagement';
+import QualityCheckManagement from './pages/Inventory/QualityCheckManagement';
+import FinishedGoodsInventory from './pages/Inventory/FinishedGoodsInventory';
 
 const AppContent = () => {
   const { isAuthenticated, isSuperAdmin, isCompanyAdmin, isBranchAdmin, isEmployee } = useAuth();
@@ -176,6 +181,61 @@ const AppContent = () => {
         }
       />
 
+      <Route
+        path="/grn"
+        element={
+          <ProtectedRoute requiredRole="company_admin">
+            <CompanyAdminLayout>
+              <GrnManagement />
+            </CompanyAdminLayout>
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/production-masters"
+        element={
+          <ProtectedRoute requiredRole="company_admin">
+            <CompanyAdminLayout>
+              <ProductionMasterManagement />
+            </CompanyAdminLayout>
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/production-orders"
+        element={
+          <ProtectedRoute requiredRole="company_admin">
+            <CompanyAdminLayout>
+              <ProductionOrderManagement />
+            </CompanyAdminLayout>
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/quality-checks"
+        element={
+          <ProtectedRoute requiredRole="company_admin">
+            <CompanyAdminLayout>
+              <QualityCheckManagement />
+            </CompanyAdminLayout>
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/product-inventory"
+        element={
+          <ProtectedRoute requiredRole="company_admin">
+            <CompanyAdminLayout>
+              <FinishedGoodsInventory />
+            </CompanyAdminLayout>
+          </ProtectedRoute>
+        }
+      />
+
       {/* Branch Admin Routes - Each with its own BranchAdminLayout */}
       <Route
         path="/branch-dashboard"
@@ -282,6 +342,61 @@ const AppContent = () => {
           <ProtectedRoute requiredRole="branch_admin">
             <BranchAdminLayout>
               <AssetsInventory />
+            </BranchAdminLayout>
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/branch/grn"
+        element={
+          <ProtectedRoute requiredRole="branch_admin">
+            <BranchAdminLayout>
+              <GrnManagement />
+            </BranchAdminLayout>
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/branch/production-masters"
+        element={
+          <ProtectedRoute requiredRole="branch_admin">
+            <BranchAdminLayout>
+              <ProductionMasterManagement />
+            </BranchAdminLayout>
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/branch/production-orders"
+        element={
+          <ProtectedRoute requiredRole="branch_admin">
+            <BranchAdminLayout>
+              <ProductionOrderManagement />
+            </BranchAdminLayout>
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/branch/quality-checks"
+        element={
+          <ProtectedRoute requiredRole="branch_admin">
+            <BranchAdminLayout>
+              <QualityCheckManagement />
+            </BranchAdminLayout>
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/branch/product-inventory"
+        element={
+          <ProtectedRoute requiredRole="branch_admin">
+            <BranchAdminLayout>
+              <FinishedGoodsInventory />
             </BranchAdminLayout>
           </ProtectedRoute>
         }

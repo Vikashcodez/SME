@@ -22,7 +22,7 @@ export const createRawMaterial = async (req, res) => {
             minimum_stock_level,
             reorder_quantity,
             lead_time_days,
-            preferred_vendor_id,
+            preferred_vendor_id = null,
             description,
             status,
             is_active,
@@ -58,13 +58,15 @@ export const createRawMaterial = async (req, res) => {
                 category, unit_of_measure, hsn_code, gst_rate,
                 unit_price, minimum_stock_level, reorder_quantity,
                 lead_time_days, preferred_vendor_id, description,
-                status, is_active, created_by, updated_by
+                status, is_active, created_by, updated_by,
+                category_id, code, name, unit, standard_cost, minimum_stock
             ) VALUES (
                 $1, $2, $3, $4,
                 $5, $6, $7, $8,
                 $9, $10, $11,
                 $12, $13, $14,
-                $15, $16, $17, $17
+                $15, $16, $17, $17,
+                $18, $3, $4, $6, $9, $10
             ) RETURNING *
         `;
 
@@ -85,34 +87,40 @@ export const createRawMaterial = async (req, res) => {
             description ? description.trim() : null,
             status || 'Active',
             is_active !== undefined ? is_active : true,
-            createdBy
+            createdBy,
+            req.body.category_id || null
         ];
 
         const result = await pool.query(query, values);
         const newMaterial = result.rows[0];
 
-        // Initialize inventory row if branch_id is present
+        // Initialize inventory row if branch_id is present and initial_stock > 0
         if (effectiveBranchId) {
             const initialQty = parseFloat(initial_stock) || 0;
             const price = parseFloat(unit_price) || 0;
             const totalVal = initialQty * price;
 
-            await pool.query(`
-                INSERT INTO raw_material_inventory (
-                    company_id, branch_id, material_id, warehouse_location,
-                    current_stock, allocated_stock, available_stock,
-                    average_unit_cost, total_value, last_stock_update
-                ) VALUES ($1, $2, $3, $4, $5, 0, $5, $6, $7, CURRENT_TIMESTAMP)
-                ON CONFLICT (branch_id, material_id) DO NOTHING
-            `, [
-                effectiveCompanyId,
-                effectiveBranchId,
-                newMaterial.material_id,
-                warehouse_location || 'Main Storage',
-                initialQty,
-                price,
-                totalVal
-            ]);
+            if (initialQty > 0) {
+                const initBatchNumber = `INIT-${Date.now().toString().slice(-6)}`;
+                await pool.query(`
+                    INSERT INTO raw_material_inventory (
+                        company_id, branch_id, material_id, raw_material_id, warehouse_location,
+                        current_stock, allocated_stock, available_stock,
+                        average_unit_cost, total_value, last_stock_update,
+                        batch_number, received_quantity, available_quantity, reserved_quantity,
+                        unit_cost, status
+                    ) VALUES ($1, $2, $3, $3, $4, $5, 0, $5, $6, $7, CURRENT_TIMESTAMP, $8, $5, $5, 0, $6, 'AVAILABLE')
+                `, [
+                    effectiveCompanyId,
+                    effectiveBranchId,
+                    newMaterial.material_id,
+                    warehouse_location || 'Main Storage',
+                    initialQty,
+                    price,
+                    totalVal,
+                    initBatchNumber
+                ]);
+            }
 
             if (initialQty > 0) {
                 await pool.query(`
@@ -176,7 +184,18 @@ export const getAllRawMaterials = async (req, res) => {
             LEFT JOIN companies c ON rm.company_id = c.company_id
             LEFT JOIN branches b ON rm.branch_id = b.branch_id
             LEFT JOIN vendors v ON rm.preferred_vendor_id = v.vendor_id
-            LEFT JOIN raw_material_inventory inv ON rm.material_id = inv.material_id 
+            LEFT JOIN (
+                SELECT 
+                    COALESCE(raw_material_id, material_id) as material_id,
+                    branch_id,
+                    COALESCE(SUM(available_quantity), SUM(current_stock), 0) as current_stock,
+                    COALESCE(SUM(available_quantity - reserved_quantity), SUM(available_stock), 0) as available_stock,
+                    MAX(warehouse_location) as warehouse_location,
+                    SUM(COALESCE(available_quantity, current_stock, 0) * COALESCE(unit_cost, average_unit_cost, 0)) as total_value
+                FROM raw_material_inventory
+                WHERE status != 'DEPLETED' AND status != 'EXHAUSTED'
+                GROUP BY COALESCE(raw_material_id, material_id), branch_id
+            ) inv ON rm.material_id = inv.material_id 
                 AND (inv.branch_id = rm.branch_id OR (inv.branch_id = $1 AND $1 IS NOT NULL))
             WHERE 1=1
         `;
@@ -267,7 +286,18 @@ export const getRawMaterialById = async (req, res) => {
             LEFT JOIN companies c ON rm.company_id = c.company_id
             LEFT JOIN branches b ON rm.branch_id = b.branch_id
             LEFT JOIN vendors v ON rm.preferred_vendor_id = v.vendor_id
-            LEFT JOIN raw_material_inventory inv ON rm.material_id = inv.material_id
+            LEFT JOIN (
+                SELECT 
+                    COALESCE(raw_material_id, material_id) as material_id,
+                    branch_id,
+                    COALESCE(SUM(available_quantity), SUM(current_stock), 0) as current_stock,
+                    COALESCE(SUM(available_quantity - reserved_quantity), SUM(available_stock), 0) as available_stock,
+                    MAX(warehouse_location) as warehouse_location,
+                    SUM(COALESCE(available_quantity, current_stock, 0) * COALESCE(unit_cost, average_unit_cost, 0)) as total_value
+                FROM raw_material_inventory
+                WHERE status != 'DEPLETED' AND status != 'EXHAUSTED'
+                GROUP BY COALESCE(raw_material_id, material_id), branch_id
+            ) inv ON rm.material_id = inv.material_id
             WHERE rm.material_id = $1
         `;
 

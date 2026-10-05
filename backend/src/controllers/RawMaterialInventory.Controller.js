@@ -39,7 +39,26 @@ export const getInventoryOverview = async (req, res) => {
             LEFT JOIN companies c ON rm.company_id = c.company_id
             LEFT JOIN branches b ON rm.branch_id = b.branch_id
             LEFT JOIN vendors v ON rm.preferred_vendor_id = v.vendor_id
-            LEFT JOIN raw_material_inventory inv ON rm.material_id = inv.material_id 
+            LEFT JOIN (
+                SELECT 
+                    MAX(inventory_id) as inventory_id,
+                    COALESCE(raw_material_id, material_id) as material_id,
+                    branch_id,
+                    COALESCE(SUM(available_quantity), SUM(current_stock), 0) as current_stock,
+                    COALESCE(SUM(reserved_quantity), SUM(allocated_stock), 0) as allocated_stock,
+                    COALESCE(SUM(available_quantity - reserved_quantity), SUM(available_stock), 0) as available_stock,
+                    CASE 
+                        WHEN SUM(COALESCE(available_quantity, current_stock, 0)) > 0 
+                        THEN SUM(COALESCE(available_quantity, current_stock, 0) * COALESCE(unit_cost, average_unit_cost, 0)) / SUM(COALESCE(available_quantity, current_stock, 0))
+                        ELSE MAX(COALESCE(unit_cost, average_unit_cost, 0))
+                    END as average_unit_cost,
+                    SUM(COALESCE(available_quantity, current_stock, 0) * COALESCE(unit_cost, average_unit_cost, 0)) as total_value,
+                    MAX(warehouse_location) as warehouse_location,
+                    MAX(updated_at) as last_stock_update
+                FROM raw_material_inventory
+                WHERE status != 'DEPLETED' AND status != 'EXHAUSTED'
+                GROUP BY COALESCE(raw_material_id, material_id), branch_id
+            ) inv ON rm.material_id = inv.material_id 
                 AND (inv.branch_id = $1 OR $1 IS NULL)
             WHERE rm.is_active = true
         `;
@@ -760,7 +779,18 @@ export const getInventorySummaryStats = async (req, res) => {
                 COALESCE(SUM(inv.total_value), 0) as total_valuation,
                 (SELECT COALESCE(SUM(total_loss_value), 0) FROM raw_material_returns WHERE (company_id = $1 OR $1 IS NULL) AND (branch_id = $2 OR $2 IS NULL)) as total_damage_loss
             FROM raw_materials rm
-            LEFT JOIN raw_material_inventory inv ON rm.material_id = inv.material_id 
+            LEFT JOIN (
+                SELECT 
+                    COALESCE(raw_material_id, material_id) as material_id,
+                    branch_id,
+                    COALESCE(SUM(available_quantity), SUM(current_stock), 0) as current_stock,
+                    COALESCE(SUM(reserved_quantity), SUM(allocated_stock), 0) as allocated_stock,
+                    COALESCE(SUM(available_quantity - reserved_quantity), SUM(available_stock), 0) as available_stock,
+                    SUM(COALESCE(available_quantity, current_stock, 0) * COALESCE(unit_cost, average_unit_cost, 0)) as total_value
+                FROM raw_material_inventory
+                WHERE status != 'DEPLETED' AND status != 'EXHAUSTED'
+                GROUP BY COALESCE(raw_material_id, material_id), branch_id
+            ) inv ON rm.material_id = inv.material_id 
                 AND (inv.branch_id = $2 OR $2 IS NULL)
             WHERE rm.is_active = true
         `;
@@ -789,6 +819,94 @@ export const getInventorySummaryStats = async (req, res) => {
         return res.status(500).json({
             success: false,
             message: 'Internal server error',
+            error: error.message
+        });
+    }
+};
+
+// 8. Get Granular Raw Material Batches (FEFO/FIFO Batch Tracking)
+export const getInventoryBatches = async (req, res) => {
+    try {
+        const { company_id, branch_id, material_id, status, search } = req.query;
+        const effectiveCompanyId = company_id || req.user?.company_id;
+        const effectiveBranchId = branch_id || req.user?.branch_id;
+
+        let query = `
+            SELECT 
+                rmi.*,
+                rm.material_code,
+                rm.material_name,
+                rm.unit_of_measure,
+                rm.category,
+                g.grn_number,
+                g.invoice_number,
+                g.invoice_date,
+                v.vendor_name,
+                c.company_name,
+                b.branch_name
+            FROM raw_material_inventory rmi
+            JOIN raw_materials rm ON (rmi.raw_material_id = rm.material_id OR rmi.material_id = rm.material_id)
+            LEFT JOIN grn_items gi ON rmi.grn_item_id = gi.id
+            LEFT JOIN grns g ON gi.grn_id = g.id
+            LEFT JOIN vendors v ON g.vendor_id = v.vendor_id
+            LEFT JOIN companies c ON rmi.company_id = c.company_id
+            LEFT JOIN branches b ON rmi.branch_id = b.branch_id
+            WHERE 1=1
+        `;
+
+        const values = [];
+        let counter = 1;
+
+        if (effectiveCompanyId) {
+            query += ` AND rmi.company_id = $${counter}`;
+            values.push(effectiveCompanyId);
+            counter++;
+        }
+
+        if (effectiveBranchId && effectiveBranchId !== 'all') {
+            query += ` AND (rmi.branch_id = $${counter} OR rmi.branch_id IS NULL)`;
+            values.push(effectiveBranchId);
+            counter++;
+        }
+
+        if (material_id) {
+            query += ` AND (rmi.raw_material_id = $${counter} OR rmi.material_id = $${counter})`;
+            values.push(material_id);
+            counter++;
+        }
+
+        if (status && status !== 'all') {
+            query += ` AND rmi.status = $${counter}`;
+            values.push(status);
+            counter++;
+        }
+
+        if (search) {
+            query += ` AND (
+                rmi.batch_number ILIKE $${counter} OR
+                rm.material_name ILIKE $${counter} OR
+                rm.material_code ILIKE $${counter} OR
+                g.grn_number ILIKE $${counter} OR
+                v.vendor_name ILIKE $${counter}
+            )`;
+            values.push(`%${search}%`);
+            counter++;
+        }
+
+        query += ` ORDER BY rmi.expiry_date ASC NULLS LAST, rmi.inventory_id DESC`;
+
+        const result = await pool.query(query, values);
+
+        return res.status(200).json({
+            success: true,
+            count: result.rows.length,
+            data: result.rows
+        });
+    } catch (error) {
+        console.error('Error fetching inventory batches:', error);
+        return res.status(500).json({
+            success: false,
+            message: 'Failed to fetch inventory batches',
             error: error.message
         });
     }
