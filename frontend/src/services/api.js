@@ -231,6 +231,7 @@ export const qualityChecks = {
 
 export const productInventory = {
   getAll: (params) => api.get('/product-inventory', { params }),
+  getGrouped: (params) => api.get('/product-inventory/grouped', { params }),
   getSummary: (params) => api.get('/product-inventory/summary', { params }),
   updateBatch: (id, data) => api.put(`/product-inventory/${id}`, data),
 };

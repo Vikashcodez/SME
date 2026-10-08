@@ -1,6 +1,7 @@
 import express from 'express';
 import {
     getAllProductInventory,
+    getGroupedProductInventory,
     getProductInventorySummary,
     updateProductInventoryBatch
 } from '../controllers/ProductInventory.Controller.js';
@@ -11,6 +12,7 @@ const router = express.Router();
 router.use(authenticate);
 
 router.get('/summary', getProductInventorySummary);
+router.get('/grouped', getGroupedProductInventory);
 router.get('/', getAllProductInventory);
 router.put('/:id', updateProductInventoryBatch);
 
