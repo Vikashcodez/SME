@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useAuth } from '../../context/AuthContext';
+import { Link } from 'react-router-dom';
 import { qualityChecks as qcApi, productionOrders as orderApi, branches as branchesApi, companies as companiesApi } from '../../services/api';
 import toast from 'react-hot-toast';
 import {
@@ -107,32 +108,13 @@ const QualityCheckManagement = () => {
   // Fetch batches waiting for QC
   const fetchPendingBatches = async () => {
     try {
-      const res = await orderApi.getAll({
+      const res = await qcApi.getPendingBatches({
         company_id: selectedCompanyId || undefined,
         branch_id: selectedBranchId !== 'all' ? selectedBranchId : undefined
       });
-      const allOrders = res.data?.data || [];
-      const pending = [];
-      for (const order of allOrders) {
-        if (order.batches_count > 0) {
-          const detailRes = await orderApi.getById(order.id);
-          const batches = detailRes.data?.data?.batches || [];
-          batches.forEach(b => {
-            if (b.status === 'PENDING_QC' || b.status === 'REWORK_NEEDED') {
-              pending.push({
-                ...b,
-                product_name: order.product_name,
-                product_code: order.product_code,
-                production_number: order.production_number,
-                product_unit: order.product_unit
-              });
-            }
-          });
-        }
-      }
-      setPendingBatchesList(pending);
+      setPendingBatchesList(res.data?.data || []);
     } catch (e) {
-      console.error(e);
+      console.error('Error fetching pending batches for QC:', e);
     }
   };
 
@@ -247,29 +229,39 @@ const QualityCheckManagement = () => {
           </div>
         </div>
 
-        {/* Tab Switcher */}
-        <div className="flex bg-gray-100 p-1 rounded-lg">
-          <button
-            onClick={() => setActiveTab('inspections')}
-            className={`px-4 py-1.5 text-xs font-semibold rounded-md transition ${
-              activeTab === 'inspections'
-                ? 'bg-white text-gray-900 shadow-2xs'
-                : 'text-gray-500 hover:text-gray-900'
-            }`}
+        {/* Tab Switcher & Navigation to Rework Page */}
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex bg-gray-100 p-1 rounded-lg">
+            <button
+              onClick={() => setActiveTab('inspections')}
+              className={`px-4 py-1.5 text-xs font-semibold rounded-md transition ${
+                activeTab === 'inspections'
+                  ? 'bg-white text-gray-900 shadow-2xs'
+                  : 'text-gray-500 hover:text-gray-900'
+              }`}
+            >
+              Inspections ({qcList.length})
+            </button>
+            <button
+              onClick={() => setActiveTab('rework')}
+              className={`px-4 py-1.5 text-xs font-semibold rounded-md transition flex items-center gap-1.5 ${
+                activeTab === 'rework'
+                  ? 'bg-white text-gray-900 shadow-2xs'
+                  : 'text-gray-500 hover:text-gray-900'
+              }`}
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+              Rework Queue ({reworkList.filter(r => r.status === 'IN_REWORK' || r.status === 'PENDING_DECISION').length})
+            </button>
+          </div>
+
+          <Link
+            to="/rework-management"
+            className="px-3.5 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-lg text-xs font-bold transition flex items-center gap-1.5"
           >
-            Inspections ({qcList.length})
-          </button>
-          <button
-            onClick={() => setActiveTab('rework')}
-            className={`px-4 py-1.5 text-xs font-semibold rounded-md transition flex items-center gap-1.5 ${
-              activeTab === 'rework'
-                ? 'bg-white text-gray-900 shadow-2xs'
-                : 'text-gray-500 hover:text-gray-900'
-            }`}
-          >
-            <RotateCcw className="w-3.5 h-3.5" />
-            Rework Queue ({reworkList.filter(r => r.status === 'IN_REWORK').length})
-          </button>
+            <AlertTriangle className="w-3.5 h-3.5 text-rose-600" />
+            <span>Manage Rejected & Rework Products →</span>
+          </Link>
         </div>
       </div>
 
@@ -286,17 +278,41 @@ const QualityCheckManagement = () => {
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
             {pendingBatchesList.map(batch => (
-              <div key={batch.id} className="bg-white p-3.5 rounded-lg border border-amber-200/60 shadow-2xs flex items-center justify-between">
+              <div 
+                key={batch.id} 
+                className={`bg-white p-3.5 rounded-lg border shadow-2xs flex items-center justify-between ${
+                  batch.is_rework_reinspection || batch.status === 'REWORK_QC_PENDING'
+                    ? 'border-amber-400 bg-amber-50/40 ring-1 ring-amber-300'
+                    : 'border-blue-200/80'
+                }`}
+              >
                 <div>
-                  <span className="font-mono font-bold text-xs text-blue-600">{batch.batch_number}</span>
-                  <div className="text-xs font-medium text-gray-800">{batch.product_name}</div>
-                  <div className="text-[11px] text-gray-500">
-                    Produced: <strong>{parseFloat(batch.produced_quantity || batch.planned_quantity)}</strong> {batch.product_unit}
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <span className="font-mono font-bold text-xs text-blue-600">{batch.batch_number}</span>
+                    {(batch.is_rework_reinspection || batch.status === 'REWORK_QC_PENDING') && (
+                      <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300 animate-pulse">
+                        🔁 REWORK RE-INSPECTION
+                      </span>
+                    )}
                   </div>
+                  <div className="text-xs font-semibold text-gray-900 mt-0.5">{batch.product_name}</div>
+                  <div className="text-[11px] text-gray-500">
+                    Produced/Pending: <strong>{parseFloat(batch.produced_quantity || batch.planned_quantity)}</strong> {batch.product_unit || 'Units'}
+                  </div>
+                  {batch.total_rework_cost > 0 && (
+                    <div className="text-[10.5px] text-emerald-700 font-semibold mt-0.5">
+                      Rework Cost: ₹{parseFloat(batch.total_rework_cost).toFixed(2)}
+                    </div>
+                  )}
+                  {batch.previous_rejection_reason && (
+                    <div className="text-[10.5px] text-amber-800 italic mt-0.5 line-clamp-1">
+                      Defect: {batch.previous_rejection_reason}
+                    </div>
+                  )}
                 </div>
                 <button
                   onClick={() => handleOpenInspect(batch)}
-                  className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-xs font-semibold shadow-2xs transition"
+                  className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-xs font-semibold shadow-2xs transition shrink-0 ml-2"
                 >
                   Inspect Now
                 </button>

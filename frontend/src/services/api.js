@@ -221,9 +221,12 @@ export const productionOrders = {
 
 export const qualityChecks = {
   getAll: (params) => api.get('/quality-checks', { params }),
+  getPendingBatches: (params) => api.get('/quality-checks/pending-batches', { params }),
   record: (data) => api.post('/quality-checks', data),
   getReworks: (params) => api.get('/quality-checks/reworks', { params }),
   completeRework: (reworkId, data) => api.post(`/quality-checks/reworks/${reworkId}/complete`, data),
+  sendToRework: (reworkId, data) => api.post(`/quality-checks/reworks/${reworkId}/send-rework`, data),
+  scrapProduct: (reworkId, data) => api.post(`/quality-checks/reworks/${reworkId}/scrap`, data),
 };
 
 export const productInventory = {

@@ -23,7 +23,6 @@ const Sidebar = ({ isCollapsed, onToggleCollapse }) => {
         { path: '/branch/vendors', label: 'Vendor Master' },
         { path: '/branch/raw-materials', label: 'Raw Material Master' },
         { path: '/branch/products', label: 'Product Master' },
-        { path: '/branch/production-masters', label: 'Production Master / BOM' },
       ]
     },
     {
@@ -31,8 +30,9 @@ const Sidebar = ({ isCollapsed, onToggleCollapse }) => {
       items: [
         { path: '/branch/grn', label: 'Goods Receipt (GRN)' },
         { path: '/branch/raw-material-inventory', label: 'Raw Materials Stock' },
-        { path: '/branch/production-orders', label: 'Production Orders' },
-        { path: '/branch/quality-checks', label: 'Quality & Rework' },
+        { path: '/branch/production', label: 'Production & Manufacturing' },
+        { path: '/branch/quality-checks', label: 'Quality Check (QC)' },
+        { path: '/branch/rework-management', label: 'Rework & Rejections' },
         { path: '/branch/product-inventory', label: 'Finished Goods Stock' },
         { path: '/branch/assets-inventory', label: 'Assets Inventory' },
       ]

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useAuth } from '../../context/AuthContext';
-import { useLocation } from 'react-router-dom';
+import { useLocation, useNavigate, Link } from 'react-router-dom';
 import { 
   production as productionApi, 
   products as productsApi, 
@@ -89,6 +89,7 @@ const ProductionInventory = () => {
   const initialFormState = {
     product_id: '',
     production_quantity: '1',
+    workforce_count: 1,
     production_date: new Date().toISOString().split('T')[0],
     production_period_type: 'Daily',
     batch_number: '',
@@ -200,7 +201,7 @@ const ProductionInventory = () => {
   };
 
   // Check and simulate BOM requirements whenever product or quantity changes in modal
-  const checkBomStockSimulation = async (productId, quantity) => {
+  const checkBomStockSimulation = async (productId, quantity, customWorkforce = null) => {
     if (!productId || !quantity || parseFloat(quantity) <= 0) {
       setBomSimulation({ has_bom: false, can_produce: false, total_material_cost: 0, materials: [] });
       return;
@@ -215,7 +216,15 @@ const ProductionInventory = () => {
         branch_id: effectiveBranch
       });
 
-      setBomSimulation(res.data || { has_bom: false, can_produce: false, total_material_cost: 0, materials: [] });
+      const simData = res.data || { has_bom: false, can_produce: false, total_material_cost: 0, materials: [] };
+      setBomSimulation(simData);
+
+      if (customWorkforce === null && simData.workforce_required) {
+        setFormData(prev => ({
+          ...prev,
+          workforce_count: simData.workforce_required || 1
+        }));
+      }
     } catch (e) {
       console.error(e);
     } finally {
@@ -229,17 +238,19 @@ const ProductionInventory = () => {
     const defaultBatch = `BATCH-${todayStr}-${Math.floor(100 + Math.random() * 900)}`;
 
     const selectedId = preSelectId || (productsList.length > 0 ? productsList[0].product_id : '');
+    const chosenProduct = productsList.find(p => p.product_id.toString() === (selectedId ? selectedId.toString() : ''));
 
     setFormData({
       ...initialFormState,
       product_id: selectedId,
       batch_number: defaultBatch,
+      workforce_count: chosenProduct?.workforce_required || 1,
       production_date: new Date().toISOString().split('T')[0],
       production_period_type: 'Daily'
     });
 
     if (selectedId) {
-      checkBomStockSimulation(selectedId, '1');
+      checkBomStockSimulation(selectedId, '1', chosenProduct?.workforce_required || 1);
     }
 
     setShowCreateModal(true);
@@ -257,8 +268,8 @@ const ProductionInventory = () => {
       return;
     }
 
-    if (!bomSimulation.has_bom) {
-      toast.error('This product does not have a BOM recipe. Add BOM in Product Master first.');
+    if (!bomSimulation.has_bom && !bomSimulation.has_materials) {
+      toast.error('This product does not have any raw materials configured. Add raw materials in Product Master first.');
       return;
     }
 
@@ -279,12 +290,14 @@ const ProductionInventory = () => {
     try {
       const payload = {
         ...formData,
+        total_production_time_minutes: bomSimulation.total_production_time_minutes || 0,
+        workforce_count: parseInt(formData.workforce_count || bomSimulation.workforce_required || 1, 10),
         company_id: effectiveCompany,
         branch_id: effectiveBranch
       };
 
       const res = await productionApi.recordRun(payload);
-      toast.success(res.data.message || 'Production run recorded and raw materials deducted from inventory!');
+      toast.success(res.data.message || 'Production order created and batch sent to Quality Check!');
       setShowCreateModal(false);
       refreshAllData();
     } catch (e) {
@@ -544,6 +557,8 @@ const ProductionInventory = () => {
                 <th className="py-3 px-4">Manufactured Product</th>
                 <th className="py-3 px-4 text-right">Units Produced</th>
                 <th className="py-3 px-4 text-right">Material Cost Deducted</th>
+                <th className="py-3 px-4 text-center">Prod. Time</th>
+                <th className="py-3 px-4 text-center">Workforce</th>
                 <th className="py-3 px-4">Storage Location</th>
                 <th className="py-3 px-4 text-center">Status</th>
                 <th className="py-3 px-4 text-center">Actions</th>
@@ -552,7 +567,7 @@ const ProductionInventory = () => {
             <tbody className="divide-y divide-slate-100">
               {filteredProductionRuns.length === 0 ? (
                 <tr>
-                  <td colSpan={9} className="py-8 text-center text-slate-400 italic">
+                  <td colSpan={11} className="py-8 text-center text-slate-400 italic">
                     No production runs recorded yet. Click "+ Log Production Batch" to start manufacturing.
                   </td>
                 </tr>
@@ -594,6 +609,18 @@ const ProductionInventory = () => {
                     ₹ {parseFloat(run.total_material_cost || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                   </td>
 
+                  <td className="py-3 px-4 text-center">
+                    <span className="font-semibold text-amber-700 bg-amber-50 px-2 py-0.5 rounded text-[11px] border border-amber-200">
+                      ⚡ {run.total_production_time_minutes || 0} m
+                    </span>
+                  </td>
+
+                  <td className="py-3 px-4 text-center">
+                    <span className="font-semibold text-blue-700 bg-blue-50 px-2 py-0.5 rounded text-[11px] border border-blue-200">
+                      👥 {run.workforce_count || 1}
+                    </span>
+                  </td>
+
                   <td className="py-3 px-4 text-slate-600 font-medium">
                     <div className="flex items-center gap-1">
                       <MapPin size={12} className="text-slate-400" />
@@ -602,19 +629,35 @@ const ProductionInventory = () => {
                   </td>
 
                   <td className="py-3 px-4 text-center">
-                    <span className="inline-block px-2.5 py-0.5 rounded-full text-[10.5px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                      {run.production_status || 'Completed'}
+                    <span className={`inline-block px-2.5 py-0.5 rounded-full text-[10.5px] font-bold border ${
+                      run.production_status === 'Approved / In Stock'
+                        ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                        : run.production_status === 'Pending Quality Check'
+                        ? 'bg-amber-50 text-amber-700 border-amber-300'
+                        : run.production_status === 'Rejected by QC'
+                        ? 'bg-rose-50 text-rose-700 border-rose-200'
+                        : 'bg-blue-50 text-blue-700 border-blue-200'
+                    }`}>
+                      {run.production_status || 'Pending Quality Check'}
                     </span>
+                    {run.production_status === 'Pending Quality Check' && (
+                      <Link
+                        to="/quality-checks"
+                        className="block text-[10px] text-blue-600 hover:text-blue-800 font-bold underline mt-1"
+                      >
+                        Inspect in QC →
+                      </Link>
+                    )}
                   </td>
 
                   <td className="py-3 px-4 text-center">
                     <button
                       onClick={() => handleOpenDetails(run)}
                       className="px-2.5 py-1 bg-blue-50 hover:bg-blue-100 text-blue-700 font-bold rounded text-[11px] flex items-center justify-center gap-1 mx-auto"
-                      title="View Raw Material Consumption Lines"
+                      title="View Production Run Details"
                     >
                       <Eye size={12} />
-                      <span>BOM Log</span>
+                      <span>View Details</span>
                     </button>
                   </td>
                 </tr>
@@ -695,8 +738,13 @@ const ProductionInventory = () => {
                     value={formData.product_id}
                     onChange={(e) => {
                       const newId = e.target.value;
-                      setFormData({ ...formData, product_id: newId });
-                      checkBomStockSimulation(newId, formData.production_quantity);
+                      const selectedProd = productsList.find(p => p.product_id.toString() === newId.toString());
+                      setFormData({ 
+                        ...formData, 
+                        product_id: newId,
+                        workforce_count: selectedProd?.workforce_required || 1
+                      });
+                      checkBomStockSimulation(newId, formData.production_quantity, selectedProd?.workforce_required || 1);
                     }}
                     className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-slate-900 font-bold focus:ring-2 focus:ring-blue-500 outline-none"
                   >
@@ -720,10 +768,28 @@ const ProductionInventory = () => {
                     onChange={(e) => {
                       const newQty = e.target.value;
                       setFormData({ ...formData, production_quantity: newQty });
-                      checkBomStockSimulation(formData.product_id, newQty);
+                      checkBomStockSimulation(formData.product_id, newQty, formData.workforce_count);
                     }}
                     className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-slate-900 font-bold text-sm focus:ring-2 focus:ring-blue-500 outline-none"
                   />
+                </div>
+
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">
+                    👥 Workforce Assigned (Operators) *
+                  </label>
+                  <input
+                    type="number"
+                    min="1"
+                    step="1"
+                    placeholder="e.g. 2"
+                    value={formData.workforce_count}
+                    onChange={(e) => setFormData({ ...formData, workforce_count: e.target.value })}
+                    className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-slate-900 font-bold focus:ring-2 focus:ring-blue-500 outline-none"
+                  />
+                  <span className="text-[10px] text-slate-500 block mt-0.5">
+                    Standard: {bomSimulation.workforce_required || 1} workers
+                  </span>
                 </div>
 
                 <div>
@@ -758,49 +824,97 @@ const ProductionInventory = () => {
               </div>
 
               {/* ============================================================== */}
-              {/* LIVE BOM REQUIREMENT & STOCK DEDUCTION SIMULATOR */}
+              {/* RESOURCE ESTIMATION & RAW MATERIAL INVENTORY AVAILABILITY */}
               {/* ============================================================== */}
-              <div className="p-4 bg-blue-50/50 rounded-xl border border-blue-100 space-y-3">
+              <div className="p-4 bg-blue-50/50 rounded-xl border border-blue-100 space-y-3.5">
                 <div className="flex items-center justify-between border-b border-blue-100 pb-2">
                   <div className="flex items-center gap-1.5">
                     <Boxes size={16} className="text-blue-600" />
                     <span className="font-bold text-blue-900">
-                      Live BOM Deduction Simulator & Inventory Availability
+                      Production Resource Requirements & Live Inventory Check
                     </span>
                   </div>
                   {checkingBOM && (
                     <span className="text-[11px] text-blue-600 flex items-center gap-1">
                       <RefreshCw size={11} className="animate-spin" />
-                      Checking inventory...
+                      Checking stock...
                     </span>
                   )}
                 </div>
 
                 {!formData.product_id ? (
                   <p className="text-xs text-slate-400 italic text-center py-4">
-                    Select a finished product above to view required raw materials.
+                    Select a finished product above to view required raw materials and estimated production time.
                   </p>
-                ) : !bomSimulation.has_bom ? (
+                ) : (!bomSimulation.has_bom && !bomSimulation.has_materials) ? (
                   <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl text-amber-800 flex items-start gap-2.5">
                     <AlertTriangle size={18} className="shrink-0 mt-0.5 text-amber-600" />
                     <div>
-                      <strong className="block font-bold">No BOM Recipe Configured!</strong>
+                      <strong className="block font-bold">No Raw Materials Configured!</strong>
                       <p className="text-[11px] mt-0.5">
-                        This product does not have any raw materials assigned in its Bill of Materials recipe. Please go to Product Master and configure the required raw materials first.
+                        This product does not have any required raw materials assigned. Please go to Product Master and configure the raw materials needed to produce 1 unit.
                       </p>
                     </div>
                   </div>
                 ) : (
-                  <div className="space-y-3">
+                  <div className="space-y-3.5">
+                    {/* KPI CARDS: ESTIMATED TIME, WORKFORCE, MATERIAL COST */}
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                      <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl shadow-2xs">
+                        <div className="flex items-center gap-1.5 text-amber-800 font-bold mb-1 text-xs">
+                          <Factory size={15} className="text-amber-600" />
+                          <span>Estimated Production Time</span>
+                        </div>
+                        <div className="text-base font-extrabold text-slate-900">
+                          ⚡ {bomSimulation.total_production_time_minutes || 0} Minutes
+                          {parseFloat(bomSimulation.total_production_time_minutes || 0) >= 60 && (
+                            <span className="text-xs text-amber-900 font-semibold ml-1.5">
+                              ({((bomSimulation.total_production_time_minutes || 0) / 60).toFixed(1)} hrs)
+                            </span>
+                          )}
+                        </div>
+                        <span className="text-[10.5px] text-slate-500 block mt-0.5">
+                          Rate: {bomSimulation.production_time_per_unit_minutes || 0} mins / unit × {formData.production_quantity || 1} units
+                        </span>
+                      </div>
+
+                      <div className="p-3 bg-blue-50 border border-blue-200 rounded-xl shadow-2xs">
+                        <div className="flex items-center gap-1.5 text-blue-800 font-bold mb-1 text-xs">
+                          <Boxes size={15} className="text-blue-600" />
+                          <span>Workforce Assigned</span>
+                        </div>
+                        <div className="text-base font-extrabold text-slate-900">
+                          👥 {formData.workforce_count || bomSimulation.workforce_required || 1} Operators / Workers
+                        </div>
+                        <span className="text-[10.5px] text-slate-500 block mt-0.5">
+                          Standard requirement: {bomSimulation.workforce_required || 1} operators
+                        </span>
+                      </div>
+
+                      <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl shadow-2xs">
+                        <div className="flex items-center gap-1.5 text-emerald-800 font-bold mb-1 text-xs">
+                          <DollarSign size={15} className="text-emerald-600" />
+                          <span>Total Material Cost</span>
+                        </div>
+                        <div className="text-base font-extrabold text-emerald-800">
+                          ₹ {parseFloat(bomSimulation.total_material_cost || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                        </div>
+                        <span className="text-[10.5px] text-slate-500 block mt-0.5">
+                          Deducted from live inventory stock batches
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Raw Materials Deductions Table */}
                     <div className="overflow-x-auto">
                       <table className="w-full text-left text-xs border-collapse">
                         <thead>
                           <tr className="bg-white/80 text-slate-600 font-bold border-b border-slate-200">
                             <th className="py-2 px-3">Raw Material</th>
-                            <th className="py-2 px-3 text-right">Recipe Rate (1 unit)</th>
-                            <th className="py-2 px-3 text-right">Total Deduction Required</th>
+                            <th className="py-2 px-3 text-right">Required (1 Unit)</th>
+                            <th className="py-2 px-3 text-right">Total Deduction</th>
                             <th className="py-2 px-3 text-right">Warehouse Stock</th>
-                            <th className="py-2 px-3 text-right">Est. Material Cost</th>
+                            <th className="py-2 px-3 text-right">Est. Cost</th>
                             <th className="py-2 px-3 text-center">Availability</th>
                           </tr>
                         </thead>
@@ -845,19 +959,6 @@ const ProductionInventory = () => {
                           ))}
                         </tbody>
                       </table>
-                    </div>
-
-                    {/* Total Deduction Valuation */}
-                    <div className="p-3 bg-slate-900 text-white rounded-xl flex items-center justify-between">
-                      <div>
-                        <span className="text-slate-300 text-xs block">Total Production Raw Material Cost:</span>
-                        <span className="text-[10.5px] text-slate-400">Calculated across all BOM materials</span>
-                      </div>
-                      <div className="text-right">
-                        <span className="text-lg font-bold text-emerald-400">
-                          ₹ {bomSimulation.total_material_cost.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                        </span>
-                      </div>
                     </div>
 
                     {!bomSimulation.can_produce && (
@@ -930,7 +1031,7 @@ const ProductionInventory = () => {
             </div>
 
             <div className="p-6 space-y-4 max-h-[70vh] overflow-y-auto text-xs">
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-slate-50 p-3.5 rounded-xl border border-slate-200">
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 bg-slate-50 p-3.5 rounded-xl border border-slate-200">
                 <div>
                   <span className="text-slate-400 text-[11px] block">Manufactured Item</span>
                   <strong className="text-slate-900 font-bold block">{activeRun.product_name}</strong>
@@ -948,6 +1049,25 @@ const ProductionInventory = () => {
                   <span className="text-slate-400 text-[11px] block">Total Material Cost</span>
                   <strong className="text-emerald-700 font-bold text-sm">
                     ₹ {parseFloat(activeRun.total_material_cost || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                  </strong>
+                </div>
+
+                <div>
+                  <span className="text-slate-400 text-[11px] block">Total Production Time</span>
+                  <strong className="text-amber-700 font-bold text-sm">
+                    ⚡ {activeRun.total_production_time_minutes || 0} Minutes
+                    {parseFloat(activeRun.total_production_time_minutes || 0) >= 60 && (
+                      <span className="text-xs text-amber-900 font-normal ml-1">
+                        ({((activeRun.total_production_time_minutes || 0) / 60).toFixed(1)} hrs)
+                      </span>
+                    )}
+                  </strong>
+                </div>
+
+                <div>
+                  <span className="text-slate-400 text-[11px] block">Workforce Logged</span>
+                  <strong className="text-blue-700 font-bold text-sm">
+                    👥 {activeRun.workforce_count || 1} Operators
                   </strong>
                 </div>
 

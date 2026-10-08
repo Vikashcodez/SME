@@ -64,13 +64,24 @@ export const checkMaterialAvailability = async (req, res) => {
             branch_id && branch_id !== 'all' ? branch_id : null
         ]);
 
+        const timePerUnit = parseFloat(product.production_time_minutes) || 0;
+        const totalTimeMinutes = timePerUnit * qty;
+        const totalTimeHours = totalTimeMinutes / 60;
+        const workforceRequired = parseInt(product.workforce_required, 10) || 1;
+
         if (bomRes.rows.length === 0) {
             return res.status(200).json({
                 success: true,
                 has_bom: false,
+                has_materials: false,
                 can_produce: false,
-                message: 'No Raw Material recipe (Bill of Materials) is configured for this product. Please add BOM in Product Master.',
+                message: 'No Raw Materials configured for this product. Please assign raw materials in Product Master.',
                 product,
+                production_quantity: qty,
+                production_time_per_unit_minutes: timePerUnit,
+                total_production_time_minutes: parseFloat(totalTimeMinutes.toFixed(2)),
+                total_production_time_hours: parseFloat(totalTimeHours.toFixed(2)),
+                workforce_required: workforceRequired,
                 materials: [],
                 total_material_cost: 0
             });
@@ -113,9 +124,14 @@ export const checkMaterialAvailability = async (req, res) => {
         return res.status(200).json({
             success: true,
             has_bom: true,
+            has_materials: true,
             can_produce: canProduce,
             product,
             production_quantity: qty,
+            production_time_per_unit_minutes: timePerUnit,
+            total_production_time_minutes: parseFloat(totalTimeMinutes.toFixed(2)),
+            total_production_time_hours: parseFloat(totalTimeHours.toFixed(2)),
+            workforce_required: workforceRequired,
             total_material_cost: parseFloat(totalEstimatedCost.toFixed(2)),
             materials
         });
@@ -138,6 +154,8 @@ export const recordProductionRun = async (req, res) => {
             branch_id,
             product_id,
             production_quantity,
+            total_production_time_minutes,
+            workforce_count,
             production_date = new Date().toISOString().split('T')[0],
             production_period_type = 'Daily', // 'Daily' | 'Monthly' | 'Weekly' | 'Custom'
             batch_number,
@@ -198,7 +216,7 @@ export const recordProductionRun = async (req, res) => {
             await client.query('ROLLBACK');
             return res.status(400).json({
                 success: false,
-                message: `Product "${product.product_name}" has no Bill of Materials (BOM) configured. Please define required raw materials in the Product Master first.`
+                message: `Product "${product.product_name}" has no raw materials configured. Please define required raw materials in the Product Master first.`
             });
         }
 
@@ -268,18 +286,28 @@ export const recordProductionRun = async (req, res) => {
 
         const prodCode = `PRD-RUN-${todayStr}-${Math.floor(100 + Math.random() * 900)}`;
 
-        // 5. Create Raw Material Production Master Record
+        const totalTime = total_production_time_minutes !== undefined && total_production_time_minutes !== ''
+            ? parseFloat(total_production_time_minutes)
+            : (parseFloat(product.production_time_minutes || 0) * qty);
+
+        const workforce = workforce_count !== undefined && workforce_count !== ''
+            ? parseInt(workforce_count, 10)
+            : (parseInt(product.workforce_required || 1, 10));
+
+        // 5. Create Raw Material Production Record
         const prodInsertQuery = `
             INSERT INTO raw_material_production (
                 company_id, branch_id, production_code, batch_number,
                 production_date, production_period_type, product_id,
-                production_quantity, total_material_cost, production_status,
-                warehouse_location, notes, created_by
+                production_quantity, total_material_cost,
+                total_production_time_minutes, workforce_count,
+                production_status, warehouse_location, notes, created_by
             ) VALUES (
                 $1, $2, $3, $4,
                 $5, $6, $7,
-                $8, $9, 'Completed',
-                $10, $11, $12
+                $8, $9,
+                $10, $11,
+                'Pending Quality Check', $12, $13, $14
             ) RETURNING *
         `;
 
@@ -293,12 +321,35 @@ export const recordProductionRun = async (req, res) => {
             product_id,
             qty,
             totalProductionMaterialCost,
+            totalTime,
+            workforce,
             warehouse_location || 'Main Store',
             notes || null,
             performedBy
         ]);
 
         const productionRecord = prodRunRes.rows[0];
+
+        // Create Production Batch entry for Quality Check tracking
+        const batchInsertQuery = `
+            INSERT INTO production_batches (
+                company_id, branch_id, production_id, product_id,
+                batch_number, planned_quantity, produced_quantity,
+                production_date, status
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'PENDING_QC')
+            RETURNING *
+        `;
+        const batchRes = await client.query(batchInsertQuery, [
+            effectiveCompanyId,
+            effectiveBranchId,
+            productionRecord.production_id,
+            product_id,
+            autoBatch,
+            qty,
+            qty,
+            production_date || new Date().toISOString().split('T')[0]
+        ]);
+        const batchRecord = batchRes.rows[0];
 
         // 6. Deduct Inventory & Create Stock Movement / Consumption Logs for each raw material
         for (const item of deductions) {
@@ -375,9 +426,10 @@ export const recordProductionRun = async (req, res) => {
 
         return res.status(201).json({
             success: true,
-            message: `Successfully manufactured ${qty} ${product.unit_of_measure} of "${product.product_name}". Raw materials deducted automatically from inventory.`,
+            message: `Production order batch created for ${qty} ${product.unit_of_measure} of "${product.product_name}". Raw materials deducted and batch sent to Quality Check.`,
             data: {
                 production: productionRecord,
+                batch: batchRecord,
                 product_name: product.product_name,
                 materials_consumed: deductions
             }
@@ -409,6 +461,8 @@ export const getAllProductionRuns = async (req, res) => {
                 p.unit_of_measure as product_uom,
                 p.selling_price as product_selling_price,
                 p.photo_1 as product_photo,
+                p.production_time_minutes as unit_production_time_minutes,
+                p.workforce_required as standard_workforce_required,
                 c.company_name,
                 b.branch_name,
                 e.first_name as created_by_name,
@@ -512,6 +566,8 @@ export const getProductionRunById = async (req, res) => {
                 p.photo_2,
                 p.photo_3,
                 p.product_specification,
+                p.production_time_minutes as unit_production_time_minutes,
+                p.workforce_required as standard_workforce_required,
                 c.company_name,
                 b.branch_name,
                 e.first_name as created_by_name

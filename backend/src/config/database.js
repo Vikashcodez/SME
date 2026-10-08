@@ -345,6 +345,8 @@ export const createTables = async () => {
                 photo_2 VARCHAR(500),
                 photo_3 VARCHAR(500),
                 min_stock_level DECIMAL(14,2) DEFAULT 0.00,
+                production_time_minutes DECIMAL(10,2) DEFAULT 0.00,
+                workforce_required INTEGER DEFAULT 1,
                 status VARCHAR(20) DEFAULT 'Active',
                 is_active BOOLEAN DEFAULT TRUE,
                 created_by BIGINT REFERENCES employees(employee_id) ON DELETE SET NULL,
@@ -382,6 +384,8 @@ export const createTables = async () => {
                 product_id BIGINT REFERENCES products(product_id) ON DELETE RESTRICT NOT NULL,
                 production_quantity DECIMAL(14,2) NOT NULL,
                 total_material_cost DECIMAL(14,2) DEFAULT 0.00,
+                total_production_time_minutes DECIMAL(10,2) DEFAULT 0.00,
+                workforce_count INTEGER DEFAULT 1,
                 production_status VARCHAR(30) DEFAULT 'Completed',
                 warehouse_location VARCHAR(100) DEFAULT 'Main Store',
                 notes TEXT,
@@ -517,10 +521,24 @@ export const createTables = async () => {
             ALTER TABLE products ADD COLUMN IF NOT EXISTS name VARCHAR(255);
             ALTER TABLE products ADD COLUMN IF NOT EXISTS unit VARCHAR(30);
             ALTER TABLE products ADD COLUMN IF NOT EXISTS standard_cost DECIMAL(14,2) DEFAULT 0.00;
+            ALTER TABLE products ADD COLUMN IF NOT EXISTS production_time_minutes DECIMAL(10,2) DEFAULT 0.00;
+            ALTER TABLE products ADD COLUMN IF NOT EXISTS workforce_required INTEGER DEFAULT 1;
             UPDATE products SET code = product_code WHERE code IS NULL;
             UPDATE products SET name = product_name WHERE name IS NULL;
             UPDATE products SET unit = unit_of_measure WHERE unit IS NULL;
             UPDATE products SET standard_cost = cost_price WHERE standard_cost = 0 OR standard_cost IS NULL;
+
+            ALTER TABLE raw_material_production ADD COLUMN IF NOT EXISTS total_production_time_minutes DECIMAL(10,2) DEFAULT 0.00;
+            ALTER TABLE raw_material_production ADD COLUMN IF NOT EXISTS workforce_count INTEGER DEFAULT 1;
+
+            ALTER TABLE production_batches ADD COLUMN IF NOT EXISTS production_id BIGINT REFERENCES raw_material_production(production_id) ON DELETE CASCADE;
+            ALTER TABLE production_batches ADD COLUMN IF NOT EXISTS product_id BIGINT REFERENCES products(product_id) ON DELETE CASCADE;
+            ALTER TABLE quality_checks ADD COLUMN IF NOT EXISTS production_id BIGINT REFERENCES raw_material_production(production_id) ON DELETE CASCADE;
+            ALTER TABLE quality_checks ADD COLUMN IF NOT EXISTS product_id BIGINT REFERENCES products(product_id) ON DELETE CASCADE;
+            ALTER TABLE production_rework ADD COLUMN IF NOT EXISTS production_id BIGINT REFERENCES raw_material_production(production_id) ON DELETE CASCADE;
+            ALTER TABLE production_rework ADD COLUMN IF NOT EXISTS product_id BIGINT REFERENCES products(product_id) ON DELETE CASCADE;
+            ALTER TABLE production_rework ADD COLUMN IF NOT EXISTS rework_notes TEXT;
+            ALTER TABLE production_rework ADD COLUMN IF NOT EXISTS scrap_reason TEXT;
         `);
 
         // 6. Production Master / BOM Header

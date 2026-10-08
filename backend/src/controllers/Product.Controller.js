@@ -17,6 +17,8 @@ export const createProduct = async (req, res) => {
             gst_rate = 18.00,
             product_specification,
             min_stock_level = 0,
+            production_time_minutes = 0,
+            workforce_required = 1,
             status = 'Active',
             raw_materials // Can be JSON array or JSON string
         } = req.body;
@@ -96,12 +98,14 @@ export const createProduct = async (req, res) => {
                 company_id, branch_id, product_code, product_name, category,
                 unit_of_measure, selling_price, cost_price, hsn_code, gst_rate,
                 product_specification, photo_1, photo_2, photo_3,
-                min_stock_level, status, is_active, created_by, updated_by
+                min_stock_level, production_time_minutes, workforce_required,
+                status, is_active, created_by, updated_by
             ) VALUES (
                 $1, $2, $3, $4, $5,
                 $6, $7, $8, $9, $10,
                 $11, $12, $13, $14,
-                $15, $16, true, $17, $17
+                $15, $16, $17,
+                $18, true, $19, $19
             ) RETURNING *
         `;
 
@@ -121,6 +125,8 @@ export const createProduct = async (req, res) => {
             photo_2,
             photo_3,
             parseFloat(min_stock_level) || 0.00,
+            parseFloat(production_time_minutes) || 0.00,
+            parseInt(workforce_required, 10) || 1,
             status || 'Active',
             performedBy
         ]);
@@ -371,6 +377,8 @@ export const updateProduct = async (req, res) => {
             gst_rate,
             product_specification,
             min_stock_level,
+            production_time_minutes,
+            workforce_required,
             status,
             raw_materials
         } = req.body;
@@ -427,10 +435,12 @@ export const updateProduct = async (req, res) => {
                 photo_2 = $11,
                 photo_3 = $12,
                 min_stock_level = COALESCE($13, min_stock_level),
-                status = COALESCE($14, status),
-                updated_by = $15,
+                production_time_minutes = COALESCE($14, production_time_minutes),
+                workforce_required = COALESCE($15, workforce_required),
+                status = COALESCE($16, status),
+                updated_by = $17,
                 updated_at = CURRENT_TIMESTAMP
-            WHERE product_id = $16
+            WHERE product_id = $18
             RETURNING *
         `;
 
@@ -448,6 +458,8 @@ export const updateProduct = async (req, res) => {
             photo_2,
             photo_3,
             min_stock_level !== undefined ? parseFloat(min_stock_level) : null,
+            production_time_minutes !== undefined ? parseFloat(production_time_minutes) : null,
+            workforce_required !== undefined ? parseInt(workforce_required, 10) : null,
             status || null,
             performedBy,
             id

@@ -27,6 +27,7 @@ import GrnManagement from './pages/Inventory/GrnManagement';
 import ProductionMasterManagement from './pages/Master Data/ProductionMasterManagement';
 import ProductionOrderManagement from './pages/Inventory/ProductionOrderManagement';
 import QualityCheckManagement from './pages/Inventory/QualityCheckManagement';
+import ReworkManagement from './pages/Inventory/ReworkManagement';
 import FinishedGoodsInventory from './pages/Inventory/FinishedGoodsInventory';
 
 const AppContent = () => {
@@ -226,6 +227,17 @@ const AppContent = () => {
       />
 
       <Route
+        path="/rework-management"
+        element={
+          <ProtectedRoute requiredRole="company_admin">
+            <CompanyAdminLayout>
+              <ReworkManagement />
+            </CompanyAdminLayout>
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
         path="/product-inventory"
         element={
           <ProtectedRoute requiredRole="company_admin">
@@ -386,6 +398,17 @@ const AppContent = () => {
           <ProtectedRoute requiredRole="branch_admin">
             <BranchAdminLayout>
               <QualityCheckManagement />
+            </BranchAdminLayout>
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/branch/rework-management"
+        element={
+          <ProtectedRoute requiredRole="branch_admin">
+            <BranchAdminLayout>
+              <ReworkManagement />
             </BranchAdminLayout>
           </ProtectedRoute>
         }
