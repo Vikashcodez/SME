@@ -240,7 +240,7 @@ export const getLedgerStatement = async (req, res) => {
             FROM voucher_lines vl
             JOIN vouchers v ON vl.voucher_id = v.voucher_id
             JOIN voucher_types vt ON v.voucher_type_id = vt.voucher_type_id
-            WHERE vl.ledger_id = $1 AND v.status = 'POSTED'
+            WHERE vl.ledger_id = $1 AND v.is_posted = TRUE
         `;
         const params = [ledger_id];
 
@@ -377,16 +377,16 @@ export const createVoucher = async (req, res) => {
         const voucherRes = await client.query(`
             INSERT INTO vouchers (
                 company_id, branch_id, voucher_type_id, voucher_number, voucher_date,
-                reference_number, reference_date, narration, total_amount,
-                status, created_by, posted_by, posted_at
+                reference_number, reference_date, narration,
+                is_posted, created_by, posted_by, posted_at
             ) VALUES (
                 $1, $2, $3, $4, $5,
-                $6, $7, $8, $9,
-                'POSTED', $10, $10, CURRENT_TIMESTAMP
+                $6, $7, $8,
+                TRUE, $9, $9, CURRENT_TIMESTAMP
             ) RETURNING *
         `, [
             companyId, branchId, voucherTypeId, voucherNumber, voucher_date,
-            reference_number || null, reference_date || null, narration || null, totalDebit,
+            reference_number || null, reference_date || null, narration || null,
             createdBy
         ]);
         const voucher = voucherRes.rows[0];
@@ -448,11 +448,13 @@ export const createVoucher = async (req, res) => {
         // Bill Allocations if any
         if (Array.isArray(bill_allocations) && bill_allocations.length > 0) {
             for (const ba of bill_allocations) {
-                if (ba.bill_reference_number && ba.allocated_amount > 0) {
+                const billRef = ba.bill_reference_no || ba.bill_reference_number;
+                const allocAmt = parseFloat(ba.amount || ba.allocated_amount);
+                if (billRef && allocAmt > 0) {
                     await client.query(`
                         INSERT INTO bill_allocations (
-                            voucher_line_id, ledger_id, reference_type, bill_reference_number,
-                            allocated_amount, allocation_type
+                            voucher_line_id, ledger_id, reference_type, bill_reference_no,
+                            amount, dr_cr
                         ) VALUES (
                             (SELECT line_id FROM voucher_lines WHERE voucher_id = $1 AND ledger_id = $2 LIMIT 1),
                             $2, $3, $4, $5, $6
@@ -461,9 +463,9 @@ export const createVoucher = async (req, res) => {
                         voucher.voucher_id,
                         ba.ledger_id,
                         ba.reference_type || 'AGST_REF',
-                        ba.bill_reference_number,
-                        parseFloat(ba.allocated_amount),
-                        ba.allocation_type || 'DR'
+                        billRef,
+                        allocAmt,
+                        ba.dr_cr || ba.allocation_type || 'DR'
                     ]);
                 }
             }
@@ -603,7 +605,7 @@ export const getTrialBalance = async (req, res) => {
             FROM ledgers l
             JOIN account_groups ag ON l.group_id = ag.group_id
             LEFT JOIN voucher_lines vl ON l.ledger_id = vl.ledger_id
-            LEFT JOIN vouchers v ON vl.voucher_id = v.voucher_id AND v.status = 'POSTED' AND v.voucher_date <= $2
+            LEFT JOIN vouchers v ON vl.voucher_id = v.voucher_id AND v.is_posted = TRUE AND v.voucher_date <= $2
             WHERE l.company_id = $1
             GROUP BY l.ledger_id, l.ledger_name, l.ledger_code, ag.group_name, ag.nature, l.opening_balance, l.opening_balance_type, l.current_balance, l.current_balance_type
             ORDER BY ag.nature, l.ledger_name ASC

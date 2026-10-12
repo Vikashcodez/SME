@@ -377,9 +377,10 @@ const CustomerMaster = () => {
                   <label className="block text-xs font-semibold text-slate-700 mb-1">GSTIN Number</label>
                   <input
                     type="text"
+                    maxLength={15}
                     value={form.gstin}
                     onChange={(e) => {
-                      const val = e.target.value.toUpperCase();
+                      const val = e.target.value.toUpperCase().replace(/\s+/g, '').slice(0, 15);
                       const panVal = val.length >= 12 ? val.substring(2, 12) : form.pan;
                       const stateVal = val.length >= 2 ? val.substring(0, 2) : form.billing_state_code;
                       setForm({ ...form, gstin: val, pan: panVal, billing_state_code: stateVal });
@@ -393,8 +394,9 @@ const CustomerMaster = () => {
                   <label className="block text-xs font-semibold text-slate-700 mb-1">PAN Number</label>
                   <input
                     type="text"
+                    maxLength={10}
                     value={form.pan}
-                    onChange={(e) => setForm({ ...form, pan: e.target.value.toUpperCase() })}
+                    onChange={(e) => setForm({ ...form, pan: e.target.value.toUpperCase().replace(/\s+/g, '').slice(0, 10) })}
                     placeholder="e.g. AABCT3518Q"
                     className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-sm font-mono focus:ring-2 focus:ring-indigo-500/20"
                   />

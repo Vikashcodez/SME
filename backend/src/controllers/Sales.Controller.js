@@ -57,14 +57,11 @@ export const createSalesInvoice = async (req, res) => {
         }
         const customer = custRes.rows[0];
 
-        // Fetch Branch / Company details for State Code (Place of Supply)
-        let companyStateCode = '27'; // Default Maharashtra if not found
-        if (branchId) {
-            const brRes = await client.query(`SELECT state FROM branches WHERE branch_id = $1`, [branchId]);
-            if (brRes.rows.length > 0 && brRes.rows[0].state) {
-                // If branch has state name, default to code or match
-                companyStateCode = customer.billing_state_code; // If same, intra-state
-            }
+        // Fetch Company / Supplier State Code (derived from first 2 digits of Company GSTIN)
+        let companyStateCode = '27'; // Default Maharashtra if not specified
+        const compRes = await client.query(`SELECT gst_no FROM companies WHERE company_id = $1`, [companyId]);
+        if (compRes.rows.length > 0 && compRes.rows[0].gst_no && compRes.rows[0].gst_no.length >= 2) {
+            companyStateCode = compRes.rows[0].gst_no.substring(0, 2);
         }
         const customerStateCode = customer.billing_state_code || '27';
         const isIntraState = companyStateCode === customerStateCode;
@@ -88,7 +85,7 @@ export const createSalesInvoice = async (req, res) => {
             const product = pRes.rows[0];
 
             const qty = parseFloat(item.quantity) || 1;
-            const rate = parseFloat(item.unit_rate) || parseFloat(product.price) || 0;
+            const rate = parseFloat(item.unit_rate) || parseFloat(product.selling_price) || parseFloat(product.price) || 0;
             const discPct = parseFloat(item.discount_percentage) || 0;
 
             const gross = qty * rate;
@@ -238,17 +235,17 @@ export const createSalesInvoice = async (req, res) => {
         const voucherRes = await client.query(`
             INSERT INTO vouchers (
                 company_id, branch_id, voucher_type_id, voucher_number, voucher_date,
-                reference_number, reference_date, narration, total_amount,
-                status, created_by, posted_by, posted_at
+                reference_number, reference_date, narration,
+                is_posted, created_by, posted_by, posted_at
             ) VALUES (
                 $1, $2, $3, $4, $5,
-                $6, $5, $7, $8,
-                'POSTED', $9, $9, CURRENT_TIMESTAMP
+                $6, $5, $7,
+                TRUE, $8, $8, CURRENT_TIMESTAMP
             ) RETURNING *
         `, [
             companyId, branchId, voucherTypeId, vNum, invoice_date,
             invoiceNumber, `Sales Invoice ${invoiceNumber} issued to ${customer.trade_name}`,
-            roundedTotal, createdBy
+            createdBy
         ]);
         const voucher = voucherRes.rows[0];
 
@@ -265,8 +262,8 @@ export const createSalesInvoice = async (req, res) => {
         // Bill Allocation: NEW_REF for Customer
         await client.query(`
             INSERT INTO bill_allocations (
-                voucher_line_id, ledger_id, reference_type, bill_reference_number,
-                allocated_amount, allocation_type, due_date
+                voucher_line_id, ledger_id, reference_type, bill_reference_no,
+                amount, dr_cr, due_date
             ) VALUES ($1, $2, 'NEW_REF', $3, $4, 'DR', $5)
         `, [custVl.rows[0].line_id, customer.ledger_id, invoiceNumber, roundedTotal, calculatedDueDate]);
 
@@ -284,53 +281,74 @@ export const createSalesInvoice = async (req, res) => {
             ) VALUES ($1, $2, $3, 0.00, $4, 'Sales Revenue')
         `, [voucher.voucher_id, lineNo++, salesLedgerId, totalTaxable]);
 
+        await client.query(`
+            UPDATE ledgers 
+            SET current_balance = current_balance + $1, updated_at = CURRENT_TIMESTAMP
+            WHERE ledger_id = $2
+        `, [totalTaxable, salesLedgerId]);
+
         // Helper: Find or create tax ledgers
-        const getTaxLedger = async (code, name) => {
+        const getTaxLedger = async (code, name, taxType = 'NONE') => {
             let resL = await client.query(`SELECT ledger_id FROM ledgers WHERE company_id = $1 AND ledger_code = $2`, [companyId, code]);
             if (resL.rows.length === 0) {
                 const grp = await client.query(`SELECT group_id FROM account_groups WHERE (company_id = $1 OR company_id IS NULL) AND (group_code = 'GRP-TAXES' OR group_code = 'DUTIES_AND_TAXES') LIMIT 1`, [companyId]);
                 const gid = grp.rows[0]?.group_id;
                 resL = await client.query(`
                     INSERT INTO ledgers (company_id, group_id, ledger_name, ledger_code, opening_balance_type, current_balance_type, tax_type)
-                    VALUES ($1, $2, $3, $4, 'CR', 'CR', 'GST') RETURNING ledger_id
-                `, [companyId, gid, name, code]);
+                    VALUES ($1, $2, $3, $4, 'CR', 'CR', $5) RETURNING ledger_id
+                `, [companyId, gid, name, code, taxType]);
             }
             return resL.rows[0].ledger_id;
         };
 
         // Line 3: CGST Output (if intra-state)
         if (totalCgst > 0) {
-            const cgstLedgerId = await getTaxLedger('CGST_OUT', 'CGST Output Account');
+            const cgstLedgerId = await getTaxLedger('CGST_OUT', 'CGST Output Account', 'CGST');
             await client.query(`
                 INSERT INTO voucher_lines (
                     voucher_id, line_number, ledger_id, debit_amount, credit_amount, narration
                 ) VALUES ($1, $2, $3, 0.00, $4, 'CGST Output')
             `, [voucher.voucher_id, lineNo++, cgstLedgerId, totalCgst]);
+            await client.query(`
+                UPDATE ledgers 
+                SET current_balance = current_balance + $1, updated_at = CURRENT_TIMESTAMP
+                WHERE ledger_id = $2
+            `, [totalCgst, cgstLedgerId]);
         }
 
         // Line 4: SGST Output (if intra-state)
         if (totalSgst > 0) {
-            const sgstLedgerId = await getTaxLedger('SGST_OUT', 'SGST Output Account');
+            const sgstLedgerId = await getTaxLedger('SGST_OUT', 'SGST Output Account', 'SGST');
             await client.query(`
                 INSERT INTO voucher_lines (
                     voucher_id, line_number, ledger_id, debit_amount, credit_amount, narration
                 ) VALUES ($1, $2, $3, 0.00, $4, 'SGST Output')
             `, [voucher.voucher_id, lineNo++, sgstLedgerId, totalSgst]);
+            await client.query(`
+                UPDATE ledgers 
+                SET current_balance = current_balance + $1, updated_at = CURRENT_TIMESTAMP
+                WHERE ledger_id = $2
+            `, [totalSgst, sgstLedgerId]);
         }
 
         // Line 5: IGST Output (if inter-state)
         if (totalIgst > 0) {
-            const igstLedgerId = await getTaxLedger('IGST_OUT', 'IGST Output Account');
+            const igstLedgerId = await getTaxLedger('IGST_OUT', 'IGST Output Account', 'IGST');
             await client.query(`
                 INSERT INTO voucher_lines (
                     voucher_id, line_number, ledger_id, debit_amount, credit_amount, narration
                 ) VALUES ($1, $2, $3, 0.00, $4, 'IGST Output')
             `, [voucher.voucher_id, lineNo++, igstLedgerId, totalIgst]);
+            await client.query(`
+                UPDATE ledgers 
+                SET current_balance = current_balance + $1, updated_at = CURRENT_TIMESTAMP
+                WHERE ledger_id = $2
+            `, [totalIgst, igstLedgerId]);
         }
 
         // Line 6: Round Off (if any)
         if (roundOff !== 0) {
-            const roLedgerId = await getTaxLedger('ROUND_OFF', 'Round Off Account');
+            const roLedgerId = await getTaxLedger('ROUND_OFF', 'Round Off Account', 'NONE');
             const roDebit = roundOff < 0 ? Math.abs(roundOff) : 0;
             const roCredit = roundOff > 0 ? roundOff : 0;
             await client.query(`
@@ -542,16 +560,16 @@ export const recordReceiptSettlement = async (req, res) => {
         const voucherRes = await client.query(`
             INSERT INTO vouchers (
                 company_id, branch_id, voucher_type_id, voucher_number, voucher_date,
-                reference_number, narration, total_amount, status, created_by, posted_by, posted_at
+                reference_number, narration, is_posted, created_by, posted_by, posted_at
             ) VALUES (
                 $1, $2, $3, $4, $5,
-                $6, $7, $8, 'POSTED', $9, $9, CURRENT_TIMESTAMP
+                $6, $7, TRUE, $8, $8, CURRENT_TIMESTAMP
             ) RETURNING *
         `, [
             companyId, branchId, voucherTypeId, vNum, settlement_date,
             instrument_reference_number || null,
             narration || `Receipt of ₹${receiptAmount.toFixed(2)} from ${custRes.rows[0].trade_name}`,
-            receiptAmount, createdBy
+            createdBy
         ]);
         const voucher = voucherRes.rows[0];
 
@@ -605,8 +623,8 @@ export const recordReceiptSettlement = async (req, res) => {
                     // Add Bill Allocation record
                     await client.query(`
                         INSERT INTO bill_allocations (
-                            voucher_line_id, ledger_id, reference_type, bill_reference_number,
-                            allocated_amount, allocation_type
+                            voucher_line_id, ledger_id, reference_type, bill_reference_no,
+                            amount, dr_cr
                         ) VALUES ($1, $2, 'AGST_REF', $3, $4, 'CR')
                     `, [custVoucherLineId, customerLedgerId, inv.invoice_number, allocAmt]);
 

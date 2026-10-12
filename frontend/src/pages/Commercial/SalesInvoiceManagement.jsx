@@ -100,8 +100,9 @@ const SalesInvoiceManagement = () => {
     if (field === 'product_id') {
       const prod = productsList.find(p => String(p.product_id) === String(value));
       if (prod) {
-        updated[index].unit_rate = parseFloat(prod.price) || 0;
-        updated[index].tax_rate = parseFloat(prod.gst_rate) || 18;
+        const masterPrice = parseFloat(prod.selling_price ?? prod.price ?? prod.cost_price ?? 0);
+        updated[index].unit_rate = masterPrice;
+        updated[index].tax_rate = parseFloat(prod.gst_rate ?? 18);
       }
     }
     setForm({ ...form, items: updated });
@@ -473,7 +474,7 @@ const SalesInvoiceManagement = () => {
                                 <option value="">Select Finished Product...</option>
                                 {productsList.map(p => (
                                   <option key={p.product_id} value={p.product_id}>
-                                    {p.product_name} ({p.sku || p.product_code || `P-${p.product_id}`})
+                                    {p.product_name} ({p.sku || p.product_code || `P-${p.product_id}`}) - ₹{parseFloat(p.selling_price ?? p.price ?? 0).toFixed(2)}
                                   </option>
                                 ))}
                               </select>
