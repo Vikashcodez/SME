@@ -236,4 +236,35 @@ export const productInventory = {
   updateBatch: (id, data) => api.put(`/product-inventory/${id}`, data),
 };
 
+export const customers = {
+  getAll: (params) => api.get('/customers', { params }),
+  getById: (id) => api.get(`/customers/${id}`),
+  create: (data) => api.post('/customers', data),
+  update: (id, data) => api.put(`/customers/${id}`, data),
+};
+
+export const accounting = {
+  getChartOfAccounts: (params) => api.get('/accounting/chart-of-accounts', { params }),
+  getGroups: (params) => api.get('/accounting/groups', { params }),
+  createGroup: (data) => api.post('/accounting/groups', data),
+  getLedgers: (params) => api.get('/accounting/ledgers', { params }),
+  createLedger: (data) => api.post('/accounting/ledgers', data),
+  getLedgerStatement: (ledgerId, params) => api.get(`/accounting/ledgers/${ledgerId}/statement`, { params }),
+  getVouchers: (params) => api.get('/accounting/vouchers', { params }),
+  createVoucher: (data) => api.post('/accounting/vouchers', data),
+  getVoucherById: (id) => api.get(`/accounting/vouchers/${id}`),
+  getTrialBalance: (params) => api.get('/accounting/reports/trial-balance', { params }),
+};
+
+export const sales = {
+  getInvoices: (params) => api.get('/sales/invoices', { params }),
+  getInvoiceById: (id) => api.get(`/sales/invoices/${id}`),
+  createInvoice: (data) => api.post('/sales/invoices', data),
+  recordReceipt: (data) => api.post('/sales/receipts', data),
+  getQuotations: (params) => api.get('/sales/quotations', { params }),
+  createQuotation: (data) => api.post('/sales/quotations', data),
+  getOrders: (params) => api.get('/sales/orders', { params }),
+  createOrder: (data) => api.post('/sales/orders', data),
+};
+
 export default api;

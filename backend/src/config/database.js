@@ -1,6 +1,7 @@
 import pkg from 'pg';
 const { Pool } = pkg;
 import dotenv from 'dotenv';
+import { initAccountingSchema } from './accounting_schema.js';
 
 dotenv.config();
 
@@ -751,6 +752,9 @@ export const createTables = async () => {
         await pool.query(`CREATE INDEX IF NOT EXISTS idx_product_inventory_product ON product_inventory(product_id)`);
         await pool.query(`CREATE INDEX IF NOT EXISTS idx_product_inventory_batch ON product_inventory(batch_number)`);
         console.log('✅ Indexes created');
+
+        // Initialize Production-Grade Accounting, Commercial & Billing Subsystem
+        await initAccountingSchema();
 
         console.log('✅ All tables created successfully');
     } catch (error) {

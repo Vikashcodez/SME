@@ -21,9 +21,20 @@ const Sidebar = ({ isCollapsed, onToggleCollapse }) => {
         { path: '/roles', label: 'Roles Master' },
         { path: '/departments', label: 'Departments' },
         { path: '/employees', label: 'Employees' },
+        { path: '/customers', label: 'Customer Master' },
         { path: '/vendors', label: 'Vendor Master' },
         { path: '/raw-materials', label: 'Raw Material Master' },
         { path: '/products', label: 'Product Master' },
+        { path: '/chart-of-accounts', label: 'Chart of Accounts' },
+      ]
+    },
+    {
+      label: 'Commercial & Billing',
+      items: [
+        { path: '/sales-invoices', label: 'Sales Invoices & Billing' },
+        { path: '/quotations-orders', label: 'Quotations & Orders' },
+        { path: '/receipts-settlement', label: 'Receipts & Settlements' },
+        { path: '/trial-balance', label: 'Trial Balance & Audit' },
       ]
     },
     {

@@ -29,6 +29,12 @@ import ProductionOrderManagement from './pages/Inventory/ProductionOrderManageme
 import QualityCheckManagement from './pages/Inventory/QualityCheckManagement';
 import ReworkManagement from './pages/Inventory/ReworkManagement';
 import FinishedGoodsInventory from './pages/Inventory/FinishedGoodsInventory';
+import CustomerMaster from './pages/Master Data/CustomerMaster';
+import ChartOfAccounts from './pages/Commercial/ChartOfAccounts';
+import SalesInvoiceManagement from './pages/Commercial/SalesInvoiceManagement';
+import ReceiptManagement from './pages/Commercial/ReceiptManagement';
+import TrialBalance from './pages/Commercial/TrialBalance';
+import SalesOrderManagement from './pages/Commercial/SalesOrderManagement';
 
 const AppContent = () => {
   const { isAuthenticated, isSuperAdmin, isCompanyAdmin, isBranchAdmin, isEmployee } = useAuth();
@@ -248,6 +254,72 @@ const AppContent = () => {
         }
       />
 
+      <Route
+        path="/customers"
+        element={
+          <ProtectedRoute requiredRole="company_admin">
+            <CompanyAdminLayout>
+              <CustomerMaster />
+            </CompanyAdminLayout>
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/chart-of-accounts"
+        element={
+          <ProtectedRoute requiredRole="company_admin">
+            <CompanyAdminLayout>
+              <ChartOfAccounts />
+            </CompanyAdminLayout>
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/sales-invoices"
+        element={
+          <ProtectedRoute requiredRole="company_admin">
+            <CompanyAdminLayout>
+              <SalesInvoiceManagement />
+            </CompanyAdminLayout>
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/quotations-orders"
+        element={
+          <ProtectedRoute requiredRole="company_admin">
+            <CompanyAdminLayout>
+              <SalesOrderManagement />
+            </CompanyAdminLayout>
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/receipts-settlement"
+        element={
+          <ProtectedRoute requiredRole="company_admin">
+            <CompanyAdminLayout>
+              <ReceiptManagement />
+            </CompanyAdminLayout>
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/trial-balance"
+        element={
+          <ProtectedRoute requiredRole="company_admin">
+            <CompanyAdminLayout>
+              <TrialBalance />
+            </CompanyAdminLayout>
+          </ProtectedRoute>
+        }
+      />
+
       {/* Branch Admin Routes - Each with its own BranchAdminLayout */}
       <Route
         path="/branch-dashboard"
@@ -420,6 +492,72 @@ const AppContent = () => {
           <ProtectedRoute requiredRole="branch_admin">
             <BranchAdminLayout>
               <FinishedGoodsInventory />
+            </BranchAdminLayout>
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/branch/customers"
+        element={
+          <ProtectedRoute requiredRole="branch_admin">
+            <BranchAdminLayout>
+              <CustomerMaster />
+            </BranchAdminLayout>
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/branch/chart-of-accounts"
+        element={
+          <ProtectedRoute requiredRole="branch_admin">
+            <BranchAdminLayout>
+              <ChartOfAccounts />
+            </BranchAdminLayout>
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/branch/sales-invoices"
+        element={
+          <ProtectedRoute requiredRole="branch_admin">
+            <BranchAdminLayout>
+              <SalesInvoiceManagement />
+            </BranchAdminLayout>
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/branch/quotations-orders"
+        element={
+          <ProtectedRoute requiredRole="branch_admin">
+            <BranchAdminLayout>
+              <SalesOrderManagement />
+            </BranchAdminLayout>
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/branch/receipts-settlement"
+        element={
+          <ProtectedRoute requiredRole="branch_admin">
+            <BranchAdminLayout>
+              <ReceiptManagement />
+            </BranchAdminLayout>
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/branch/trial-balance"
+        element={
+          <ProtectedRoute requiredRole="branch_admin">
+            <BranchAdminLayout>
+              <TrialBalance />
             </BranchAdminLayout>
           </ProtectedRoute>
         }

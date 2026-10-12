@@ -20,9 +20,20 @@ const Sidebar = ({ isCollapsed, onToggleCollapse }) => {
         { path: '/branch/roles', label: 'Roles Master' },
         { path: '/branch/departments', label: 'Departments' },
         { path: '/branch/employees', label: 'Employees' },
+        { path: '/branch/customers', label: 'Customer Master' },
         { path: '/branch/vendors', label: 'Vendor Master' },
         { path: '/branch/raw-materials', label: 'Raw Material Master' },
         { path: '/branch/products', label: 'Product Master' },
+        { path: '/branch/chart-of-accounts', label: 'Chart of Accounts' },
+      ]
+    },
+    {
+      label: 'Commercial & Billing',
+      items: [
+        { path: '/branch/sales-invoices', label: 'Sales Invoices & Billing' },
+        { path: '/branch/quotations-orders', label: 'Quotations & Orders' },
+        { path: '/branch/receipts-settlement', label: 'Receipts & Settlements' },
+        { path: '/branch/trial-balance', label: 'Trial Balance & Audit' },
       ]
     },
     {
