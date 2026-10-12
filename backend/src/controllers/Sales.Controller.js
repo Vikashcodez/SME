@@ -464,7 +464,8 @@ export const getSalesInvoiceById = async (req, res) => {
             SELECT 
                 sii.*,
                 p.product_name,
-                p.sku
+                COALESCE(p.product_code, p.code) AS sku,
+                COALESCE(p.product_code, p.code) AS product_code
             FROM sales_invoice_items sii
             JOIN products p ON sii.product_id = p.product_id
             WHERE sii.sales_invoice_id = $1
