@@ -224,7 +224,7 @@ export const getCustomers = async (req, res) => {
                     WHERE si.customer_id = cp.customer_id
                 ) AS total_invoices,
                 (
-                    SELECT COALESCE(SUM(si.balance_due), 0)::NUMERIC(14,2)
+                    SELECT COALESCE(SUM(si.outstanding_amount), 0)::NUMERIC(14,2)
                     FROM sales_invoices si 
                     WHERE si.customer_id = cp.customer_id AND si.payment_status != 'PAID' AND si.status = 'POSTED'
                 ) AS total_outstanding_due
@@ -301,8 +301,8 @@ export const getCustomerById = async (req, res) => {
         // Fetch recent invoices
         const invRes = await pool.query(`
             SELECT 
-                invoice_id, invoice_number, invoice_date, due_date,
-                total_amount, paid_amount, balance_due, payment_status, status
+                sales_invoice_id AS invoice_id, invoice_number, invoice_date, due_date,
+                net_total_amount AS total_amount, paid_amount, outstanding_amount AS balance_due, payment_status, status
             FROM sales_invoices
             WHERE customer_id = $1
             ORDER BY invoice_date DESC
