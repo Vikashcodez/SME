@@ -24,6 +24,8 @@ import productInventoryRouter from './routes/ProductInventory.Routes.js';
 import customerRouter from './routes/Customer.Routes.js';
 import accountingRouter from './routes/Accounting.Routes.js';
 import salesRouter from './routes/Sales.Routes.js';
+import purchaseRouter from './routes/Purchase.Routes.js';
+import manufacturingAccountingRouter from './routes/ManufacturingAccounting.Routes.js';
 
 const app = express();
 
@@ -55,6 +57,8 @@ app.use('/api/product-inventory', productInventoryRouter);
 app.use('/api/customers', customerRouter);
 app.use('/api/accounting', accountingRouter);
 app.use('/api/sales', salesRouter);
+app.use('/api/purchases', purchaseRouter);
+app.use('/api/manufacturing-accounting', manufacturingAccountingRouter);
 // Health check
 app.get('/health', (req, res) => {
     res.json({

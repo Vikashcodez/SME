@@ -9,7 +9,11 @@ import {
     createVoucher,
     getVouchers,
     getVoucherById,
-    getTrialBalance
+    getTrialBalance,
+    getDayBook,
+    getProfitAndLoss,
+    getBalanceSheet,
+    getExpenseStatement
 } from '../controllers/Accounting.Controller.js';
 import { authenticate } from '../middleware/auth.js';
 
@@ -34,5 +38,9 @@ router.get('/vouchers/:id', getVoucherById);
 
 // Reports
 router.get('/reports/trial-balance', getTrialBalance);
+router.get('/reports/day-book', getDayBook);
+router.get('/reports/profit-loss', getProfitAndLoss);
+router.get('/reports/balance-sheet', getBalanceSheet);
+router.get('/reports/expenses', getExpenseStatement);
 
 export default router;

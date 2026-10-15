@@ -35,6 +35,11 @@ import SalesInvoiceManagement from './pages/Commercial/SalesInvoiceManagement';
 import ReceiptManagement from './pages/Commercial/ReceiptManagement';
 import TrialBalance from './pages/Commercial/TrialBalance';
 import SalesOrderManagement from './pages/Commercial/SalesOrderManagement';
+import DayBook from './pages/Commercial/DayBook';
+import ProfitAndLoss from './pages/Commercial/ProfitAndLoss';
+import BalanceSheet from './pages/Commercial/BalanceSheet';
+import PurchaseInvoiceManagement from './pages/Commercial/PurchaseInvoiceManagement';
+import ManufacturingJournal from './pages/Commercial/ManufacturingJournal';
 
 const AppContent = () => {
   const { isAuthenticated, isSuperAdmin, isCompanyAdmin, isBranchAdmin, isEmployee } = useAuth();
@@ -320,6 +325,61 @@ const AppContent = () => {
         }
       />
 
+      <Route
+        path="/day-book"
+        element={
+          <ProtectedRoute requiredRole="company_admin">
+            <CompanyAdminLayout>
+              <DayBook />
+            </CompanyAdminLayout>
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/profit-and-loss"
+        element={
+          <ProtectedRoute requiredRole="company_admin">
+            <CompanyAdminLayout>
+              <ProfitAndLoss />
+            </CompanyAdminLayout>
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/balance-sheet"
+        element={
+          <ProtectedRoute requiredRole="company_admin">
+            <CompanyAdminLayout>
+              <BalanceSheet />
+            </CompanyAdminLayout>
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/purchase-invoices"
+        element={
+          <ProtectedRoute requiredRole="company_admin">
+            <CompanyAdminLayout>
+              <PurchaseInvoiceManagement />
+            </CompanyAdminLayout>
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/manufacturing-journal"
+        element={
+          <ProtectedRoute requiredRole="company_admin">
+            <CompanyAdminLayout>
+              <ManufacturingJournal />
+            </CompanyAdminLayout>
+          </ProtectedRoute>
+        }
+      />
+
       {/* Branch Admin Routes - Each with its own BranchAdminLayout */}
       <Route
         path="/branch-dashboard"
@@ -558,6 +618,61 @@ const AppContent = () => {
           <ProtectedRoute requiredRole="branch_admin">
             <BranchAdminLayout>
               <TrialBalance />
+            </BranchAdminLayout>
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/branch/day-book"
+        element={
+          <ProtectedRoute requiredRole="branch_admin">
+            <BranchAdminLayout>
+              <DayBook />
+            </BranchAdminLayout>
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/branch/profit-and-loss"
+        element={
+          <ProtectedRoute requiredRole="branch_admin">
+            <BranchAdminLayout>
+              <ProfitAndLoss />
+            </BranchAdminLayout>
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/branch/balance-sheet"
+        element={
+          <ProtectedRoute requiredRole="branch_admin">
+            <BranchAdminLayout>
+              <BalanceSheet />
+            </BranchAdminLayout>
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/branch/purchase-invoices"
+        element={
+          <ProtectedRoute requiredRole="branch_admin">
+            <BranchAdminLayout>
+              <PurchaseInvoiceManagement />
+            </BranchAdminLayout>
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/branch/manufacturing-journal"
+        element={
+          <ProtectedRoute requiredRole="branch_admin">
+            <BranchAdminLayout>
+              <ManufacturingJournal />
             </BranchAdminLayout>
           </ProtectedRoute>
         }

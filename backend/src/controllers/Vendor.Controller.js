@@ -8,7 +8,9 @@ const generateVendorCode = async (companyId) => {
 
 // 1. Create a new vendor
 export const createVendor = async (req, res) => {
+    const client = await pool.connect();
     try {
+        await client.query('BEGIN');
         const {
             company_id,
             branch_id,
@@ -33,6 +35,7 @@ export const createVendor = async (req, res) => {
 
         // Validation
         if (!vendor_name || !address || !city || !state) {
+            await client.query('ROLLBACK');
             return res.status(400).json({
                 success: false,
                 message: 'Vendor Name, Address, City, and State are required fields.'
@@ -44,6 +47,7 @@ export const createVendor = async (req, res) => {
         const createdBy = req.user?.employee_id || null;
 
         if (!effectiveCompanyId) {
+            await client.query('ROLLBACK');
             return res.status(400).json({
                 success: false,
                 message: 'Company ID is required.'
@@ -53,6 +57,8 @@ export const createVendor = async (req, res) => {
         const effectiveVendorCode = vendor_code && vendor_code.trim() !== '' 
             ? vendor_code.trim().toUpperCase() 
             : await generateVendorCode(effectiveCompanyId);
+
+        const opBal = opening_balance !== undefined && opening_balance !== '' ? parseFloat(opening_balance) || 0.00 : 0.00;
 
         const query = `
             INSERT INTO vendors (
@@ -75,38 +81,111 @@ export const createVendor = async (req, res) => {
             effectiveBranchId,
             effectiveVendorCode,
             vendor_name.trim(),
-            gstin ? gstin.trim().toUpperCase() : null,
-            pan ? pan.trim().toUpperCase() : null,
+            gstin ? gstin.trim().toUpperCase().substring(0, 30) : null,
+            pan ? pan.trim().toUpperCase().substring(0, 30) : null,
             address.trim(),
             city.trim(),
-            state.trim(),
-            pincode ? pincode.trim() : null,
+            state.trim().substring(0, 50),
+            pincode ? pincode.trim().substring(0, 30) : null,
             phone ? phone.trim() : null,
             email ? email.trim().toLowerCase() : null,
             bank_account_no ? bank_account_no.trim() : null,
             ifsc_code ? ifsc_code.trim().toUpperCase() : null,
             bank_name ? bank_name.trim() : null,
             payment_terms ? payment_terms.trim() : 'Net 30',
-            opening_balance !== undefined && opening_balance !== '' ? parseFloat(opening_balance) || 0.00 : 0.00,
+            opBal,
             status || 'Active',
             is_active !== undefined ? is_active : true,
             createdBy
         ];
 
-        const result = await pool.query(query, values);
+        const result = await client.query(query, values);
+        const createdVendor = result.rows[0];
+
+        // Ensure Double-Entry Ledger under Sundry Creditors (GRP-CREDITORS)
+        let credGrpRes = await client.query(
+            `SELECT group_id FROM account_groups WHERE (company_id = $1 OR company_id IS NULL) AND (group_code = 'GRP-CREDITORS' OR group_code = 'SUNDRY_CREDITORS') LIMIT 1`,
+            [effectiveCompanyId]
+        );
+        let creditorsGroupId = credGrpRes.rows[0]?.group_id;
+        if (!creditorsGroupId) {
+            let clRes = await client.query(`SELECT group_id FROM account_groups WHERE (company_id = $1 OR company_id IS NULL) AND group_code = 'GRP-CL' LIMIT 1`, [effectiveCompanyId]);
+            const parentId = clRes.rows[0]?.group_id;
+            const newG = await client.query(`
+                INSERT INTO account_groups (company_id, parent_group_id, group_name, group_code, nature, affects_gross_profit, is_system_group)
+                VALUES ($1, $2, 'Sundry Creditors (Suppliers)', 'GRP-CREDITORS', 'LIABILITY', FALSE, TRUE)
+                RETURNING group_id
+            `, [effectiveCompanyId, parentId]);
+            creditorsGroupId = newG.rows[0].group_id;
+        }
+
+        const newLed = await client.query(`
+            INSERT INTO ledgers (
+                company_id, group_id, ledger_name, ledger_code,
+                opening_balance, opening_balance_type,
+                current_balance, current_balance_type,
+                maintain_bill_by_bill, is_active
+            ) VALUES (
+                $1, $2, $3, $4,
+                $5, 'CR',
+                $5, 'CR',
+                TRUE, TRUE
+            )
+            ON CONFLICT (company_id, ledger_code) 
+            DO UPDATE SET ledger_name = EXCLUDED.ledger_name
+            RETURNING ledger_id
+        `, [effectiveCompanyId, creditorsGroupId, vendor_name.trim(), effectiveVendorCode, opBal]);
+        const ledgerId = newLed.rows[0].ledger_id;
+
+        // Ensure vendor_profiles entry
+        const vpRes = await client.query(`
+            INSERT INTO vendor_profiles (
+                company_id, ledger_id, existing_vendor_id, vendor_code,
+                vendor_trade_name, vendor_legal_name, gstin, pan,
+                address_line1, city, state_code, postal_code, is_active
+            ) VALUES (
+                $1, $2, $3, $4,
+                $5, $5, $6, $7,
+                $8, $9, $10, $11, TRUE
+            )
+            ON CONFLICT (company_id, vendor_code)
+            DO UPDATE SET ledger_id = EXCLUDED.ledger_id, vendor_trade_name = EXCLUDED.vendor_trade_name
+            RETURNING *
+        `, [
+            effectiveCompanyId,
+            ledgerId,
+            createdVendor.vendor_id,
+            effectiveVendorCode,
+            vendor_name.trim(),
+            gstin ? gstin.trim().toUpperCase().substring(0, 30) : null,
+            pan ? pan.trim().toUpperCase().substring(0, 30) : null,
+            address.trim(),
+            city.trim(),
+            state.trim().substring(0, 50),
+            pincode ? pincode.trim().substring(0, 30) : '400001'
+        ]);
+
+        await client.query('COMMIT');
 
         return res.status(201).json({
             success: true,
-            message: 'Vendor created successfully',
-            data: result.rows[0]
+            message: 'Vendor created and linked to accounting ledger successfully',
+            data: {
+                ...createdVendor,
+                ledger_id: ledgerId,
+                vendor_profile_id: vpRes.rows[0]?.vendor_profile_id
+            }
         });
     } catch (error) {
+        await client.query('ROLLBACK');
         console.error('Error creating vendor:', error);
         return res.status(500).json({
             success: false,
             message: 'Internal server error while creating vendor',
             error: error.message
         });
+    } finally {
+        client.release();
     }
 };
 
@@ -131,12 +210,19 @@ export const getAllVendors = async (req, res) => {
                 b.branch_name,
                 b.branch_code,
                 e1.first_name as created_by_name,
-                e2.first_name as updated_by_name
+                e2.first_name as updated_by_name,
+                vp.vendor_profile_id,
+                l.ledger_id,
+                COALESCE(l.current_balance, v.opening_balance, 0)::NUMERIC(16,2) AS ledger_balance,
+                COALESCE(l.current_balance_type, 'CR') AS ledger_balance_type,
+                (SELECT COALESCE(SUM(pi.outstanding_amount), 0)::NUMERIC(16,2) FROM purchase_invoices pi WHERE pi.vendor_id = vp.vendor_profile_id AND pi.outstanding_amount > 0) AS total_bills_due
             FROM vendors v
             LEFT JOIN companies c ON v.company_id = c.company_id
             LEFT JOIN branches b ON v.branch_id = b.branch_id
             LEFT JOIN employees e1 ON v.created_by = e1.employee_id
             LEFT JOIN employees e2 ON v.updated_by = e2.employee_id
+            LEFT JOIN vendor_profiles vp ON (v.vendor_id = vp.existing_vendor_id OR v.vendor_code = vp.vendor_code) AND v.company_id = vp.company_id
+            LEFT JOIN ledgers l ON vp.ledger_id = l.ledger_id
             WHERE 1=1
         `;
 

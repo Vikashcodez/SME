@@ -254,6 +254,10 @@ export const accounting = {
   createVoucher: (data) => api.post('/accounting/vouchers', data),
   getVoucherById: (id) => api.get(`/accounting/vouchers/${id}`),
   getTrialBalance: (params) => api.get('/accounting/reports/trial-balance', { params }),
+  getDayBook: (params) => api.get('/accounting/reports/day-book', { params }),
+  getProfitAndLoss: (params) => api.get('/accounting/reports/profit-loss', { params }),
+  getBalanceSheet: (params) => api.get('/accounting/reports/balance-sheet', { params }),
+  getExpenses: (params) => api.get('/accounting/reports/expenses', { params }),
 };
 
 export const sales = {
@@ -265,6 +269,22 @@ export const sales = {
   createQuotation: (data) => api.post('/sales/quotations', data),
   getOrders: (params) => api.get('/sales/orders', { params }),
   createOrder: (data) => api.post('/sales/orders', data),
+};
+
+export const purchases = {
+  getInvoices: (params) => api.get('/purchases/invoices', { params }),
+  getInvoiceById: (id) => api.get(`/purchases/invoices/${id}`),
+  createInvoice: (data) => api.post('/purchases/invoices', data),
+  recordPayment: (data) => api.post('/purchases/payments', data),
+  getVendorBillsDue: (vendorId, params) => api.get(`/purchases/vendors/${vendorId}/outstanding-bills`, { params }),
+};
+
+export const manufacturingAccounting = {
+  recordStockJournal: (data) => api.post('/manufacturing-accounting/stock-journal', data),
+  recordScrap: (data) => api.post('/manufacturing-accounting/scrap', data),
+  recordRework: (data) => api.post('/manufacturing-accounting/rework', data),
+  getVouchers: (params) => api.get('/manufacturing-accounting/vouchers', { params }),
+  getCostSummary: (params) => api.get('/manufacturing-accounting/cost-summary', { params }),
 };
 
 export default api;

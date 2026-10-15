@@ -648,3 +648,544 @@ export const getTrialBalance = async (req, res) => {
         return res.status(500).json({ success: false, message: error.message });
     }
 };
+
+// 11. Day Book (Daily Chronological Voucher Register)
+export const getDayBook = async (req, res) => {
+    try {
+        const companyId = req.query.company_id || req.user?.company_id;
+        const date = req.query.date;
+        const fromDate = req.query.from_date || date || new Date().toISOString().split('T')[0];
+        const toDate = req.query.to_date || date || fromDate;
+        const voucherType = req.query.voucher_type;
+
+        let query = `
+            SELECT 
+                v.voucher_id,
+                v.voucher_number,
+                v.voucher_date,
+                v.reference_number,
+                v.narration,
+                v.is_posted,
+                vt.voucher_type_name,
+                vt.voucher_type_code,
+                vt.base_category,
+                e.first_name || ' ' || COALESCE(e.last_name, '') AS created_by_name,
+                COALESCE(SUM(vl.debit_amount), 0)::NUMERIC(16,2) AS total_amount
+            FROM vouchers v
+            JOIN voucher_types vt ON v.voucher_type_id = vt.voucher_type_id
+            LEFT JOIN employees e ON v.created_by = e.employee_id
+            LEFT JOIN voucher_lines vl ON v.voucher_id = vl.voucher_id
+            WHERE v.company_id = $1 AND v.voucher_date >= $2 AND v.voucher_date <= $3
+        `;
+        const params = [companyId, fromDate, toDate];
+
+        if (voucherType) {
+            params.push(voucherType.toUpperCase());
+            query += ` AND vt.voucher_type_code = $${params.length}`;
+        }
+
+        query += ` GROUP BY v.voucher_id, vt.voucher_type_name, vt.voucher_type_code, vt.base_category, e.first_name, e.last_name ORDER BY v.voucher_date DESC, v.voucher_id DESC`;
+
+        const vouchersRes = await pool.query(query, params);
+
+        // Fetch lines for these vouchers
+        const voucherIds = vouchersRes.rows.map(v => v.voucher_id);
+        let linesByVoucher = {};
+        if (voucherIds.length > 0) {
+            const linesRes = await pool.query(`
+                SELECT 
+                    vl.*,
+                    l.ledger_name,
+                    l.ledger_code,
+                    ag.group_name,
+                    ag.nature
+                FROM voucher_lines vl
+                JOIN ledgers l ON vl.ledger_id = l.ledger_id
+                JOIN account_groups ag ON l.group_id = ag.group_id
+                WHERE vl.voucher_id = ANY($1)
+                ORDER BY vl.line_number ASC
+            `, [voucherIds]);
+
+            for (const line of linesRes.rows) {
+                if (!linesByVoucher[line.voucher_id]) {
+                    linesByVoucher[line.voucher_id] = [];
+                }
+                linesByVoucher[line.voucher_id].push(line);
+            }
+        }
+
+        let totalDebitSum = 0;
+        const vouchers = vouchersRes.rows.map(v => {
+            const lines = linesByVoucher[v.voucher_id] || [];
+            const debitLines = lines.filter(l => parseFloat(l.debit_amount) > 0);
+            const creditLines = lines.filter(l => parseFloat(l.credit_amount) > 0);
+            let particulars = '';
+            if (v.base_category === 'SALES' || v.base_category === 'RECEIPT') {
+                particulars = debitLines[0]?.ledger_name || creditLines[0]?.ledger_name || 'Voucher Entry';
+            } else {
+                particulars = creditLines[0]?.ledger_name || debitLines[0]?.ledger_name || 'Voucher Entry';
+            }
+            const amt = parseFloat(v.total_amount) || 0;
+            totalDebitSum += amt;
+
+            return {
+                ...v,
+                particulars,
+                lines
+            };
+        });
+
+        return res.json({
+            success: true,
+            data: {
+                from_date: fromDate,
+                to_date: toDate,
+                count: vouchers.length,
+                total_amount: totalDebitSum.toFixed(2),
+                vouchers
+            }
+        });
+    } catch (error) {
+        console.error('Error in getDayBook:', error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// 12. Profit & Loss Account (Trading & P&L Statement)
+export const getProfitAndLoss = async (req, res) => {
+    try {
+        const companyId = req.query.company_id || req.user?.company_id;
+        const fromDate = req.query.from_date || `${new Date().getFullYear()}-04-01`;
+        const toDate = req.query.to_date || new Date().toISOString().split('T')[0];
+
+        // 1. Calculate Real-Time Closing Stock Valuation
+        const rawStockValRes = await pool.query(`
+            SELECT COALESCE(SUM(available_quantity * unit_cost), 0)::NUMERIC(16,2) AS total_raw_val
+            FROM raw_material_inventory
+            WHERE company_id = $1 AND available_quantity > 0
+        `, [companyId]);
+        const fgStockValRes = await pool.query(`
+            SELECT COALESCE(SUM(available_quantity * unit_cost), 0)::NUMERIC(16,2) AS total_fg_val
+            FROM product_inventory
+            WHERE company_id = $1 AND available_quantity > 0
+        `, [companyId]);
+
+        const rawClosingVal = parseFloat(rawStockValRes.rows[0]?.total_raw_val || 0);
+        const fgClosingVal = parseFloat(fgStockValRes.rows[0]?.total_fg_val || 0);
+        const totalClosingStock = +(rawClosingVal + fgClosingVal).toFixed(2);
+
+        // 2. Fetch Opening Stock (Stock Ledgers opening balances)
+        const opStockRes = await pool.query(`
+            SELECT COALESCE(SUM(opening_balance), 0)::NUMERIC(16,2) AS op_stock
+            FROM ledgers l
+            JOIN account_groups ag ON l.group_id = ag.group_id
+            WHERE l.company_id = $1 AND (ag.group_code = 'GRP-STOCK' OR ag.group_code = 'STOCK_IN_HAND')
+        `, [companyId]);
+        const openingStock = parseFloat(opStockRes.rows[0]?.op_stock || 0);
+
+        // 3. Query all Income and Expense ledger balances from posted voucher lines
+        const ledgerFlows = await pool.query(`
+            SELECT 
+                l.ledger_id,
+                l.ledger_name,
+                l.ledger_code,
+                ag.group_name,
+                ag.group_code,
+                ag.nature,
+                ag.affects_gross_profit,
+                COALESCE(SUM(vl.debit_amount), 0)::NUMERIC(16,2) AS debit_sum,
+                COALESCE(SUM(vl.credit_amount), 0)::NUMERIC(16,2) AS credit_sum
+            FROM ledgers l
+            JOIN account_groups ag ON l.group_id = ag.group_id
+            JOIN voucher_lines vl ON l.ledger_id = vl.ledger_id
+            JOIN vouchers v ON vl.voucher_id = v.voucher_id AND v.is_posted = TRUE
+            WHERE l.company_id = $1 AND v.voucher_date >= $2 AND v.voucher_date <= $3
+              AND ag.nature IN ('INCOME', 'EXPENSE')
+            GROUP BY l.ledger_id, l.ledger_name, l.ledger_code, ag.group_name, ag.group_code, ag.nature, ag.affects_gross_profit
+            ORDER BY ag.nature, l.ledger_name ASC
+        `, [companyId, fromDate, toDate]);
+
+        let totalPurchases = 0;
+        const purchaseLedgers = [];
+        let totalDirectExpenses = 0;
+        const directExpenseLedgers = [];
+        let totalSales = 0;
+        const salesLedgers = [];
+        let totalIndirectIncomes = 0;
+        const indirectIncomeLedgers = [];
+        let totalIndirectExpenses = 0;
+        const indirectExpenseLedgers = [];
+
+        for (const row of ledgerFlows.rows) {
+            const deb = parseFloat(row.debit_sum) || 0;
+            const cred = parseFloat(row.credit_sum) || 0;
+
+            if (row.nature === 'INCOME') {
+                const netIncome = cred - deb;
+                if (row.affects_gross_profit || row.group_code === 'GRP-SALES' || row.group_code === 'GRP-DIR-INC') {
+                    totalSales += netIncome;
+                    salesLedgers.push({ ...row, amount: netIncome.toFixed(2) });
+                } else {
+                    totalIndirectIncomes += netIncome;
+                    indirectIncomeLedgers.push({ ...row, amount: netIncome.toFixed(2) });
+                }
+            } else if (row.nature === 'EXPENSE') {
+                const netExpense = deb - cred;
+                if (row.group_code === 'GRP-PURCHASE' || row.group_code === 'PURCHASE_ACCOUNTS') {
+                    totalPurchases += netExpense;
+                    purchaseLedgers.push({ ...row, amount: netExpense.toFixed(2) });
+                } else if (row.affects_gross_profit || row.group_code === 'GRP-DIR-EXP' || row.group_code === 'DIRECT_EXPENSES') {
+                    totalDirectExpenses += netExpense;
+                    directExpenseLedgers.push({ ...row, amount: netExpense.toFixed(2) });
+                } else {
+                    totalIndirectExpenses += netExpense;
+                    indirectExpenseLedgers.push({ ...row, amount: netExpense.toFixed(2) });
+                }
+            }
+        }
+
+        const tradingCreditTotal = +(totalSales + totalClosingStock).toFixed(2);
+        const tradingDebitTotal = +(openingStock + totalPurchases + totalDirectExpenses).toFixed(2);
+        const grossProfit = +(tradingCreditTotal - tradingDebitTotal).toFixed(2);
+
+        const plCreditTotal = +(grossProfit + totalIndirectIncomes).toFixed(2);
+        const netProfit = +(plCreditTotal - totalIndirectExpenses).toFixed(2);
+
+        return res.json({
+            success: true,
+            data: {
+                from_date: fromDate,
+                to_date: toDate,
+                trading_account: {
+                    debit: {
+                        opening_stock: openingStock.toFixed(2),
+                        purchases: {
+                            total: totalPurchases.toFixed(2),
+                            ledgers: purchaseLedgers
+                        },
+                        direct_expenses: {
+                            total: totalDirectExpenses.toFixed(2),
+                            ledgers: directExpenseLedgers
+                        },
+                        total_debit: tradingDebitTotal.toFixed(2)
+                    },
+                    credit: {
+                        sales: {
+                            total: totalSales.toFixed(2),
+                            ledgers: salesLedgers
+                        },
+                        closing_stock: {
+                            total: totalClosingStock.toFixed(2),
+                            raw_materials: rawClosingVal.toFixed(2),
+                            finished_goods: fgClosingVal.toFixed(2)
+                        },
+                        total_credit: tradingCreditTotal.toFixed(2)
+                    },
+                    gross_profit: grossProfit.toFixed(2),
+                    is_gross_profit: grossProfit >= 0
+                },
+                profit_and_loss: {
+                    credit: {
+                        gross_profit_brought_down: grossProfit.toFixed(2),
+                        indirect_incomes: {
+                            total: totalIndirectIncomes.toFixed(2),
+                            ledgers: indirectIncomeLedgers
+                        },
+                        total_credit: plCreditTotal.toFixed(2)
+                    },
+                    debit: {
+                        indirect_expenses: {
+                            total: totalIndirectExpenses.toFixed(2),
+                            ledgers: indirectExpenseLedgers
+                        },
+                        total_debit: totalIndirectExpenses.toFixed(2)
+                    },
+                    net_profit: netProfit.toFixed(2),
+                    is_net_profit: netProfit >= 0
+                }
+            }
+        });
+    } catch (error) {
+        console.error('Error in getProfitAndLoss:', error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// 13. Balance Sheet (Real Tally Double-Entry Format)
+export const getBalanceSheet = async (req, res) => {
+    try {
+        const companyId = req.query.company_id || req.user?.company_id;
+        const asOnDate = req.query.as_on_date || new Date().toISOString().split('T')[0];
+
+        // 1. Calculate Net Profit up to asOnDate for Equity inclusion
+        const incExpRes = await pool.query(`
+            SELECT 
+                ag.nature,
+                COALESCE(SUM(vl.debit_amount), 0)::NUMERIC(16,2) AS total_dr,
+                COALESCE(SUM(vl.credit_amount), 0)::NUMERIC(16,2) AS total_cr
+            FROM ledgers l
+            JOIN account_groups ag ON l.group_id = ag.group_id
+            JOIN voucher_lines vl ON l.ledger_id = vl.ledger_id
+            JOIN vouchers v ON vl.voucher_id = v.voucher_id AND v.is_posted = TRUE
+            WHERE l.company_id = $1 AND v.voucher_date <= $2 AND ag.nature IN ('INCOME', 'EXPENSE')
+            GROUP BY ag.nature
+        `, [companyId, asOnDate]);
+
+        let netIncomeFromOps = 0;
+        let netExpenseFromOps = 0;
+        for (const row of incExpRes.rows) {
+            if (row.nature === 'INCOME') {
+                netIncomeFromOps = (parseFloat(row.total_cr) || 0) - (parseFloat(row.total_dr) || 0);
+            } else if (row.nature === 'EXPENSE') {
+                netExpenseFromOps = (parseFloat(row.total_dr) || 0) - (parseFloat(row.total_cr) || 0);
+            }
+        }
+        const currentPeriodNetProfit = +(netIncomeFromOps - netExpenseFromOps).toFixed(2);
+
+        // 2. Fetch Assets & Liabilities Ledgers with running balances
+        const balLedgersRes = await pool.query(`
+            SELECT 
+                l.ledger_id,
+                l.ledger_name,
+                l.ledger_code,
+                ag.group_name,
+                ag.group_code,
+                ag.nature,
+                l.opening_balance,
+                l.opening_balance_type,
+                l.current_balance,
+                l.current_balance_type,
+                COALESCE(SUM(vl.debit_amount), 0)::NUMERIC(16,2) AS period_debit,
+                COALESCE(SUM(vl.credit_amount), 0)::NUMERIC(16,2) AS period_credit
+            FROM ledgers l
+            JOIN account_groups ag ON l.group_id = ag.group_id
+            LEFT JOIN voucher_lines vl ON l.ledger_id = vl.ledger_id
+            LEFT JOIN vouchers v ON vl.voucher_id = v.voucher_id AND v.is_posted = TRUE AND v.voucher_date <= $2
+            WHERE l.company_id = $1 AND ag.nature IN ('ASSET', 'LIABILITY', 'EQUITY')
+            GROUP BY l.ledger_id, l.ledger_name, l.ledger_code, ag.group_name, ag.group_code, ag.nature, l.opening_balance, l.opening_balance_type, l.current_balance, l.current_balance_type
+            ORDER BY ag.nature, ag.group_name, l.ledger_name ASC
+        `, [companyId, asOnDate]);
+
+        // Physical Stock Valuation
+        const stockRawRes = await pool.query(`
+            SELECT COALESCE(SUM(available_quantity * unit_cost), 0)::NUMERIC(16,2) AS val
+            FROM raw_material_inventory WHERE company_id = $1 AND available_quantity > 0
+        `, [companyId]);
+        const stockFgRes = await pool.query(`
+            SELECT COALESCE(SUM(available_quantity * unit_cost), 0)::NUMERIC(16,2) AS val
+            FROM product_inventory WHERE company_id = $1 AND available_quantity > 0
+        `, [companyId]);
+        const physicalStockTotal = +(parseFloat(stockRawRes.rows[0]?.val || 0) + parseFloat(stockFgRes.rows[0]?.val || 0)).toFixed(2);
+
+        const liabilities = {
+            capital_and_reserves: { total: 0, ledgers: [] },
+            profit_and_loss: { total: currentPeriodNetProfit, is_profit: currentPeriodNetProfit >= 0 },
+            loans_and_borrowings: { total: 0, ledgers: [] },
+            current_liabilities: {
+                total: 0,
+                sundry_creditors: { total: 0, ledgers: [] },
+                duties_and_taxes: { total: 0, ledgers: [] },
+                other_liabilities: { total: 0, ledgers: [] }
+            },
+            total: 0
+        };
+
+        const assets = {
+            fixed_assets: { total: 0, ledgers: [] },
+            investments: { total: 0, ledgers: [] },
+            current_assets: {
+                total: 0,
+                stock_in_hand: {
+                    total: physicalStockTotal,
+                    raw_material_valuation: parseFloat(stockRawRes.rows[0]?.val || 0).toFixed(2),
+                    finished_goods_valuation: parseFloat(stockFgRes.rows[0]?.val || 0).toFixed(2)
+                },
+                sundry_debtors: { total: 0, ledgers: [] },
+                cash_in_hand: { total: 0, ledgers: [] },
+                bank_accounts: { total: 0, ledgers: [] },
+                other_assets: { total: 0, ledgers: [] }
+            },
+            total: 0
+        };
+
+        for (const l of balLedgersRes.rows) {
+            const opBal = (l.opening_balance_type === 'CR' ? -1 : 1) * (parseFloat(l.opening_balance) || 0);
+            const dr = parseFloat(l.period_debit) || 0;
+            const cr = parseFloat(l.period_credit) || 0;
+            const netDr = opBal + dr - cr;
+            const netCr = -netDr;
+
+            if (l.nature === 'EQUITY') {
+                const amt = netCr;
+                liabilities.capital_and_reserves.total += amt;
+                liabilities.capital_and_reserves.ledgers.push({ ...l, amount: amt.toFixed(2) });
+            } else if (l.nature === 'LIABILITY') {
+                if (l.group_code === 'GRP-LOAN') {
+                    liabilities.loans_and_borrowings.total += netCr;
+                    liabilities.loans_and_borrowings.ledgers.push({ ...l, amount: netCr.toFixed(2) });
+                } else if (l.group_code === 'GRP-CREDITORS' || l.group_code === 'SUNDRY_CREDITORS') {
+                    liabilities.current_liabilities.sundry_creditors.total += netCr;
+                    liabilities.current_liabilities.sundry_creditors.ledgers.push({ ...l, amount: netCr.toFixed(2) });
+                } else if (l.group_code === 'GRP-TAXES' || l.group_code === 'DUTIES_AND_TAXES') {
+                    liabilities.current_liabilities.duties_and_taxes.total += netCr;
+                    liabilities.current_liabilities.duties_and_taxes.ledgers.push({ ...l, amount: netCr.toFixed(2) });
+                } else {
+                    liabilities.current_liabilities.other_liabilities.total += netCr;
+                    liabilities.current_liabilities.other_liabilities.ledgers.push({ ...l, amount: netCr.toFixed(2) });
+                }
+            } else if (l.nature === 'ASSET') {
+                if (l.group_code === 'GRP-FA') {
+                    assets.fixed_assets.total += netDr;
+                    assets.fixed_assets.ledgers.push({ ...l, amount: netDr.toFixed(2) });
+                } else if (l.group_code === 'GRP-INV') {
+                    assets.investments.total += netDr;
+                    assets.investments.ledgers.push({ ...l, amount: netDr.toFixed(2) });
+                } else if (l.group_code === 'GRP-DEBTORS' || l.group_code === 'SUNDRY_DEBTORS') {
+                    assets.current_assets.sundry_debtors.total += netDr;
+                    assets.current_assets.sundry_debtors.ledgers.push({ ...l, amount: netDr.toFixed(2) });
+                } else if (l.group_code === 'GRP-CASH' || l.group_code === 'CASH_IN_HAND') {
+                    assets.current_assets.cash_in_hand.total += netDr;
+                    assets.current_assets.cash_in_hand.ledgers.push({ ...l, amount: netDr.toFixed(2) });
+                } else if (l.group_code === 'GRP-BANK' || l.group_code === 'BANK_ACCOUNTS') {
+                    assets.current_assets.bank_accounts.total += netDr;
+                    assets.current_assets.bank_accounts.ledgers.push({ ...l, amount: netDr.toFixed(2) });
+                } else if (l.group_code === 'GRP-STOCK') {
+                    // Physical stock valuation reflects real-time stock
+                } else {
+                    assets.current_assets.other_assets.total += netDr;
+                    assets.current_assets.other_assets.ledgers.push({ ...l, amount: netDr.toFixed(2) });
+                }
+            }
+        }
+
+        liabilities.current_liabilities.total = +(
+            liabilities.current_liabilities.sundry_creditors.total +
+            liabilities.current_liabilities.duties_and_taxes.total +
+            liabilities.current_liabilities.other_liabilities.total
+        ).toFixed(2);
+
+        liabilities.total = +(
+            liabilities.capital_and_reserves.total +
+            liabilities.profit_and_loss.total +
+            liabilities.loans_and_borrowings.total +
+            liabilities.current_liabilities.total
+        ).toFixed(2);
+
+        assets.current_assets.total = +(
+            assets.current_assets.stock_in_hand.total +
+            assets.current_assets.sundry_debtors.total +
+            assets.current_assets.cash_in_hand.total +
+            assets.current_assets.bank_accounts.total +
+            assets.current_assets.other_assets.total
+        ).toFixed(2);
+
+        assets.total = +(
+            assets.fixed_assets.total +
+            assets.investments.total +
+            assets.current_assets.total
+        ).toFixed(2);
+
+        const workingCapital = +(assets.current_assets.total - liabilities.current_liabilities.total).toFixed(2);
+        const diff = +(Math.abs(liabilities.total - assets.total)).toFixed(2);
+
+        return res.json({
+            success: true,
+            data: {
+                as_on_date: asOnDate,
+                liabilities: {
+                    ...liabilities,
+                    capital_and_reserves_total: liabilities.capital_and_reserves.total.toFixed(2),
+                    loans_total: liabilities.loans_and_borrowings.total.toFixed(2),
+                    current_liabilities_total: liabilities.current_liabilities.total.toFixed(2),
+                    total_liabilities: liabilities.total.toFixed(2)
+                },
+                assets: {
+                    ...assets,
+                    fixed_assets_total: assets.fixed_assets.total.toFixed(2),
+                    investments_total: assets.investments.total.toFixed(2),
+                    current_assets_total: assets.current_assets.total.toFixed(2),
+                    total_assets: assets.total.toFixed(2)
+                },
+                summary: {
+                    total_liabilities: liabilities.total.toFixed(2),
+                    total_assets: assets.total.toFixed(2),
+                    difference: diff.toFixed(2),
+                    is_balanced: diff < 1.0,
+                    working_capital: workingCapital.toFixed(2)
+                }
+            }
+        });
+    } catch (error) {
+        console.error('Error in getBalanceSheet:', error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// 14. Expense Statement (Direct vs. Indirect Breakdown)
+export const getExpenseStatement = async (req, res) => {
+    try {
+        const companyId = req.query.company_id || req.user?.company_id;
+        const fromDate = req.query.from_date || `${new Date().getFullYear()}-04-01`;
+        const toDate = req.query.to_date || new Date().toISOString().split('T')[0];
+
+        const expensesRes = await pool.query(`
+            SELECT 
+                l.ledger_id,
+                l.ledger_name,
+                l.ledger_code,
+                ag.group_name,
+                ag.group_code,
+                ag.affects_gross_profit,
+                COUNT(vl.line_id)::INT AS voucher_count,
+                COALESCE(SUM(vl.debit_amount - vl.credit_amount), 0)::NUMERIC(16,2) AS total_expense
+            FROM ledgers l
+            JOIN account_groups ag ON l.group_id = ag.group_id
+            JOIN voucher_lines vl ON l.ledger_id = vl.ledger_id
+            JOIN vouchers v ON vl.voucher_id = v.voucher_id AND v.is_posted = TRUE
+            WHERE l.company_id = $1 AND v.voucher_date >= $2 AND v.voucher_date <= $3
+              AND ag.nature = 'EXPENSE'
+            GROUP BY l.ledger_id, l.ledger_name, l.ledger_code, ag.group_name, ag.group_code, ag.affects_gross_profit
+            ORDER BY ag.affects_gross_profit DESC, total_expense DESC
+        `, [companyId, fromDate, toDate]);
+
+        let directTotal = 0;
+        let indirectTotal = 0;
+        const directList = [];
+        const indirectList = [];
+
+        for (const exp of expensesRes.rows) {
+            const amt = parseFloat(exp.total_expense) || 0;
+            if (exp.affects_gross_profit || exp.group_code === 'GRP-DIR-EXP' || exp.group_code === 'GRP-PURCHASE') {
+                directTotal += amt;
+                directList.push(exp);
+            } else {
+                indirectTotal += amt;
+                indirectList.push(exp);
+            }
+        }
+
+        const grandTotal = +(directTotal + indirectTotal).toFixed(2);
+
+        return res.json({
+            success: true,
+            data: {
+                from_date: fromDate,
+                to_date: toDate,
+                direct_expenses: {
+                    total: directTotal.toFixed(2),
+                    count: directList.length,
+                    ledgers: directList
+                },
+                indirect_expenses: {
+                    total: indirectTotal.toFixed(2),
+                    count: indirectList.length,
+                    ledgers: indirectList
+                },
+                grand_total: grandTotal.toFixed(2)
+            }
+        });
+    } catch (error) {
+        console.error('Error in getExpenseStatement:', error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
+};

@@ -29,12 +29,17 @@ const Sidebar = ({ isCollapsed, onToggleCollapse }) => {
       ]
     },
     {
-      label: 'Commercial & Billing',
+      label: 'Commercial & Accounting (Tally)',
       items: [
         { path: '/sales-invoices', label: 'Sales Invoices & Billing' },
+        { path: '/purchase-invoices', label: 'Purchase Invoices & Bills' },
         { path: '/quotations-orders', label: 'Quotations & Orders' },
-        { path: '/receipts-settlement', label: 'Receipts & Settlements' },
+        { path: '/receipts-settlement', label: 'Receipts & Payments' },
+        { path: '/day-book', label: 'Day Book & Vouchers' },
         { path: '/trial-balance', label: 'Trial Balance & Audit' },
+        { path: '/profit-and-loss', label: 'Profit & Loss Account' },
+        { path: '/balance-sheet', label: 'Balance Sheet' },
+        { path: '/manufacturing-journal', label: 'Stock & Mfg Journal' },
       ]
     },
     {

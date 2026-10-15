@@ -30,10 +30,14 @@ const Sidebar = ({ isCollapsed, onToggleCollapse }) => {
     {
       label: 'Commercial & Billing',
       items: [
+        { path: '/branch/purchase-invoices', label: 'Purchase Invoices & Bills' },
         { path: '/branch/sales-invoices', label: 'Sales Invoices & Billing' },
         { path: '/branch/quotations-orders', label: 'Quotations & Orders' },
         { path: '/branch/receipts-settlement', label: 'Receipts & Settlements' },
+        { path: '/branch/day-book', label: 'Day Book & Vouchers' },
         { path: '/branch/trial-balance', label: 'Trial Balance & Audit' },
+        { path: '/branch/profit-and-loss', label: 'Profit & Loss Account' },
+        { path: '/branch/balance-sheet', label: 'Balance Sheet' },
       ]
     },
     {
@@ -42,6 +46,7 @@ const Sidebar = ({ isCollapsed, onToggleCollapse }) => {
         { path: '/branch/grn', label: 'Goods Receipt (GRN)' },
         { path: '/branch/raw-material-inventory', label: 'Raw Materials Stock' },
         { path: '/branch/production', label: 'Production & Manufacturing' },
+        { path: '/branch/manufacturing-journal', label: 'Stock & Mfg Journal' },
         { path: '/branch/quality-checks', label: 'Quality Check (QC)' },
         { path: '/branch/rework-management', label: 'Rework & Rejections' },
         { path: '/branch/product-inventory', label: 'Finished Goods Stock' },
