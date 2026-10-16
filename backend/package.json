@@ -19,6 +19,6 @@
     "pg": "^8.11.0"
   },
   "devDependencies": {
-    "nodemon": "^3.0.1"
+    "nodemon": "^1.14.10"
   }
 }

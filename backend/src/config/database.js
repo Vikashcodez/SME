@@ -193,6 +193,42 @@ export const createTables = async () => {
             )
         `);
 
+        // Assets Inventory Master & Registry table
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS assets (
+                asset_id BIGSERIAL PRIMARY KEY,
+                company_id BIGINT REFERENCES companies(company_id) ON DELETE CASCADE,
+                branch_id BIGINT REFERENCES branches(branch_id) ON DELETE SET NULL,
+                department_id BIGINT REFERENCES departments(department_id) ON DELETE SET NULL,
+                assigned_employee_id BIGINT REFERENCES employees(employee_id) ON DELETE SET NULL,
+                vendor_id BIGINT REFERENCES vendors(vendor_id) ON DELETE SET NULL,
+                asset_tag VARCHAR(100) NOT NULL,
+                asset_name VARCHAR(255) NOT NULL,
+                asset_category VARCHAR(100) NOT NULL,
+                brand_model VARCHAR(150),
+                serial_number VARCHAR(100),
+                purchase_date DATE,
+                purchase_cost DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+                current_value DECIMAL(14,2) DEFAULT 0.00,
+                depreciation_rate DECIMAL(5,2) DEFAULT 0.00,
+                location VARCHAR(150),
+                asset_status VARCHAR(30) DEFAULT 'In Use',
+                condition VARCHAR(30) DEFAULT 'Good',
+                invoice_number VARCHAR(100),
+                invoice_date DATE,
+                invoice_url VARCHAR(500),
+                warranty_expiry_date DATE,
+                last_service_date DATE,
+                next_service_due DATE,
+                notes TEXT,
+                is_active BOOLEAN DEFAULT TRUE,
+                created_by BIGINT REFERENCES employees(employee_id) ON DELETE SET NULL,
+                updated_by BIGINT REFERENCES employees(employee_id) ON DELETE SET NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        `);
+
         // Raw Material Stock Movements / Ledger table
         await pool.query(`
             CREATE TABLE IF NOT EXISTS raw_material_stock_movements (
@@ -237,42 +273,6 @@ export const createTables = async () => {
                 reported_by BIGINT REFERENCES employees(employee_id) ON DELETE SET NULL,
                 status VARCHAR(30) DEFAULT 'Pending Review',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        `);
-
-        // Assets Inventory Master & Registry table
-        await pool.query(`
-            CREATE TABLE IF NOT EXISTS assets (
-                asset_id BIGSERIAL PRIMARY KEY,
-                company_id BIGINT REFERENCES companies(company_id) ON DELETE CASCADE,
-                branch_id BIGINT REFERENCES branches(branch_id) ON DELETE SET NULL,
-                department_id BIGINT REFERENCES departments(department_id) ON DELETE SET NULL,
-                assigned_employee_id BIGINT REFERENCES employees(employee_id) ON DELETE SET NULL,
-                vendor_id BIGINT REFERENCES vendors(vendor_id) ON DELETE SET NULL,
-                asset_tag VARCHAR(100) NOT NULL,
-                asset_name VARCHAR(255) NOT NULL,
-                asset_category VARCHAR(100) NOT NULL,
-                brand_model VARCHAR(150),
-                serial_number VARCHAR(100),
-                purchase_date DATE,
-                purchase_cost DECIMAL(14,2) NOT NULL DEFAULT 0.00,
-                current_value DECIMAL(14,2) DEFAULT 0.00,
-                depreciation_rate DECIMAL(5,2) DEFAULT 0.00,
-                location VARCHAR(150),
-                asset_status VARCHAR(30) DEFAULT 'In Use',
-                condition VARCHAR(30) DEFAULT 'Good',
-                invoice_number VARCHAR(100),
-                invoice_date DATE,
-                invoice_url VARCHAR(500),
-                warranty_expiry_date DATE,
-                last_service_date DATE,
-                next_service_due DATE,
-                notes TEXT,
-                is_active BOOLEAN DEFAULT TRUE,
-                created_by BIGINT REFERENCES employees(employee_id) ON DELETE SET NULL,
-                updated_by BIGINT REFERENCES employees(employee_id) ON DELETE SET NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         `);
 
@@ -532,14 +532,6 @@ export const createTables = async () => {
             ALTER TABLE raw_material_production ADD COLUMN IF NOT EXISTS total_production_time_minutes DECIMAL(10,2) DEFAULT 0.00;
             ALTER TABLE raw_material_production ADD COLUMN IF NOT EXISTS workforce_count INTEGER DEFAULT 1;
 
-            ALTER TABLE production_batches ADD COLUMN IF NOT EXISTS production_id BIGINT REFERENCES raw_material_production(production_id) ON DELETE CASCADE;
-            ALTER TABLE production_batches ADD COLUMN IF NOT EXISTS product_id BIGINT REFERENCES products(product_id) ON DELETE CASCADE;
-            ALTER TABLE quality_checks ADD COLUMN IF NOT EXISTS production_id BIGINT REFERENCES raw_material_production(production_id) ON DELETE CASCADE;
-            ALTER TABLE quality_checks ADD COLUMN IF NOT EXISTS product_id BIGINT REFERENCES products(product_id) ON DELETE CASCADE;
-            ALTER TABLE production_rework ADD COLUMN IF NOT EXISTS production_id BIGINT REFERENCES raw_material_production(production_id) ON DELETE CASCADE;
-            ALTER TABLE production_rework ADD COLUMN IF NOT EXISTS product_id BIGINT REFERENCES products(product_id) ON DELETE CASCADE;
-            ALTER TABLE production_rework ADD COLUMN IF NOT EXISTS rework_notes TEXT;
-            ALTER TABLE production_rework ADD COLUMN IF NOT EXISTS scrap_reason TEXT;
         `);
 
         // 6. Production Master / BOM Header
@@ -704,6 +696,17 @@ export const createTables = async () => {
                 completed_at TIMESTAMP,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
+        `);
+
+        await pool.query(`
+            ALTER TABLE production_batches ADD COLUMN IF NOT EXISTS production_id BIGINT REFERENCES raw_material_production(production_id) ON DELETE CASCADE;
+            ALTER TABLE production_batches ADD COLUMN IF NOT EXISTS product_id BIGINT REFERENCES products(product_id) ON DELETE CASCADE;
+            ALTER TABLE quality_checks ADD COLUMN IF NOT EXISTS production_id BIGINT REFERENCES raw_material_production(production_id) ON DELETE CASCADE;
+            ALTER TABLE quality_checks ADD COLUMN IF NOT EXISTS product_id BIGINT REFERENCES products(product_id) ON DELETE CASCADE;
+            ALTER TABLE production_rework ADD COLUMN IF NOT EXISTS production_id BIGINT REFERENCES raw_material_production(production_id) ON DELETE CASCADE;
+            ALTER TABLE production_rework ADD COLUMN IF NOT EXISTS product_id BIGINT REFERENCES products(product_id) ON DELETE CASCADE;
+            ALTER TABLE production_rework ADD COLUMN IF NOT EXISTS rework_notes TEXT;
+            ALTER TABLE production_rework ADD COLUMN IF NOT EXISTS scrap_reason TEXT;
         `);
 
         // 15. Product Inventory (Finished Goods Batch Inventory)
