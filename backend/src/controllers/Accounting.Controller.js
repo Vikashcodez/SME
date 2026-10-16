@@ -14,7 +14,7 @@ const generateVoucherNumber = async (client, companyId, branchId, voucherCode) =
 // 1. Get Chart of Accounts (Hierarchical Tree or Flat)
 export const getChartOfAccounts = async (req, res) => {
     try {
-        const companyId = req.query.company_id || req.user?.company_id;
+        const companyId = req.scopeCompanyId || req.query.company_id || req.user?.company_id;
         if (!companyId) {
             return res.status(400).json({ success: false, message: 'Company ID is required' });
         }
@@ -51,7 +51,7 @@ export const getChartOfAccounts = async (req, res) => {
 // 2. Get All Account Groups
 export const getAccountGroups = async (req, res) => {
     try {
-        const companyId = req.query.company_id || req.user?.company_id;
+        const companyId = req.scopeCompanyId || req.query.company_id || req.user?.company_id;
         const result = await pool.query(`
             SELECT ag.*, pag.group_name AS parent_group_name,
                 (SELECT COUNT(*)::INT FROM ledgers l WHERE l.group_id = ag.group_id) AS total_ledgers
@@ -72,14 +72,17 @@ export const getAccountGroups = async (req, res) => {
 export const createAccountGroup = async (req, res) => {
     try {
         const { group_name, group_code, parent_group_id, affects_gross_profit = false } = req.body;
-        const companyId = req.body.company_id || req.user?.company_id;
+        const companyId = req.scopeCompanyId || req.body.company_id || req.user?.company_id;
 
         if (!group_name || !parent_group_id || !companyId) {
             return res.status(400).json({ success: false, message: 'Group Name, Parent Group, and Company ID are required' });
         }
 
         // Get nature from parent group
-        const parent = await pool.query(`SELECT nature FROM account_groups WHERE group_id = $1`, [parent_group_id]);
+        const parent = await pool.query(
+            `SELECT nature FROM account_groups WHERE group_id = $1 AND (company_id = $2 OR company_id IS NULL)`,
+            [parent_group_id, companyId]
+        );
         if (parent.rows.length === 0) {
             return res.status(400).json({ success: false, message: 'Parent group not found' });
         }
@@ -104,7 +107,7 @@ export const createAccountGroup = async (req, res) => {
 // 4. Get Ledgers List with filters
 export const getLedgers = async (req, res) => {
     try {
-        const companyId = req.query.company_id || req.user?.company_id;
+        const companyId = req.scopeCompanyId || req.query.company_id || req.user?.company_id;
         const groupCode = req.query.group_code;
         const nature = req.query.nature;
         const search = req.query.search;
@@ -160,10 +163,18 @@ export const createLedger = async (req, res) => {
             tax_type = 'NONE',
             is_cost_centres_applicable = false
         } = req.body;
-        const companyId = req.body.company_id || req.user?.company_id;
+        const companyId = req.scopeCompanyId || req.body.company_id || req.user?.company_id;
 
         if (!companyId || !group_id || !ledger_name) {
             return res.status(400).json({ success: false, message: 'Company ID, Group ID, and Ledger Name are required' });
+        }
+
+        const groupRes = await pool.query(
+            `SELECT group_id FROM account_groups WHERE group_id = $1 AND (company_id = $2 OR company_id IS NULL)`,
+            [group_id, companyId]
+        );
+        if (groupRes.rows.length === 0) {
+            return res.status(400).json({ success: false, message: 'Account group does not belong to this company.' });
         }
 
         const effectiveCode = ledger_code ? ledger_code.trim().toUpperCase() : `LED-${Date.now().toString().slice(-6)}`;
@@ -209,14 +220,15 @@ export const getLedgerStatement = async (req, res) => {
     try {
         const { ledger_id } = req.params;
         const { from_date, to_date } = req.query;
+        const companyId = req.scopeCompanyId || req.user?.company_id;
 
         // Fetch ledger basic info
         const ledgerRes = await pool.query(`
             SELECT l.*, ag.group_name, ag.nature
             FROM ledgers l
             JOIN account_groups ag ON l.group_id = ag.group_id
-            WHERE l.ledger_id = $1
-        `, [ledger_id]);
+            WHERE l.ledger_id = $1 AND l.company_id = $2
+        `, [ledger_id, companyId]);
 
         if (ledgerRes.rows.length === 0) {
             return res.status(404).json({ success: false, message: 'Ledger not found' });
@@ -242,7 +254,8 @@ export const getLedgerStatement = async (req, res) => {
             JOIN voucher_types vt ON v.voucher_type_id = vt.voucher_type_id
             WHERE vl.ledger_id = $1 AND v.is_posted = TRUE
         `;
-        const params = [ledger_id];
+        const params = [ledger_id, companyId];
+        query = query.replace('WHERE vl.ledger_id = $1', 'WHERE vl.ledger_id = $1 AND v.company_id = $2');
 
         if (from_date) {
             params.push(from_date);
@@ -333,7 +346,7 @@ export const createVoucher = async (req, res) => {
         for (const line of lines) {
             const dr = parseFloat(line.debit_amount) || 0;
             const cr = parseFloat(line.credit_amount) || 0;
-            if (dr > 0 && cr > 0) {
+            if (!Number.isFinite(dr) || !Number.isFinite(cr) || dr < 0 || cr < 0 || (dr > 0 && cr > 0)) {
                 await client.query('ROLLBACK');
                 return res.status(400).json({
                     success: false,
@@ -361,7 +374,9 @@ export const createVoucher = async (req, res) => {
 
         // Fetch voucher type
         const vtRes = await client.query(
-            `SELECT voucher_type_id FROM voucher_types WHERE (company_id = $1 OR company_id IS NULL) AND voucher_type_code = $2`,
+            `SELECT voucher_type_id FROM voucher_types
+             WHERE (company_id = $1 OR company_id IS NULL) AND voucher_type_code = $2
+             ORDER BY company_id NULLS LAST LIMIT 1`,
             [companyId, voucher_type_code.toUpperCase()]
         );
         if (vtRes.rows.length === 0) {
@@ -414,9 +429,16 @@ export const createVoucher = async (req, res) => {
 
             // Update Ledger Current Balance
             const ledgerRes = await client.query(
-                `SELECT l.*, ag.nature FROM ledgers l JOIN account_groups ag ON l.group_id = ag.group_id WHERE l.ledger_id = $1`,
-                [line.ledger_id]
+                `SELECT l.*, ag.nature FROM ledgers l
+                 JOIN account_groups ag ON l.group_id = ag.group_id
+                 WHERE l.ledger_id = $1 AND l.company_id = $2
+                 FOR UPDATE`,
+                [line.ledger_id, companyId]
             );
+            if (ledgerRes.rows.length === 0) {
+                await client.query('ROLLBACK');
+                return res.status(400).json({ success: false, message: `Ledger ${line.ledger_id} does not belong to this company.` });
+            }
             if (ledgerRes.rows.length > 0) {
                 const led = ledgerRes.rows[0];
                 let currentBal = parseFloat(led.current_balance) || 0;
@@ -490,7 +512,7 @@ export const createVoucher = async (req, res) => {
 // 8. Get Vouchers List
 export const getVouchers = async (req, res) => {
     try {
-        const companyId = req.query.company_id || req.user?.company_id;
+        const companyId = req.scopeCompanyId || req.query.company_id || req.user?.company_id;
         const voucherType = req.query.voucher_type;
         const fromDate = req.query.from_date;
         const toDate = req.query.to_date;
@@ -540,6 +562,7 @@ export const getVouchers = async (req, res) => {
 export const getVoucherById = async (req, res) => {
     try {
         const { id } = req.params;
+        const companyId = req.scopeCompanyId || req.user?.company_id;
         const vRes = await pool.query(`
             SELECT 
                 v.*,
@@ -549,8 +572,8 @@ export const getVoucherById = async (req, res) => {
             FROM vouchers v
             JOIN voucher_types vt ON v.voucher_type_id = vt.voucher_type_id
             LEFT JOIN employees e ON v.created_by = e.employee_id
-            WHERE v.voucher_id = $1
-        `, [id]);
+            WHERE v.voucher_id = $1 AND v.company_id = $2
+        `, [id, companyId]);
 
         if (vRes.rows.length === 0) {
             return res.status(404).json({ success: false, message: 'Voucher not found' });
@@ -585,7 +608,7 @@ export const getVoucherById = async (req, res) => {
 // 10. Trial Balance Report
 export const getTrialBalance = async (req, res) => {
     try {
-        const companyId = req.query.company_id || req.user?.company_id;
+        const companyId = req.scopeCompanyId || req.query.company_id || req.user?.company_id;
         const asOnDate = req.query.as_on_date || new Date().toISOString().split('T')[0];
 
         // Aggregate all posted voucher lines up to asOnDate
@@ -598,8 +621,8 @@ export const getTrialBalance = async (req, res) => {
                 ag.nature,
                 l.opening_balance,
                 l.opening_balance_type,
-                COALESCE(SUM(vl.debit_amount), 0)::NUMERIC(16,2) AS period_debit,
-                COALESCE(SUM(vl.credit_amount), 0)::NUMERIC(16,2) AS period_credit,
+                COALESCE(SUM(CASE WHEN v.voucher_id IS NOT NULL THEN vl.debit_amount ELSE 0 END), 0)::NUMERIC(16,2) AS period_debit,
+                COALESCE(SUM(CASE WHEN v.voucher_id IS NOT NULL THEN vl.credit_amount ELSE 0 END), 0)::NUMERIC(16,2) AS period_credit,
                 l.current_balance,
                 l.current_balance_type
             FROM ledgers l
@@ -615,8 +638,11 @@ export const getTrialBalance = async (req, res) => {
         let totalCredits = 0;
 
         const rows = result.rows.map(r => {
-            const curBal = parseFloat(r.current_balance) || 0;
-            const isDr = r.current_balance_type === 'DR';
+            const opening = parseFloat(r.opening_balance) || 0;
+            const openingSigned = r.opening_balance_type === 'CR' ? -opening : opening;
+            const closingSigned = openingSigned + (parseFloat(r.period_debit) || 0) - (parseFloat(r.period_credit) || 0);
+            const curBal = Math.abs(closingSigned);
+            const isDr = closingSigned >= 0;
             const closingDebit = isDr ? curBal : 0;
             const closingCredit = !isDr ? curBal : 0;
             totalDebits += closingDebit;
@@ -955,8 +981,8 @@ export const getBalanceSheet = async (req, res) => {
                 l.opening_balance_type,
                 l.current_balance,
                 l.current_balance_type,
-                COALESCE(SUM(vl.debit_amount), 0)::NUMERIC(16,2) AS period_debit,
-                COALESCE(SUM(vl.credit_amount), 0)::NUMERIC(16,2) AS period_credit
+                COALESCE(SUM(CASE WHEN v.voucher_id IS NOT NULL THEN vl.debit_amount ELSE 0 END), 0)::NUMERIC(16,2) AS period_debit,
+                COALESCE(SUM(CASE WHEN v.voucher_id IS NOT NULL THEN vl.credit_amount ELSE 0 END), 0)::NUMERIC(16,2) AS period_credit
             FROM ledgers l
             JOIN account_groups ag ON l.group_id = ag.group_id
             LEFT JOIN voucher_lines vl ON l.ledger_id = vl.ledger_id
@@ -1187,5 +1213,134 @@ export const getExpenseStatement = async (req, res) => {
     } catch (error) {
         console.error('Error in getExpenseStatement:', error);
         return res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+export const getFinancialYears = async (req, res) => {
+    try {
+        const companyId = req.scopeCompanyId || req.user?.company_id;
+        const result = await pool.query(`
+            SELECT fy.*, COUNT(ap.period_id)::INT AS period_count,
+                   COUNT(ap.period_id) FILTER (WHERE ap.is_locked)::INT AS locked_period_count
+            FROM financial_years fy
+            LEFT JOIN accounting_periods ap ON ap.financial_year_id = fy.financial_year_id
+            WHERE fy.company_id = $1
+            GROUP BY fy.financial_year_id
+            ORDER BY fy.start_date DESC
+        `, [companyId]);
+        return res.json({ success: true, data: result.rows });
+    } catch (error) {
+        return res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+export const createFinancialYear = async (req, res) => {
+    const client = await pool.connect();
+    try {
+        const companyId = req.scopeCompanyId || req.body.company_id || req.user?.company_id;
+        const { year_label, start_date, end_date } = req.body;
+        if (!companyId || !year_label || !start_date || !end_date || new Date(end_date) <= new Date(start_date)) {
+            return res.status(400).json({ success: false, message: 'Valid company, label, start date, and end date are required.' });
+        }
+        await client.query('BEGIN');
+        const yearRes = await client.query(`
+            INSERT INTO financial_years (company_id, year_label, start_date, end_date)
+            VALUES ($1, $2, $3, $4) RETURNING *
+        `, [companyId, year_label.trim(), start_date, end_date]);
+        await client.query(`
+            INSERT INTO accounting_periods (financial_year_id, period_number, start_date, end_date)
+            SELECT $1, month_no,
+                   GREATEST($2::date, ($2::date + ((month_no - 1) || ' months')::interval)::date),
+                   LEAST($3::date, (($2::date + (month_no || ' months')::interval) - interval '1 day')::date)
+            FROM generate_series(1, 12) AS month_no
+            WHERE ($2::date + ((month_no - 1) || ' months')::interval)::date <= $3::date
+        `, [yearRes.rows[0].financial_year_id, start_date, end_date]);
+        await client.query('COMMIT');
+        return res.status(201).json({ success: true, data: yearRes.rows[0] });
+    } catch (error) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ success: false, message: error.message });
+    } finally {
+        client.release();
+    }
+};
+
+export const setPeriodLock = async (req, res) => {
+    try {
+        const companyId = req.scopeCompanyId || req.user?.company_id;
+        const periodId = req.params.period_id;
+        const locked = req.body.locked !== false;
+        const result = await pool.query(`
+            UPDATE accounting_periods ap
+            SET is_locked = $1, locked_at = CASE WHEN $1 THEN CURRENT_TIMESTAMP ELSE NULL END,
+                locked_by = CASE WHEN $1 THEN $2 ELSE NULL END
+            FROM financial_years fy
+            WHERE ap.period_id = $3 AND ap.financial_year_id = fy.financial_year_id AND fy.company_id = $4
+            RETURNING ap.*
+        `, [locked, req.user?.employee_id || null, periodId, companyId]);
+        if (result.rows.length === 0) return res.status(404).json({ success: false, message: 'Accounting period not found.' });
+        return res.json({ success: true, data: result.rows[0] });
+    } catch (error) {
+        return res.status(400).json({ success: false, message: error.message });
+    }
+};
+
+export const reverseVoucher = async (req, res) => {
+    const client = await pool.connect();
+    try {
+        const companyId = req.scopeCompanyId || req.user?.company_id;
+        const voucherId = req.params.id;
+        await client.query('BEGIN');
+        const originalRes = await client.query(`
+            SELECT v.* FROM vouchers v
+            WHERE v.voucher_id = $1 AND v.company_id = $2
+            FOR UPDATE
+        `, [voucherId, companyId]);
+        const original = originalRes.rows[0];
+        if (!original) throw new Error('Voucher not found.');
+        if (!original.is_posted || original.is_reversed) throw new Error('Only a posted, unreversed voucher can be reversed.');
+
+        const linesRes = await client.query(`SELECT * FROM voucher_lines WHERE voucher_id = $1 ORDER BY line_number`, [voucherId]);
+        const voucherNumber = await generateVoucherNumber(client, companyId, original.voucher_number.slice(0, 8) + '-REV');
+        const reversalRes = await client.query(`
+            INSERT INTO vouchers (
+                company_id, branch_id, financial_year_id, voucher_type_id, voucher_number, voucher_date,
+                narration, reference_number, source_module, source_document_id, is_posted, is_reversed,
+                created_by, posted_by, posted_at
+            ) VALUES ($1, $2, $3, $4, $5, CURRENT_DATE, $6, $7, 'MANUAL', $8, TRUE, FALSE, $9, $9, CURRENT_TIMESTAMP)
+            RETURNING *
+        `, [companyId, original.branch_id, original.financial_year_id, original.voucher_type_id, voucherNumber,
+            `Reversal of ${original.voucher_number}: ${original.narration || ''}`, original.voucher_number, voucherId,
+            req.user?.employee_id || null]);
+        const reversal = reversalRes.rows[0];
+
+        for (const line of linesRes.rows) {
+            await client.query(`
+                INSERT INTO voucher_lines (voucher_id, line_number, ledger_id, debit_amount, credit_amount, narration)
+                VALUES ($1, $2, $3, $4, $5, $6)
+            `, [reversal.voucher_id, line.line_number, line.ledger_id, line.credit_amount, line.debit_amount, 'Reversal entry']);
+            await client.query(`
+                UPDATE ledgers l
+                SET current_balance = CASE WHEN signed_balance >= 0 THEN signed_balance ELSE -signed_balance END,
+                    current_balance_type = CASE WHEN signed_balance >= 0 THEN CASE WHEN ag.nature IN ('ASSET','EXPENSE') THEN 'DR' ELSE 'CR' END ELSE CASE WHEN ag.nature IN ('ASSET','EXPENSE') THEN 'CR' ELSE 'DR' END END,
+                    updated_at = CURRENT_TIMESTAMP
+                FROM account_groups ag,
+                     (SELECT l2.ledger_id,
+                             CASE WHEN ag2.nature IN ('ASSET','EXPENSE')
+                                  THEN (CASE WHEN l2.current_balance_type = 'DR' THEN l2.current_balance ELSE -l2.current_balance END) + $1 - $2
+                                  ELSE (CASE WHEN l2.current_balance_type = 'CR' THEN l2.current_balance ELSE -l2.current_balance END) + $2 - $1 END AS signed_balance
+                      FROM ledgers l2 JOIN account_groups ag2 ON ag2.group_id = l2.group_id
+                      WHERE l2.ledger_id = $3 AND l2.company_id = $4) balance
+                WHERE l.ledger_id = balance.ledger_id AND ag.group_id = l.group_id
+            `, [line.credit_amount, line.debit_amount, line.ledger_id, companyId]);
+        }
+        await client.query(`UPDATE vouchers SET is_reversed = TRUE, reversed_by_voucher_id = $1 WHERE voucher_id = $2`, [reversal.voucher_id, voucherId]);
+        await client.query('COMMIT');
+        return res.status(201).json({ success: true, data: reversal });
+    } catch (error) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ success: false, message: error.message });
+    } finally {
+        client.release();
     }
 };

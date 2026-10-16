@@ -13,7 +13,11 @@ import {
     getDayBook,
     getProfitAndLoss,
     getBalanceSheet,
-    getExpenseStatement
+    getExpenseStatement,
+    getFinancialYears,
+    createFinancialYear,
+    setPeriodLock,
+    reverseVoucher
 } from '../controllers/Accounting.Controller.js';
 import { authenticate } from '../middleware/auth.js';
 
@@ -35,6 +39,12 @@ router.get('/ledgers/:ledger_id/statement', getLedgerStatement);
 router.get('/vouchers', getVouchers);
 router.post('/vouchers', createVoucher);
 router.get('/vouchers/:id', getVoucherById);
+router.post('/vouchers/:id/reverse', reverseVoucher);
+
+// Financial years and period controls
+router.get('/financial-years', getFinancialYears);
+router.post('/financial-years', createFinancialYear);
+router.post('/periods/:period_id/lock', setPeriodLock);
 
 // Reports
 router.get('/reports/trial-balance', getTrialBalance);

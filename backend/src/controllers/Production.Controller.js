@@ -1,4 +1,5 @@
 import pool from '../config/database.js';
+import { postAccountingVoucher, resolveLedger } from '../services/AccountingPosting.js';
 
 // 1. Check Material Stock Availability & Cost Preview before Production
 export const checkMaterialAvailability = async (req, res) => {
@@ -421,6 +422,20 @@ export const recordProductionRun = async (req, res) => {
                 item.total_cost
             ]);
         }
+
+        const rawStockLedgerId = await resolveLedger(client, effectiveCompanyId, 'LED-STOCK-RAW', 'Raw Material Stock', 'GRP-STOCK', 'DR');
+        const wipLedgerId = await resolveLedger(client, effectiveCompanyId, 'LED-MFG-WIP', 'Work In Progress Stock', 'GRP-STOCK', 'DR');
+        await postAccountingVoucher(client, {
+            companyId: effectiveCompanyId,
+            branchId: effectiveBranchId,
+            voucherDate: production_date,
+            sourceDocumentId: productionRecord.production_id,
+            narration: `Raw material consumption for production ${prodCode}`,
+            lines: [
+                { ledgerId: wipLedgerId, debit: totalProductionMaterialCost, narration: 'Production WIP created' },
+                { ledgerId: rawStockLedgerId, credit: totalProductionMaterialCost, narration: 'Raw materials consumed' }
+            ]
+        });
 
         await client.query('COMMIT');
 

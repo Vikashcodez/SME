@@ -47,3 +47,42 @@ export const isSuperAdmin = (req, res, next) => {
         });
     }
 };
+
+export const enforceTenantScope = (req, res, next) => {
+    const user = req.user;
+
+    if (user?.is_super_admin) {
+        return next();
+    }
+
+    const requestedCompanyId = req.body?.company_id || req.query?.company_id;
+    const requestedBranchId = req.body?.branch_id || req.query?.branch_id;
+
+    if (requestedCompanyId && String(requestedCompanyId) !== String(user?.company_id)) {
+        return res.status(403).json({
+            success: false,
+            message: 'You cannot access another company.'
+        });
+    }
+
+    if (requestedBranchId && user?.branch_id && String(requestedBranchId) !== String(user.branch_id)) {
+        return res.status(403).json({
+            success: false,
+            message: 'You cannot access another branch.'
+        });
+    }
+
+    req.scopeCompanyId = user?.company_id || null;
+    req.scopeBranchId = user?.branch_id || null;
+
+    // Branch users are never allowed to omit or override their branch scope.
+    if (user?.branch_id) {
+        req.query.company_id = user.company_id;
+        req.query.branch_id = user.branch_id;
+        if (req.body && typeof req.body === 'object') {
+            req.body.company_id = user.company_id;
+            req.body.branch_id = user.branch_id;
+        }
+    }
+    next();
+};

@@ -7,7 +7,8 @@ import {
     getQuotations,
     createQuotation,
     getSalesOrders,
-    createSalesOrder
+    createSalesOrder,
+    convertQuotationToSalesOrder
 } from '../controllers/Sales.Controller.js';
 import { authenticate } from '../middleware/auth.js';
 
@@ -26,6 +27,7 @@ router.post('/receipts', recordReceiptSettlement);
 // Quotations
 router.get('/quotations', getQuotations);
 router.post('/quotations', createQuotation);
+router.post('/quotations/:id/convert-to-order', convertQuotationToSalesOrder);
 
 // Sales Orders
 router.get('/orders', getSalesOrders);

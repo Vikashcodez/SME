@@ -14,13 +14,17 @@ export const config = {
     },
     
     jwt: {
-        secret: process.env.JWT_SECRET || 'default_secret',
+        secret: process.env.JWT_SECRET,
         expire: process.env.JWT_EXPIRE || '7d'
     },
     
     superAdmin: {
-        email: process.env.SUPER_ADMIN_EMAIL || 'admin@gmail.com',
-        password: process.env.SUPER_ADMIN_PASSWORD || 'admin123',
+        email: process.env.SUPER_ADMIN_EMAIL,
+        password: process.env.SUPER_ADMIN_PASSWORD,
         role: process.env.SUPER_ADMIN_ROLE || 'super_admin'
     }
 };
+
+if (!config.jwt.secret || !config.superAdmin.email || !config.superAdmin.password) {
+    throw new Error('JWT_SECRET, SUPER_ADMIN_EMAIL, and SUPER_ADMIN_PASSWORD must be configured.');
+}

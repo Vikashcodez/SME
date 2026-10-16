@@ -870,3 +870,70 @@ export const createSalesOrder = async (req, res) => {
         client.release();
     }
 };
+
+export const convertQuotationToSalesOrder = async (req, res) => {
+    const client = await pool.connect();
+    try {
+        const companyId = req.scopeCompanyId || req.user?.company_id;
+        const quotationId = req.params.id;
+        await client.query('BEGIN');
+
+        const quotationRes = await client.query(`
+            SELECT * FROM quotations
+            WHERE quotation_id = $1 AND company_id = $2
+            FOR UPDATE
+        `, [quotationId, companyId]);
+        if (quotationRes.rows.length === 0) throw new Error('Quotation not found.');
+        const quotation = quotationRes.rows[0];
+        if (['CONVERTED', 'CANCELLED', 'EXPIRED', 'REJECTED'].includes(quotation.status)) {
+            throw new Error(`Quotation cannot be converted from status ${quotation.status}.`);
+        }
+
+        const existingOrder = await client.query(
+            `SELECT sales_order_id FROM sales_orders WHERE quotation_id = $1 LIMIT 1`,
+            [quotationId]
+        );
+        if (existingOrder.rows.length > 0) throw new Error('This quotation is already converted to a sales order.');
+
+        const itemsRes = await client.query(
+            `SELECT * FROM quotation_items WHERE quotation_id = $1 ORDER BY line_number`,
+            [quotationId]
+        );
+        if (itemsRes.rows.length === 0) throw new Error('Quotation has no items.');
+
+        const countRes = await client.query(`SELECT COUNT(*)::INT AS cnt FROM sales_orders WHERE company_id = $1`, [companyId]);
+        const orderNumber = `SO-${new Date().getFullYear()}-${String(countRes.rows[0].cnt + 1).padStart(4, '0')}`;
+        const orderRes = await client.query(`
+            INSERT INTO sales_orders (
+                company_id, branch_id, customer_id, quotation_id, order_number, order_date,
+                delivery_due_date, total_taxable_amount, total_tax_amount, net_amount,
+                status, billing_status, terms_and_conditions, created_by
+            ) VALUES ($1, $2, $3, $4, $5, CURRENT_DATE, CURRENT_DATE, $6, $7, $8, 'PENDING', 'UNBILLED', $9, $10)
+            RETURNING *
+        `, [companyId, quotation.branch_id, quotation.customer_id, quotationId, orderNumber,
+            quotation.total_taxable_amount, quotation.total_tax_amount, quotation.net_amount,
+            quotation.terms_and_conditions, req.user?.employee_id || null]);
+
+        for (const item of itemsRes.rows) {
+            await client.query(`
+                INSERT INTO sales_order_items (
+                    sales_order_id, line_number, product_id, hsn_sac_code,
+                    ordered_quantity, unit_of_measure, unit_rate, discount_percentage,
+                    discount_amount, taxable_amount, tax_rate, cgst_rate, cgst_amount,
+                    sgst_rate, sgst_amount, igst_rate, igst_amount, total_amount
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, 0, 0, $8, $9, 0, $10, 0, $11, 0, $12, $13)
+            `, [orderRes.rows[0].sales_order_id, item.line_number, item.product_id, item.hsn_sac_code,
+                item.quantity, item.unit_of_measure, item.quoted_rate, item.taxable_amount, item.tax_rate,
+                item.cgst_amount, item.sgst_amount, item.igst_amount, item.total_amount]);
+        }
+
+        await client.query(`UPDATE quotations SET status = 'CONVERTED', updated_at = CURRENT_TIMESTAMP WHERE quotation_id = $1`, [quotationId]);
+        await client.query('COMMIT');
+        return res.status(201).json({ success: true, message: 'Quotation converted to sales order.', data: { ...orderRes.rows[0], items: itemsRes.rows } });
+    } catch (error) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ success: false, message: error.message });
+    } finally {
+        client.release();
+    }
+};

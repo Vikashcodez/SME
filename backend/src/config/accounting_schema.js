@@ -1,12 +1,13 @@
-import pool from './database.js';
-
 /**
  * PRODUCTION-GRADE ACCOUNTING, BILLING & COMMERCIAL SUBSYSTEM SCHEMA
  * Provisions all 37 relational tables, triggers, constraints, indexes, 
  * and seeds standard Chart of Accounts groups & voucher types.
  */
-export const initAccountingSchema = async () => {
-    const client = await pool.connect();
+export const initAccountingSchema = async (dbPool) => {
+    if (!dbPool) {
+        throw new Error('A database pool is required to initialize the accounting schema.');
+    }
+    const client = await dbPool.connect();
     try {
         console.log('🔄 Initializing Accounting, Billing & Commercial relational schema...');
         await client.query('BEGIN');
@@ -246,6 +247,35 @@ export const initAccountingSchema = async () => {
                 CONSTRAINT uq_voucher_line_num UNIQUE (voucher_id, line_number)
             );
             CREATE INDEX IF NOT EXISTS idx_voucher_lines_ledger ON voucher_lines(ledger_id, voucher_id);
+
+            CREATE OR REPLACE FUNCTION validate_posted_voucher_balance()
+            RETURNS TRIGGER AS $body$
+            DECLARE
+                voucher_posted BOOLEAN;
+                debit_total NUMERIC(20, 4);
+                credit_total NUMERIC(20, 4);
+            BEGIN
+                SELECT is_posted INTO voucher_posted FROM vouchers WHERE voucher_id = COALESCE(NEW.voucher_id, OLD.voucher_id);
+                IF COALESCE(voucher_posted, FALSE) THEN
+                    SELECT COALESCE(SUM(debit_amount), 0), COALESCE(SUM(credit_amount), 0)
+                    INTO debit_total, credit_total
+                    FROM voucher_lines
+                    WHERE voucher_id = COALESCE(NEW.voucher_id, OLD.voucher_id);
+
+                    IF debit_total <= 0 OR debit_total <> credit_total THEN
+                        RAISE EXCEPTION 'Posted voucher % is not balanced: debit %, credit %',
+                            COALESCE(NEW.voucher_id, OLD.voucher_id), debit_total, credit_total;
+                    END IF;
+                END IF;
+                RETURN NULL;
+            END;
+            $body$ LANGUAGE plpgsql;
+
+            DROP TRIGGER IF EXISTS trg_validate_posted_voucher_balance ON voucher_lines;
+            CREATE CONSTRAINT TRIGGER trg_validate_posted_voucher_balance
+            AFTER INSERT OR UPDATE OR DELETE ON voucher_lines
+            DEFERRABLE INITIALLY DEFERRED
+            FOR EACH ROW EXECUTE FUNCTION validate_posted_voucher_balance();
 
             CREATE TABLE IF NOT EXISTS bill_allocations (
                 allocation_id BIGSERIAL PRIMARY KEY,
@@ -796,7 +826,7 @@ export const initAccountingSchema = async () => {
 /**
  * Seeds standard system account groups & voucher types for each company
  */
-const seedStandardAccountingMasters = async (client) => {
+export const seedStandardAccountingMasters = async (client) => {
     // 1. Fetch all companies
     const companiesRes = await client.query('SELECT company_id FROM companies');
     const companies = companiesRes.rows;
@@ -880,12 +910,15 @@ const seedStandardAccountingMasters = async (client) => {
             const purchGroupRes = await client.query("SELECT group_id FROM account_groups WHERE company_id = $1 AND group_code = 'GRP-PURCHASE'", [cId]);
             const taxGroupRes = await client.query("SELECT group_id FROM account_groups WHERE company_id = $1 AND group_code = 'GRP-TAXES'", [cId]);
             const cashGroupRes = await client.query("SELECT group_id FROM account_groups WHERE company_id = $1 AND group_code = 'GRP-CASH'", [cId]);
+            const bankGroupRes = await client.query("SELECT group_id FROM account_groups WHERE company_id = $1 AND group_code = 'GRP-BANK'", [cId]);
             const indirExpGroupRes = await client.query("SELECT group_id FROM account_groups WHERE company_id = $1 AND group_code = 'GRP-INDIR-EXP'", [cId]);
 
             const defaultLedgers = [
                 { name: 'General Sales Account', code: 'LED-SALES-GEN', groupId: salesGroupRes.rows[0]?.group_id, taxType: 'NONE' },
                 { name: 'General Purchase Account', code: 'LED-PURCH-GEN', groupId: purchGroupRes.rows[0]?.group_id, taxType: 'NONE' },
                 { name: 'Cash Account', code: 'LED-CASH-MAIN', groupId: cashGroupRes.rows[0]?.group_id, taxType: 'NONE' },
+                { name: 'Main Bank Account', code: 'LED-BANK-MAIN', groupId: bankGroupRes.rows[0]?.group_id, taxType: 'NONE' },
+                { name: 'General Expense Account', code: 'LED-EXP-GEN', groupId: indirExpGroupRes.rows[0]?.group_id, taxType: 'NONE' },
                 { name: 'Output CGST', code: 'LED-TAX-OUT-CGST', groupId: taxGroupRes.rows[0]?.group_id, taxType: 'CGST' },
                 { name: 'Output SGST', code: 'LED-TAX-OUT-SGST', groupId: taxGroupRes.rows[0]?.group_id, taxType: 'SGST' },
                 { name: 'Output IGST', code: 'LED-TAX-OUT-IGST', groupId: taxGroupRes.rows[0]?.group_id, taxType: 'IGST' },

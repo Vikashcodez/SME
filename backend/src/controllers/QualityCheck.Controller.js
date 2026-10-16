@@ -1,4 +1,5 @@
 import pool from '../config/database.js';
+import { postAccountingVoucher, resolveLedger } from '../services/AccountingPosting.js';
 
 // 1. Get Pending Batches Waiting for Quality Check (including Rework Re-inspections)
 export const getPendingBatches = async (req, res) => {
@@ -319,6 +320,31 @@ export const recordQualityCheck = async (req, res) => {
             `, [runStatus, batch.production_id]);
         }
 
+        const wipLedgerId = await resolveLedger(client, batch.company_id, 'LED-MFG-WIP', 'Work In Progress Stock', 'GRP-STOCK', 'DR');
+        const accountingLines = [];
+        const passedCost = +(unitProductionCost * passQty).toFixed(2);
+        const defectiveCost = +(unitProductionCost * (rejQty + rewQty)).toFixed(2);
+        if (passedCost > 0) {
+            const finishedGoodsLedgerId = await resolveLedger(client, batch.company_id, 'LED-STOCK-FG', 'Finished Goods Stock', 'GRP-STOCK', 'DR');
+            accountingLines.push({ ledgerId: finishedGoodsLedgerId, debit: passedCost, narration: 'Finished goods accepted by QC' });
+            accountingLines.push({ ledgerId: wipLedgerId, credit: passedCost, narration: 'WIP transferred to finished goods' });
+        }
+        if (defectiveCost > 0) {
+            const scrapLedgerId = await resolveLedger(client, batch.company_id, 'LED-LOSS-SCRAP', 'Production Rejection and Scrap Loss', 'GRP-INDIR-EXP', 'DR');
+            accountingLines.push({ ledgerId: scrapLedgerId, debit: defectiveCost, narration: 'Rejected/rework production cost' });
+            accountingLines.push({ ledgerId: wipLedgerId, credit: defectiveCost, narration: 'WIP removed for rejected/rework quantity' });
+        }
+        if (accountingLines.length > 0) {
+            await postAccountingVoucher(client, {
+                companyId: batch.company_id,
+                branchId: batch.branch_id,
+                voucherDate: new Date().toISOString().split('T')[0],
+                sourceDocumentId: qc.id,
+                narration: `Quality check accounting for batch ${batch.batch_number}`,
+                lines: accountingLines
+            });
+        }
+
         await client.query('COMMIT');
 
         return res.status(201).json({
@@ -399,6 +425,22 @@ export const sendToRework = async (req, res) => {
             `, [rework.production_id]);
         }
 
+        if (cost > 0) {
+            const reworkExpenseLedgerId = await resolveLedger(client, rework.company_id, 'LED-EXP-REWORK', 'Rework and Rectification Expense', 'GRP-DIR-EXP', 'DR');
+            const cashLedgerId = await resolveLedger(client, rework.company_id, 'LED-CASH-MAIN', 'Cash Account', 'GRP-CASH', 'DR');
+            await postAccountingVoucher(client, {
+                companyId: rework.company_id,
+                branchId: rework.branch_id,
+                voucherDate: new Date().toISOString().split('T')[0],
+                sourceDocumentId: reworkId,
+                narration: `Rework cost for batch ${rework.batch_number}`,
+                lines: [
+                    { ledgerId: reworkExpenseLedgerId, debit: cost, narration: 'Rework expense incurred' },
+                    { ledgerId: cashLedgerId, credit: cost, narration: 'Rework cost paid/clearing' }
+                ]
+            });
+        }
+
         await client.query('COMMIT');
 
         return res.status(200).json({
@@ -426,7 +468,7 @@ export const scrapRejectedProduct = async (req, res) => {
         const { scrap_reason } = req.body;
 
         const reworkRes = await client.query(`
-            SELECT pr.*, pb.batch_number, pb.id as batch_id
+            SELECT pr.*, pb.batch_number, pb.id as batch_id, pb.company_id, pb.branch_id
             FROM production_rework pr
             JOIN production_batches pb ON pr.production_batch_id = pb.id
             WHERE pr.id = $1 FOR UPDATE
@@ -464,6 +506,23 @@ export const scrapRejectedProduct = async (req, res) => {
                 SET production_status = 'Scrapped'
                 WHERE production_id = $1
             `, [rework.production_id]);
+        }
+
+        const scrapCost = Number(rework.total_rework_cost || 0);
+        if (scrapCost > 0) {
+            const scrapLedgerId = await resolveLedger(client, rework.company_id, 'LED-LOSS-SCRAP', 'Production Rejection and Scrap Loss', 'GRP-INDIR-EXP', 'DR');
+            const wipLedgerId = await resolveLedger(client, rework.company_id, 'LED-MFG-WIP', 'Work In Progress Stock', 'GRP-STOCK', 'DR');
+            await postAccountingVoucher(client, {
+                companyId: rework.company_id,
+                branchId: rework.branch_id,
+                voucherDate: new Date().toISOString().split('T')[0],
+                sourceDocumentId: reworkId,
+                narration: `Scrap loss for batch ${rework.batch_number}`,
+                lines: [
+                    { ledgerId: scrapLedgerId, debit: scrapCost, narration: 'Scrap loss recognized' },
+                    { ledgerId: wipLedgerId, credit: scrapCost, narration: 'WIP written off as scrap' }
+                ]
+            });
         }
 
         await client.query('COMMIT');
@@ -596,6 +655,22 @@ export const completeRework = async (req, res) => {
                 updated_at = CURRENT_TIMESTAMP
             WHERE id = $1
         `, [rework.production_batch_id]);
+
+        if (totalCost > 0) {
+            const reworkExpenseLedgerId = await resolveLedger(client, rework.company_id, 'LED-EXP-REWORK', 'Rework and Rectification Expense', 'GRP-DIR-EXP', 'DR');
+            const cashLedgerId = await resolveLedger(client, rework.company_id, 'LED-CASH-MAIN', 'Cash Account', 'GRP-CASH', 'DR');
+            await postAccountingVoucher(client, {
+                companyId: rework.company_id,
+                branchId: rework.branch_id,
+                voucherDate: new Date().toISOString().split('T')[0],
+                sourceDocumentId: reworkId,
+                narration: `Additional rework cost for batch ${rework.batch_number}`,
+                lines: [
+                    { ledgerId: reworkExpenseLedgerId, debit: totalCost, narration: 'Additional rework expense' },
+                    { ledgerId: cashLedgerId, credit: totalCost, narration: 'Additional rework cost clearing' }
+                ]
+            });
+        }
 
         await client.query('COMMIT');
 

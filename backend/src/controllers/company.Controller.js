@@ -1,4 +1,5 @@
 import pool from '../config/database.js';
+import { seedStandardAccountingMasters } from '../config/accounting_schema.js';
 import fs from 'fs';
 import path from 'path';
 import bcrypt from 'bcryptjs';
@@ -200,6 +201,9 @@ export const createCompany = async (req, res) => {
             ];
 
             await client.query(employeeQuery, employeeValues);
+
+            // Initialize the company's Chart of Accounts before the transaction commits.
+            await seedStandardAccountingMasters(client);
 
             await client.query('COMMIT');
 

@@ -58,6 +58,24 @@ export const createVendor = async (req, res) => {
             ? vendor_code.trim().toUpperCase() 
             : await generateVendorCode(effectiveCompanyId);
 
+        const normalizedGstin = gstin ? String(gstin).replace(/[^a-zA-Z0-9]/g, '').toUpperCase() : null;
+        const normalizedPan = pan ? String(pan).replace(/[^a-zA-Z0-9]/g, '').toUpperCase() : null;
+        const normalizedPincode = pincode ? String(pincode).trim() : null;
+        const normalizedIfsc = ifsc_code ? String(ifsc_code).replace(/\s+/g, '').toUpperCase() : null;
+
+        if (normalizedGstin && normalizedGstin.length > 30) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({ success: false, message: 'GSTIN or tax registration number cannot exceed 30 characters.' });
+        }
+        if (normalizedPan && normalizedPan.length > 30) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({ success: false, message: 'PAN or tax registration number cannot exceed 30 characters.' });
+        }
+        if (normalizedIfsc && normalizedIfsc.length > 30) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({ success: false, message: 'IFSC or bank routing code cannot exceed 30 characters.' });
+        }
+
         const opBal = opening_balance !== undefined && opening_balance !== '' ? parseFloat(opening_balance) || 0.00 : 0.00;
 
         const query = `
@@ -81,16 +99,16 @@ export const createVendor = async (req, res) => {
             effectiveBranchId,
             effectiveVendorCode,
             vendor_name.trim(),
-            gstin ? gstin.trim().toUpperCase().substring(0, 30) : null,
-            pan ? pan.trim().toUpperCase().substring(0, 30) : null,
+            normalizedGstin,
+            normalizedPan,
             address.trim(),
             city.trim(),
             state.trim().substring(0, 50),
-            pincode ? pincode.trim().substring(0, 30) : null,
+            normalizedPincode,
             phone ? phone.trim() : null,
             email ? email.trim().toLowerCase() : null,
             bank_account_no ? bank_account_no.trim() : null,
-            ifsc_code ? ifsc_code.trim().toUpperCase() : null,
+            normalizedIfsc,
             bank_name ? bank_name.trim() : null,
             payment_terms ? payment_terms.trim() : 'Net 30',
             opBal,
@@ -157,12 +175,12 @@ export const createVendor = async (req, res) => {
             createdVendor.vendor_id,
             effectiveVendorCode,
             vendor_name.trim(),
-            gstin ? gstin.trim().toUpperCase().substring(0, 30) : null,
-            pan ? pan.trim().toUpperCase().substring(0, 30) : null,
+            normalizedGstin,
+            normalizedPan,
             address.trim(),
             city.trim(),
             state.trim().substring(0, 50),
-            pincode ? pincode.trim().substring(0, 30) : '400001'
+            normalizedPincode || '400001'
         ]);
 
         await client.query('COMMIT');

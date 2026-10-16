@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import path from 'path';
 import { config } from './config/env.js';
+import { authenticate, enforceTenantScope } from './middleware/auth.js';
 import { testConnection, createTables } from './config/database.js';
 import authRoutes from './routes/auth.Routes.js';
 import companyRoutes from './routes/company.Routes.js';
@@ -37,6 +38,7 @@ app.use('/uploads', express.static(path.resolve(process.cwd(), 'uploads')));
 
 // Routes
 app.use('/api/auth', authRoutes);
+app.use('/api', authenticate, enforceTenantScope);
 app.use('/api/companies', companyRoutes);
 app.use('/api/branches', BranchRouter); 
 app.use('/api/roles', RolesRouter);

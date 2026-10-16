@@ -75,6 +75,10 @@ const Sidebar = ({ isCollapsed, onToggleCollapse }) => {
     }
   ];
 
+  const visibleMenuSections = user?.is_company_admin
+    ? menuSections.filter(section => section.label === 'Overview')
+    : menuSections;
+
   const sidebarWidth = isCollapsed ? 62 : 236;
 
   return (
@@ -343,7 +347,7 @@ const Sidebar = ({ isCollapsed, onToggleCollapse }) => {
             padding: '2px 0 20px 0'
           }}
         >
-          {menuSections.map((section, sIdx) => (
+          {visibleMenuSections.map((section, sIdx) => (
             <div key={section.label}>
               {!isCollapsed ? (
                 <div style={{

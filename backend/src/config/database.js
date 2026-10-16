@@ -126,16 +126,16 @@ export const createTables = async () => {
                 branch_id BIGINT REFERENCES branches(branch_id) ON DELETE SET NULL,
                 vendor_code VARCHAR(50),
                 vendor_name VARCHAR(200) NOT NULL,
-                gstin VARCHAR(15),
-                pan VARCHAR(10),
+                gstin VARCHAR(30),
+                pan VARCHAR(30),
                 address VARCHAR(300) NOT NULL,
                 city VARCHAR(100) NOT NULL,
                 state VARCHAR(100) NOT NULL,
-                pincode VARCHAR(10),
+                pincode VARCHAR(30),
                 phone VARCHAR(20),
                 email VARCHAR(150),
                 bank_account_no VARCHAR(30),
-                ifsc_code VARCHAR(15),
+                ifsc_code VARCHAR(30),
                 bank_name VARCHAR(100),
                 payment_terms VARCHAR(100),
                 opening_balance DECIMAL(14,2) DEFAULT 0.00,
@@ -146,6 +146,15 @@ export const createTables = async () => {
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
+        `);
+
+        // Keep the live schema compatible with the API and vendor_profiles table.
+        // ALTER is idempotent and also repairs databases created before this definition.
+        await pool.query(`
+            ALTER TABLE vendors ALTER COLUMN gstin TYPE VARCHAR(30);
+            ALTER TABLE vendors ALTER COLUMN pan TYPE VARCHAR(30);
+            ALTER TABLE vendors ALTER COLUMN pincode TYPE VARCHAR(30);
+            ALTER TABLE vendors ALTER COLUMN ifsc_code TYPE VARCHAR(30);
         `);
 
         // Raw Materials Master table
@@ -757,7 +766,7 @@ export const createTables = async () => {
         console.log('✅ Indexes created');
 
         // Initialize Production-Grade Accounting, Commercial & Billing Subsystem
-        await initAccountingSchema();
+        await initAccountingSchema(pool);
 
         console.log('✅ All tables created successfully');
     } catch (error) {
