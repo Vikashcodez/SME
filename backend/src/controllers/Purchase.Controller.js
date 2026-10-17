@@ -1,5 +1,36 @@
 import pool from '../config/database.js';
 
+export const getPendingGrns = async (req, res) => {
+    try {
+        const companyId = req.query.company_id || req.user?.company_id;
+        const result = await pool.query(`
+            SELECT g.id, g.grn_number, g.vendor_id,
+                   COALESCE(vp.vendor_profile_id, g.vendor_id) AS vendor_profile_id,
+                   g.invoice_number, g.invoice_date,
+                   g.received_date, COALESCE(vp.vendor_trade_name, v.vendor_name) AS vendor_name,
+                   COUNT(gi.id)::INT AS total_items,
+                   COALESCE(SUM((gi.received_quantity + gi.free_quantity) * gi.unit_cost), 0)::NUMERIC(16,2) AS total_value,
+                   COALESCE(
+                       json_agg(gi ORDER BY gi.id) FILTER (WHERE gi.id IS NOT NULL),
+                       '[]'::json
+                   ) AS items
+            FROM grns g
+            LEFT JOIN vendors v ON v.vendor_id = g.vendor_id
+            LEFT JOIN vendor_profiles vp
+                ON vp.existing_vendor_id = g.vendor_id AND vp.company_id = g.company_id
+            LEFT JOIN grn_items gi ON gi.grn_id = g.id
+            LEFT JOIN purchase_invoices pi ON pi.grn_id = g.id
+            WHERE g.company_id = $1 AND pi.purchase_invoice_id IS NULL
+            GROUP BY g.id, v.vendor_name, vp.vendor_profile_id, vp.vendor_trade_name
+            ORDER BY g.received_date DESC, g.id DESC
+        `, [companyId]);
+        return res.json({ success: true, count: result.rows.length, data: result.rows });
+    } catch (error) {
+        console.error('Error fetching pending GRNs:', error);
+        return res.status(500).json({ success: false, message: 'Failed to load pending GRNs' });
+    }
+};
+
 // Helper: Document Number Generation
 const generateDocNumber = async (client, companyId, prefix) => {
     const year = new Date().getFullYear();
@@ -32,27 +63,79 @@ export const createPurchaseInvoice = async (req, res) => {
         await client.query('BEGIN');
 
         const {
-            vendor_id, // vendor_profiles.vendor_profile_id or vendors.vendor_id
-            supplier_invoice_number,
-            supplier_invoice_date = new Date().toISOString().split('T')[0],
-            due_date,
+            vendor_id: requestVendorId, // vendor_profiles.vendor_profile_id or vendors.vendor_id
+            supplier_invoice_number: requestSupplierInvoiceNumber,
+            supplier_invoice_date: requestSupplierInvoiceDate = new Date().toISOString().split('T')[0],
+            due_date: requestDueDate,
             place_of_supply_state_code,
             items = [],
             freight_charges = 0,
             other_charges = 0,
-            purchase_order_id = null
+            purchase_order_id = null,
+            grn_id = null
         } = req.body;
 
         const companyId = req.body.company_id || req.user?.company_id;
         const branchId = req.body.branch_id || req.user?.branch_id || null;
         const createdBy = req.user?.employee_id || null;
+        let vendor_id = requestVendorId;
+        let supplier_invoice_number = requestSupplierInvoiceNumber;
+        let supplier_invoice_date = requestSupplierInvoiceDate;
+        let due_date = requestDueDate;
+        let invoiceItems = items;
 
-        if (!companyId || !vendor_id || !supplier_invoice_number || items.length === 0) {
+        if (grn_id) {
+            const grnRes = await client.query(`
+                SELECT g.*, v.vendor_name
+                FROM grns g
+                LEFT JOIN vendors v ON v.vendor_id = g.vendor_id
+                WHERE g.id = $1 AND g.company_id = $2
+            `, [grn_id, companyId]);
+            if (grnRes.rows.length === 0) {
+                await client.query('ROLLBACK');
+                return res.status(404).json({ success: false, message: 'GRN not found.' });
+            }
+            const grn = grnRes.rows[0];
+            const grnItems = await client.query(
+                `SELECT * FROM grn_items WHERE grn_id = $1 ORDER BY id`,
+                [grn_id]
+            );
+            vendor_id = grn.vendor_id;
+            supplier_invoice_number = supplier_invoice_number || grn.invoice_number || grn.grn_number;
+            supplier_invoice_date = supplier_invoice_date || grn.invoice_date || grn.received_date;
+            due_date = due_date || supplier_invoice_date;
+            invoiceItems = grnItems.rows.map((item, index) => ({
+                grn_id,
+                line_number: index + 1,
+                raw_material_id: item.raw_material_id,
+                billed_quantity: parseFloat(item.received_quantity) + parseFloat(item.free_quantity || 0),
+                unit_rate: parseFloat(item.unit_cost || 0),
+                tax_rate: 0,
+                hsn_code: '8471',
+                unit_of_measure: 'PCS'
+            }));
+        }
+
+        if (!companyId || !vendor_id || !supplier_invoice_number || invoiceItems.length === 0) {
             await client.query('ROLLBACK');
             return res.status(400).json({
                 success: false,
                 message: 'Company ID, Vendor, Supplier Invoice Number, and at least one item are required.'
             });
+        }
+
+        if (grn_id) {
+            const existingGrnInvoice = await client.query(
+                `SELECT purchase_invoice_id FROM purchase_invoices WHERE grn_id = $1 LIMIT 1`,
+                [grn_id]
+            );
+            if (existingGrnInvoice.rows.length > 0) {
+                await client.query('ROLLBACK');
+                return res.status(409).json({
+                    success: false,
+                    message: 'A purchase invoice already exists for this GRN.'
+                });
+            }
         }
 
         // 1. Fetch Vendor & Accounting Ledger
@@ -123,12 +206,17 @@ export const createPurchaseInvoice = async (req, res) => {
         let totalIgst = 0;
 
         const calculatedItems = [];
-        for (let i = 0; i < items.length; i++) {
-            const it = items[i];
+        for (let i = 0; i < invoiceItems.length; i++) {
+            const it = invoiceItems[i];
             const qty = parseFloat(it.quantity || it.billed_quantity) || 1;
             const rate = parseFloat(it.unit_rate || it.cost_price || it.price) || 0;
             const taxable = +(qty * rate).toFixed(2);
-            const taxRate = parseFloat(it.tax_rate || it.gst_rate) || (isIntraState ? 18 : 18);
+            const taxRateValue = it.tax_rate !== undefined && it.tax_rate !== null && it.tax_rate !== ''
+                ? it.tax_rate
+                : it.gst_rate;
+            const taxRate = taxRateValue === undefined || taxRateValue === null || taxRateValue === ''
+                ? 18
+                : parseFloat(taxRateValue);
 
             let cgst = 0, sgst = 0, igst = 0;
             if (isIntraState) {
@@ -175,22 +263,22 @@ export const createPurchaseInvoice = async (req, res) => {
         // 5. Insert Purchase Invoice Header
         const invRes = await client.query(`
             INSERT INTO purchase_invoices (
-                company_id, branch_id, vendor_id, purchase_ledger_id, purchase_order_id,
+                company_id, branch_id, vendor_id, purchase_ledger_id, purchase_order_id, grn_id,
                 internal_entry_number, supplier_invoice_number, supplier_invoice_date,
                 posting_date, due_date, place_of_supply_state_code, is_reverse_charge,
                 total_taxable_amount, total_cgst_amount, total_sgst_amount, total_igst_amount,
                 other_charges, round_off_amount, net_total_amount, paid_amount,
                 outstanding_amount, payment_status, status, created_by
             ) VALUES (
-                $1, $2, $3, $4, $5,
-                $6, $7, $8,
-                CURRENT_DATE, $9, $10, FALSE,
-                $11, $12, $13, $14,
-                $15, $16, $17, 0.00,
-                $17, 'UNPAID', 'POSTED', $18
+                $1, $2, $3, $4, $5, $6,
+                $7, $8, $9,
+                CURRENT_DATE, $10, $11, FALSE,
+                $12, $13, $14, $15,
+                $16, $17, $18, 0.00,
+                $18, 'UNPAID', 'POSTED', $19
             ) RETURNING *
         `, [
-            companyId, branchId, vendorProfile.vendor_profile_id, purchaseLedgerId, purchase_order_id,
+            companyId, branchId, vendorProfile.vendor_profile_id, purchaseLedgerId, purchase_order_id, grn_id,
             internalEntryNo, supplier_invoice_number.trim(), supplier_invoice_date,
             calculatedDueDate, vendorStateCode,
             totalTaxable, totalCgst, totalSgst, totalIgst,
@@ -384,10 +472,13 @@ export const getPurchaseInvoices = async (req, res) => {
                 vp.vendor_trade_name,
                 vp.vendor_code,
                 vp.gstin AS vendor_gstin,
-                v.voucher_number
+                vp.existing_vendor_id,
+                v.voucher_number,
+                g.grn_number
             FROM purchase_invoices pi
             JOIN vendor_profiles vp ON pi.vendor_id = vp.vendor_profile_id
             LEFT JOIN vouchers v ON pi.accounting_voucher_id = v.voucher_id
+            LEFT JOIN grns g ON pi.grn_id = g.id
             WHERE pi.company_id = $1
         `;
         const params = [companyId];
@@ -430,10 +521,12 @@ export const getPurchaseInvoiceById = async (req, res) => {
                 vp.city,
                 vp.state_code,
                 vp.postal_code,
-                v.voucher_number
+                v.voucher_number,
+                g.grn_number
             FROM purchase_invoices pi
             JOIN vendor_profiles vp ON pi.vendor_id = vp.vendor_profile_id
             LEFT JOIN vouchers v ON pi.accounting_voucher_id = v.voucher_id
+            LEFT JOIN grns g ON pi.grn_id = g.id
             WHERE pi.purchase_invoice_id = $1
         `, [id]);
 
@@ -608,19 +701,37 @@ export const recordVendorPayment = async (req, res) => {
             if (allocAmt <= 0) continue;
 
             const invRow = await client.query(
-                `SELECT outstanding_amount, paid_amount, supplier_invoice_number, due_date FROM purchase_invoices WHERE purchase_invoice_id = $1`,
-                [bill.purchase_invoice_id]
+                `SELECT outstanding_amount, paid_amount, supplier_invoice_number, due_date, vendor_id
+                 FROM purchase_invoices
+                 WHERE purchase_invoice_id = $1 AND company_id = $2`,
+                [bill.purchase_invoice_id, companyId]
             );
-            if (invRow.rows.length === 0) continue;
+            if (invRow.rows.length === 0) {
+                await client.query('ROLLBACK');
+                return res.status(404).json({ success: false, message: 'Purchase invoice not found for this company.' });
+            }
 
             const inv = invRow.rows[0];
+            const requestedAmount = parseFloat(bill.amount);
+            if (!Number.isFinite(requestedAmount) || requestedAmount <= 0) {
+                await client.query('ROLLBACK');
+                return res.status(400).json({ success: false, message: 'Each invoice payment amount must be greater than zero.' });
+            }
+            if (String(inv.vendor_id) !== String(vendor.vendor_profile_id)) {
+                await client.query('ROLLBACK');
+                return res.status(400).json({ success: false, message: 'The selected invoice does not belong to the selected vendor.' });
+            }
+            if (requestedAmount > parseFloat(inv.outstanding_amount) + 0.01) {
+                await client.query('ROLLBACK');
+                return res.status(400).json({ success: false, message: `Payment exceeds the outstanding amount for invoice ${inv.supplier_invoice_number}.` });
+            }
             const newPaid = +(parseFloat(inv.paid_amount) + allocAmt).toFixed(2);
             const newOutstanding = Math.max(0, +(parseFloat(inv.outstanding_amount) - allocAmt).toFixed(2));
             const newStatus = newOutstanding <= 0.01 ? 'PAID' : 'PARTIALLY_PAID';
 
             await client.query(`
                 UPDATE purchase_invoices 
-                SET paid_amount = $1, outstanding_amount = $2, payment_status = $3, updated_at = CURRENT_TIMESTAMP
+                SET paid_amount = $1, outstanding_amount = $2, payment_status = $3
                 WHERE purchase_invoice_id = $4
             `, [newPaid, newOutstanding, newStatus, bill.purchase_invoice_id]);
 

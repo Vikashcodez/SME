@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useAuth } from '../../context/AuthContext';
-import { purchases as purchaseApi, rawMaterials as rawMaterialApi } from '../../services/api';
+import { purchases as purchaseApi, rawMaterials as rawMaterialApi, vendors as vendorsApi } from '../../services/api';
 import toast from 'react-hot-toast';
 import {
   FileText,
@@ -31,6 +31,7 @@ const PurchaseInvoiceManagement = () => {
   const [invoices, setInvoices] = useState([]);
   const [vendorsList, setVendorsList] = useState([]);
   const [rawMaterialsList, setRawMaterialsList] = useState([]);
+  const [pendingGrns, setPendingGrns] = useState([]);
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('ALL');
@@ -49,7 +50,8 @@ const PurchaseInvoiceManagement = () => {
     other_charges: 0,
     items: [
       { raw_material_id: '', quantity: 1, unit_rate: 0, tax_rate: 18, hsn_code: '', unit_of_measure: 'PCS', batch_number: '' }
-    ]
+    ],
+    grn_id: ''
   });
 
   // Payment Form State
@@ -60,7 +62,9 @@ const PurchaseInvoiceManagement = () => {
     instrument_type: 'NEFT',
     instrument_reference_number: '',
     payment_date: new Date().toISOString().split('T')[0],
-    narration: ''
+    narration: '',
+    invoices_to_settle: [],
+    selected_invoice_id: ''
   });
   const [unpaidBills, setUnpaidBills] = useState([]);
 
@@ -83,12 +87,14 @@ const PurchaseInvoiceManagement = () => {
   const fetchMasterData = async () => {
     if (!companyId) return;
     try {
-      const [vRes, rmRes] = await Promise.all([
-        fetch(`http://localhost:5000/api/vendors?company_id=${companyId}`).then(r => r.json()),
-        rawMaterialApi.getAll({ company_id: companyId })
+      const [vRes, rmRes, grnRes] = await Promise.all([
+        vendorsApi.getAll({ company_id: companyId, is_active: true }),
+        rawMaterialApi.getAll({ company_id: companyId }),
+        purchaseApi.getPendingGrns({ company_id: companyId })
       ]);
-      setVendorsList(vRes.data || []);
+      setVendorsList(vRes.data.data || []);
       setRawMaterialsList(rmRes.data.data || rmRes.data || []);
+      setPendingGrns(grnRes.data.data || []);
     } catch (err) {
       console.error(err);
     }
@@ -127,7 +133,9 @@ const PurchaseInvoiceManagement = () => {
       const qty = parseFloat(it.quantity) || 0;
       const rate = parseFloat(it.unit_rate) || 0;
       const lineTaxable = +(qty * rate).toFixed(2);
-      const taxRate = parseFloat(it.tax_rate) || 18;
+      const taxRate = it.tax_rate === undefined || it.tax_rate === null || it.tax_rate === ''
+        ? 18
+        : parseFloat(it.tax_rate);
 
       taxable += lineTaxable;
       if (isIntra) {
@@ -154,6 +162,48 @@ const PurchaseInvoiceManagement = () => {
     };
   }, [newInvoice.items, newInvoice.other_charges, selectedVendorData]);
 
+  const handleGrnSelection = (grnId) => {
+    const grn = pendingGrns.find(item => String(item.id) === String(grnId));
+    if (!grn) {
+      setNewInvoice(prev => ({ ...prev, grn_id: '' }));
+      return;
+    }
+
+    setNewInvoice(prev => ({
+      ...prev,
+      grn_id: String(grn.id),
+      vendor_id: String(grn.vendor_profile_id || grn.vendor_id),
+      supplier_invoice_number: grn.invoice_number || grn.grn_number,
+      supplier_invoice_date: grn.invoice_date || grn.received_date,
+      due_date: grn.invoice_date || grn.received_date,
+      items: (grn.items || []).map(item => ({
+        raw_material_id: String(item.raw_material_id),
+        quantity: parseFloat(item.received_quantity || 0) + parseFloat(item.free_quantity || 0),
+        unit_rate: parseFloat(item.unit_cost || 0),
+        tax_rate: 0,
+        hsn_code: '8471',
+        unit_of_measure: 'PCS',
+        batch_number: item.batch_number || ''
+      }))
+    }));
+  };
+
+  const handlePayInvoice = (invoice) => {
+    setPaymentForm(prev => ({
+      ...prev,
+      vendor_id: String(invoice.vendor_id),
+      amount: String(parseFloat(invoice.outstanding_amount || 0)),
+      invoices_to_settle: [{
+        purchase_invoice_id: invoice.purchase_invoice_id,
+        amount: parseFloat(invoice.outstanding_amount || 0)
+      }],
+      selected_invoice_id: String(invoice.purchase_invoice_id),
+      narration: `Payment for purchase invoice ${invoice.supplier_invoice_number}`
+    }));
+    setUnpaidBills([invoice]);
+    setActiveTab('payment-settlement');
+  };
+
   // Handle Material Selection
   const handleMaterialChange = (idx, materialId) => {
     const mat = rawMaterialsList.find(m => m.material_id === parseInt(materialId));
@@ -167,6 +217,7 @@ const PurchaseInvoiceManagement = () => {
         hsn_code: mat.hsn_code || '8471',
         unit_of_measure: mat.unit_of_measure || mat.unit || 'PCS'
       };
+
     } else {
       updated[idx].raw_material_id = materialId;
     }
@@ -188,7 +239,7 @@ const PurchaseInvoiceManagement = () => {
       });
       toast.success('Purchase Invoice created & posted into Double-Entry Ledger!');
       setActiveTab('invoices');
-      fetchInvoices();
+      await Promise.all([fetchInvoices(), fetchMasterData()]);
     } catch (err) {
       console.error(err);
       toast.error(err.response?.data?.message || 'Failed to create invoice');
@@ -199,7 +250,7 @@ const PurchaseInvoiceManagement = () => {
 
   // Fetch Unpaid Bills on Vendor Selection in Payment Tab
   const handlePaymentVendorSelect = async (vId) => {
-    setPaymentForm(prev => ({ ...prev, vendor_id: vId }));
+    setPaymentForm(prev => ({ ...prev, vendor_id: vId, selected_invoice_id: '', invoices_to_settle: [] }));
     if (!vId) {
       setUnpaidBills([]);
       return;
@@ -209,7 +260,16 @@ const PurchaseInvoiceManagement = () => {
       setUnpaidBills(res.data.data || []);
       // Pre-fill amount with first bill's outstanding if available
       if (res.data.data?.length > 0) {
-        setPaymentForm(prev => ({ ...prev, amount: res.data.data[0].outstanding_amount }));
+        const firstBill = res.data.data[0];
+        setPaymentForm(prev => ({
+          ...prev,
+          amount: firstBill.outstanding_amount,
+          selected_invoice_id: String(firstBill.purchase_invoice_id),
+          invoices_to_settle: [{
+            purchase_invoice_id: firstBill.purchase_invoice_id,
+            amount: parseFloat(firstBill.outstanding_amount)
+          }]
+        }));
       }
     } catch (err) {
       console.error(err);
@@ -237,7 +297,9 @@ const PurchaseInvoiceManagement = () => {
         instrument_type: 'NEFT',
         instrument_reference_number: '',
         payment_date: new Date().toISOString().split('T')[0],
-        narration: ''
+        narration: '',
+        invoices_to_settle: [],
+        selected_invoice_id: ''
       });
       setUnpaidBills([]);
       fetchInvoices();
@@ -287,6 +349,11 @@ const PurchaseInvoiceManagement = () => {
             className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-semibold transition ${activeTab === 'new-invoice' ? 'bg-indigo-600 text-white shadow-sm' : 'bg-slate-50 text-slate-600 hover:bg-slate-100'}`}
           >
             <Plus className="w-4 h-4" /> Record Purchase Bill
+            {pendingGrns.length > 0 && (
+              <span className="ml-1 rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] text-amber-700">
+                {pendingGrns.length} GRN pending
+              </span>
+            )}
           </button>
           <button
             onClick={() => setActiveTab('payment-settlement')}
@@ -373,6 +440,9 @@ const PurchaseInvoiceManagement = () => {
                           <td className="py-3.5 px-4 font-mono font-bold text-slate-900">
                             {inv.supplier_invoice_number}
                             <span className="block text-xs font-normal text-slate-400">{inv.voucher_number || inv.internal_entry_number}</span>
+                            {inv.grn_number && (
+                              <span className="block text-xs font-semibold text-indigo-600">GRN: {inv.grn_number}</span>
+                            )}
                           </td>
                           <td className="py-3.5 px-4 font-semibold text-slate-800">
                             {inv.vendor_trade_name}
@@ -402,6 +472,16 @@ const PurchaseInvoiceManagement = () => {
                             >
                               <Eye className="w-4 h-4" />
                             </button>
+                            {parseFloat(inv.outstanding_amount || 0) > 0 && (
+                              <button
+                                onClick={() => handlePayInvoice(inv)}
+                                className="ml-1 inline-flex items-center gap-1 px-2 py-1 text-xs font-semibold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 rounded-lg"
+                                title="Pay pending amount"
+                              >
+                                <CreditCard className="w-3.5 h-3.5" />
+                                Pay
+                              </button>
+                            )}
                           </td>
                         </tr>
                       ))
@@ -416,6 +496,36 @@ const PurchaseInvoiceManagement = () => {
       {/* TAB 2: RECORD NEW PURCHASE BILL */}
       {activeTab === 'new-invoice' && (
         <form onSubmit={handleCreateInvoice} className="bg-white p-6 rounded-2xl border border-slate-200/80 shadow-sm space-y-6">
+          <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
+            <div className="flex flex-col md:flex-row md:items-end gap-3">
+              <div className="flex-1">
+                <label className="block text-xs font-semibold text-amber-900 mb-1">
+                  Create Bill From GRN
+                </label>
+                <select
+                  value={newInvoice.grn_id}
+                  onChange={(e) => handleGrnSelection(e.target.value)}
+                  className="w-full px-3 py-2 border border-amber-200 rounded-xl text-sm bg-white"
+                >
+                  <option value="">Select a pending GRN...</option>
+                  {pendingGrns.map(grn => (
+                    <option key={grn.id} value={grn.id}>
+                      {grn.grn_number} - {grn.vendor_name || 'Supplier'} - ₹{parseFloat(grn.total_value || 0).toFixed(2)}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="text-sm text-amber-900">
+                <span className="font-semibold">Pending GRNs:</span> {pendingGrns.length}
+              </div>
+            </div>
+            {newInvoice.grn_id && (
+              <p className="mt-2 text-xs text-amber-800">
+                GRN materials, quantities, unit costs, supplier, and amount are loaded automatically.
+              </p>
+            )}
+          </div>
+
           <div className="border-b border-slate-100 pb-4 flex justify-between items-center">
             <div>
               <h2 className="text-lg font-bold text-slate-900">Purchase Invoice Builder</h2>
@@ -442,7 +552,7 @@ const PurchaseInvoiceManagement = () => {
               >
                 <option value="">Select Vendor...</option>
                 {vendorsList.map(v => (
-                  <option key={v.vendor_id || v.vendor_profile_id} value={v.vendor_id || v.vendor_profile_id}>
+                  <option key={v.vendor_profile_id || v.vendor_id} value={v.vendor_profile_id || v.vendor_id}>
                     {v.vendor_name || v.vendor_trade_name} ({v.vendor_code})
                   </option>
                 ))}
@@ -732,8 +842,36 @@ const PurchaseInvoiceManagement = () => {
               >
                 <option value="">Select Vendor...</option>
                 {vendorsList.map(v => (
-                  <option key={v.vendor_id || v.vendor_profile_id} value={v.vendor_id || v.vendor_profile_id}>
+                  <option key={v.vendor_profile_id || v.vendor_id} value={v.vendor_profile_id || v.vendor_id}>
                     {v.vendor_name || v.vendor_trade_name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-600 mb-1">Select Pending Invoice *</label>
+              <select
+                value={paymentForm.selected_invoice_id}
+                onChange={(e) => {
+                  const bill = unpaidBills.find(item => String(item.purchase_invoice_id) === e.target.value);
+                  setPaymentForm(prev => ({
+                    ...prev,
+                    selected_invoice_id: e.target.value,
+                    amount: bill ? String(parseFloat(bill.outstanding_amount || 0)) : '',
+                    invoices_to_settle: bill ? [{
+                      purchase_invoice_id: bill.purchase_invoice_id,
+                      amount: parseFloat(bill.outstanding_amount || 0)
+                    }] : []
+                  }));
+                }}
+                className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm bg-slate-50 focus:bg-white focus:outline-none"
+                required
+              >
+                <option value="">Select invoice...</option>
+                {unpaidBills.map(bill => (
+                  <option key={bill.purchase_invoice_id} value={bill.purchase_invoice_id}>
+                    {bill.supplier_invoice_number} - Pending ₹{parseFloat(bill.outstanding_amount || 0).toFixed(2)}
                   </option>
                 ))}
               </select>
@@ -872,6 +1010,10 @@ const PurchaseInvoiceManagement = () => {
                 <div>
                   <span className="text-slate-400">Voucher No:</span>
                   <p className="font-semibold text-slate-800">{selectedInvoice.voucher_number || 'N/A'}</p>
+                </div>
+                <div>
+                  <span className="text-slate-400">GRN Reference:</span>
+                  <p className="font-semibold text-indigo-700">{selectedInvoice.grn_number || 'Manual Bill'}</p>
                 </div>
               </div>
 

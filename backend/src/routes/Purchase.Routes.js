@@ -3,6 +3,7 @@ import {
     createPurchaseInvoice,
     getPurchaseInvoices,
     getPurchaseInvoiceById,
+    getPendingGrns,
     recordVendorPayment,
     getVendorBillOutstanding
 } from '../controllers/Purchase.Controller.js';
@@ -16,6 +17,7 @@ router.use(authenticate);
 router.post('/invoices', createPurchaseInvoice);
 router.get('/invoices', getPurchaseInvoices);
 router.get('/invoices/:id', getPurchaseInvoiceById);
+router.get('/grns/pending', getPendingGrns);
 
 // Vendor Payments & Bill Allocations
 router.post('/payments', recordVendorPayment);

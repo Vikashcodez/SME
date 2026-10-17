@@ -275,6 +275,7 @@ export const sales = {
 export const purchases = {
   getInvoices: (params) => api.get('/purchases/invoices', { params }),
   getInvoiceById: (id) => api.get(`/purchases/invoices/${id}`),
+  getPendingGrns: (params) => api.get('/purchases/grns/pending', { params }),
   createInvoice: (data) => api.post('/purchases/invoices', data),
   recordPayment: (data) => api.post('/purchases/payments', data),
   getVendorBillsDue: (vendorId, params) => api.get(`/purchases/vendors/${vendorId}/outstanding-bills`, { params }),

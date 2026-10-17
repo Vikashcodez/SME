@@ -258,7 +258,7 @@ const GrnManagement = () => {
 
       const res = await grnApi.create(payload);
       if (res.data?.success) {
-        toast.success('GRN recorded and Raw Material Inventory Batches updated successfully!');
+        toast.success('GRN recorded and Raw Material Inventory Batches updated successfully.');
         setShowCreateModal(false);
         // Reset form
         setFormData({

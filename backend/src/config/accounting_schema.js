@@ -582,6 +582,7 @@ export const initAccountingSchema = async (dbPool) => {
                 vendor_id BIGINT NOT NULL REFERENCES vendor_profiles(vendor_profile_id) ON DELETE RESTRICT,
                 purchase_ledger_id BIGINT NOT NULL REFERENCES ledgers(ledger_id) ON DELETE RESTRICT,
                 purchase_order_id BIGINT REFERENCES purchase_orders(purchase_order_id) ON DELETE SET NULL,
+                grn_id BIGINT REFERENCES grns(id) ON DELETE SET NULL,
                 internal_entry_number VARCHAR(100) NOT NULL,
                 supplier_invoice_number VARCHAR(100) NOT NULL,
                 supplier_invoice_date DATE NOT NULL,
@@ -605,7 +606,7 @@ export const initAccountingSchema = async (dbPool) => {
                 created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 CONSTRAINT uq_branch_vendor_invoice_num UNIQUE (branch_id, vendor_id, supplier_invoice_number)
             );
-
+            ALTER TABLE purchase_invoices ADD COLUMN IF NOT EXISTS grn_id BIGINT REFERENCES grns(id) ON DELETE SET NULL;
             CREATE TABLE IF NOT EXISTS purchase_invoice_items (
                 purchase_invoice_item_id BIGSERIAL PRIMARY KEY,
                 purchase_invoice_id BIGINT NOT NULL REFERENCES purchase_invoices(purchase_invoice_id) ON DELETE CASCADE,
