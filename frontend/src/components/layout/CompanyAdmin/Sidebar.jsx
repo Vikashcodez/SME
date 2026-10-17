@@ -33,7 +33,7 @@ const Sidebar = ({ isCollapsed, onToggleCollapse }) => {
       items: [
         { path: '/sales-invoices', label: 'Sales Invoices & Billing' },
         { path: '/purchase-invoices', label: 'Purchase Invoices & Bills' },
-        { path: '/quotations-orders', label: 'Quotations & Orders' },
+        { path: '/quotations-orders', label: 'Quotations' },
         { path: '/receipts-settlement', label: 'Receipts & Payments' },
         { path: '/day-book', label: 'Day Book & Vouchers' },
         { path: '/trial-balance', label: 'Trial Balance & Audit' },

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import {
   sales as salesApi,
@@ -7,31 +7,20 @@ import {
 } from '../../services/api';
 import toast from 'react-hot-toast';
 import {
-  ShoppingCart,
   FileSpreadsheet,
   Plus,
-  Search,
-  Calendar,
-  CheckCircle2,
-  Clock,
   Trash2,
-  X,
-  Eye,
-  FileText
+  X
 } from 'lucide-react';
 
 const SalesOrderManagement = () => {
   const { user } = useAuth();
   const companyId = user?.company_id;
 
-  const [activeTab, setActiveTab] = useState('ORDERS'); // 'ORDERS' or 'QUOTATIONS'
-  const [orders, setOrders] = useState([]);
   const [quotations, setQuotations] = useState([]);
   const [customersList, setCustomersList] = useState([]);
   const [productsList, setProductsList] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [search, setSearch] = useState('');
-
   // Create Modal
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -39,7 +28,6 @@ const SalesOrderManagement = () => {
     customer_id: '',
     date: new Date().toISOString().split('T')[0],
     due_date: new Date(Date.now() + 15 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-    reference: '',
     items: [{ product_id: '', quantity: 1, unit_rate: 0, tax_rate: 18 }]
   });
 
@@ -47,19 +35,17 @@ const SalesOrderManagement = () => {
     if (!companyId) return;
     try {
       setLoading(true);
-      const [ordRes, qtnRes, custRes, prodRes] = await Promise.all([
-        salesApi.getOrders({ company_id: companyId }),
+      const [qtnRes, custRes, prodRes] = await Promise.all([
         salesApi.getQuotations({ company_id: companyId }),
         customersApi.getAll({ company_id: companyId }),
         productsApi.getAll({ company_id: companyId })
       ]);
-      setOrders(ordRes.data.data || []);
       setQuotations(qtnRes.data.data || []);
       setCustomersList(custRes.data.data || []);
       setProductsList(prodRes.data.data || prodRes.data || []);
     } catch (err) {
       console.error(err);
-      toast.error('Failed to load commercial orders');
+      toast.error('Failed to load quotations');
     } finally {
       setLoading(false);
     }
@@ -108,39 +94,26 @@ const SalesOrderManagement = () => {
 
     try {
       setSubmitting(true);
-      if (activeTab === 'ORDERS') {
-        await salesApi.createOrder({
-          company_id: companyId,
-          customer_id: form.customer_id,
-          order_date: form.date,
-          delivery_due_date: form.due_date,
-          customer_po_reference: form.reference,
-          items: form.items
-        });
-        toast.success('Sales Order created successfully!');
-      } else {
-        await salesApi.createQuotation({
-          company_id: companyId,
-          customer_id: form.customer_id,
-          quotation_date: form.date,
-          valid_until: form.due_date,
-          items: form.items.map(it => ({ ...it, quoted_rate: it.unit_rate }))
-        });
-        toast.success('Quotation created successfully!');
-      }
+      await salesApi.createQuotation({
+        company_id: companyId,
+        customer_id: form.customer_id,
+        quotation_date: form.date,
+        valid_until: form.due_date,
+        items: form.items.map(it => ({ ...it, quoted_rate: it.unit_rate }))
+      });
+      toast.success('Quotation created successfully!');
 
       setIsModalOpen(false);
       setForm({
         customer_id: '',
         date: new Date().toISOString().split('T')[0],
         due_date: new Date(Date.now() + 15 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-        reference: '',
         items: [{ product_id: '', quantity: 1, unit_rate: 0, tax_rate: 18 }]
       });
       fetchData();
     } catch (err) {
       console.error(err);
-      toast.error(err.response?.data?.message || 'Error creating document');
+      toast.error(err.response?.data?.message || 'Error creating quotation');
     } finally {
       setSubmitting(false);
     }
@@ -153,12 +126,12 @@ const SalesOrderManagement = () => {
         <div>
           <div className="flex items-center gap-2">
             <span className="p-2 bg-indigo-50 text-indigo-600 rounded-xl">
-              <ShoppingCart className="w-6 h-6" />
+              <FileSpreadsheet className="w-6 h-6" />
             </span>
-            <h1 className="text-2xl font-bold text-slate-900">Quotations & Sales Orders</h1>
+            <h1 className="text-2xl font-bold text-slate-900">Quotation Management</h1>
           </div>
           <p className="text-sm text-slate-500 mt-1">
-            Commercial pipeline management from initial Price Estimates to confirmed Sales Orders.
+            Create and manage customer quotations.
           </p>
         </div>
 
@@ -167,33 +140,7 @@ const SalesOrderManagement = () => {
           className="inline-flex items-center justify-center gap-2 px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-medium text-sm rounded-xl transition shadow-sm"
         >
           <Plus className="w-4 h-4" />
-          {activeTab === 'ORDERS' ? 'New Sales Order' : 'New Quotation'}
-        </button>
-      </div>
-
-      {/* Tabs */}
-      <div className="flex items-center gap-3 border-b border-slate-200">
-        <button
-          onClick={() => setActiveTab('ORDERS')}
-          className={`pb-3 text-sm font-bold flex items-center gap-2 border-b-2 transition ${
-            activeTab === 'ORDERS'
-              ? 'border-indigo-600 text-indigo-600'
-              : 'border-transparent text-slate-500 hover:text-slate-700'
-          }`}
-        >
-          <ShoppingCart className="w-4 h-4" />
-          Sales Orders ({orders.length})
-        </button>
-        <button
-          onClick={() => setActiveTab('QUOTATIONS')}
-          className={`pb-3 text-sm font-bold flex items-center gap-2 border-b-2 transition ${
-            activeTab === 'QUOTATIONS'
-              ? 'border-indigo-600 text-indigo-600'
-              : 'border-transparent text-slate-500 hover:text-slate-700'
-          }`}
-        >
-          <FileSpreadsheet className="w-4 h-4" />
-          Quotations / Estimates ({quotations.length})
+          New Quotation
         </button>
       </div>
 
@@ -216,20 +163,20 @@ const SalesOrderManagement = () => {
                 <tr>
                   <td colSpan={6} className="text-center py-12 text-slate-400">Loading...</td>
                 </tr>
-              ) : (activeTab === 'ORDERS' ? orders : quotations).length === 0 ? (
+              ) : quotations.length === 0 ? (
                 <tr>
                   <td colSpan={6} className="text-center py-12 text-slate-400">
-                    No {activeTab === 'ORDERS' ? 'sales orders' : 'quotations'} found. Click button above to create one.
+                    No quotations found. Click the button above to create one.
                   </td>
                 </tr>
               ) : (
-                (activeTab === 'ORDERS' ? orders : quotations).map((item) => (
-                  <tr key={item.sales_order_id || item.quotation_id} className="hover:bg-slate-50/50 transition">
+                quotations.map((item) => (
+                  <tr key={item.quotation_id} className="hover:bg-slate-50/50 transition">
                     <td className="px-6 py-4 font-mono font-semibold text-slate-900">
-                      {item.order_number || item.quotation_number}
+                      {item.quotation_number}
                     </td>
                     <td className="px-6 py-4 text-xs text-slate-500">
-                      {new Date(item.order_date || item.quotation_date).toLocaleDateString()}
+                      {new Date(item.quotation_date).toLocaleDateString()}
                     </td>
                     <td className="px-6 py-4 font-medium text-slate-800">
                       {item.customer_name}
@@ -253,13 +200,13 @@ const SalesOrderManagement = () => {
         </div>
       </div>
 
-      {/* Create Order / Quotation Modal */}
+      {/* Create Quotation Modal */}
       {isModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-3xl overflow-hidden border border-slate-200">
             <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200 bg-slate-50/50">
               <h2 className="text-lg font-bold text-slate-900">
-                Create New {activeTab === 'ORDERS' ? 'Sales Order' : 'Quotation'}
+                Create New Quotation
               </h2>
               <button onClick={() => setIsModalOpen(false)} className="p-1 text-slate-400 hover:text-slate-600 rounded-lg">
                 <X className="w-5 h-5" />
@@ -296,7 +243,7 @@ const SalesOrderManagement = () => {
 
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1">
-                    {activeTab === 'ORDERS' ? 'Delivery Due Date' : 'Valid Until Date'}
+                    Valid Until Date
                   </label>
                   <input
                     type="date"
@@ -409,7 +356,7 @@ const SalesOrderManagement = () => {
                   disabled={submitting}
                   className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-medium text-sm rounded-xl transition shadow-sm disabled:opacity-50"
                 >
-                  {submitting ? 'Creating...' : `Create ${activeTab === 'ORDERS' ? 'Sales Order' : 'Quotation'}`}
+                  {submitting ? 'Creating...' : 'Create Quotation'}
                 </button>
               </div>
             </form>
