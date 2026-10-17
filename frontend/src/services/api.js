@@ -267,6 +267,7 @@ export const sales = {
   recordReceipt: (data) => api.post('/sales/receipts', data),
   getQuotations: (params) => api.get('/sales/quotations', { params }),
   createQuotation: (data) => api.post('/sales/quotations', data),
+  convertQuotationToOrder: (id) => api.post(`/sales/quotations/${id}/convert-to-order`),
   getOrders: (params) => api.get('/sales/orders', { params }),
   createOrder: (data) => api.post('/sales/orders', data),
 };

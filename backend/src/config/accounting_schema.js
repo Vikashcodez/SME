@@ -435,6 +435,7 @@ export const initAccountingSchema = async (dbPool) => {
                 invoice_date DATE NOT NULL,
                 due_date DATE NOT NULL CHECK (due_date >= invoice_date),
                 sales_order_id BIGINT REFERENCES sales_orders(sales_order_id) ON DELETE SET NULL,
+                quotation_id BIGINT REFERENCES quotations(quotation_id) ON DELETE SET NULL,
                 delivery_note_id BIGINT REFERENCES delivery_notes(delivery_note_id) ON DELETE SET NULL,
                 invoice_type VARCHAR(30) NOT NULL DEFAULT 'TAX_INVOICE' CHECK (invoice_type IN ('TAX_INVOICE', 'BILL_OF_SUPPLY', 'EXPORT_INVOICE', 'SEZ_INVOICE', 'PROFORMA')),
                 place_of_supply_state_code VARCHAR(2) NOT NULL,
@@ -459,6 +460,7 @@ export const initAccountingSchema = async (dbPool) => {
                 updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 CONSTRAINT uq_branch_sales_invoice_num UNIQUE (branch_id, invoice_number)
             );
+            ALTER TABLE sales_invoices ADD COLUMN IF NOT EXISTS quotation_id BIGINT REFERENCES quotations(quotation_id) ON DELETE SET NULL;
             CREATE INDEX IF NOT EXISTS idx_sales_invoices_cust ON sales_invoices(customer_id);
             CREATE INDEX IF NOT EXISTS idx_sales_invoices_date ON sales_invoices(invoice_date);
 

@@ -20,13 +20,15 @@ export const createSalesInvoice = async (req, res) => {
         await client.query('BEGIN');
 
         const {
-            customer_id,
+            customer_id: requestCustomerId,
             invoice_date = new Date().toISOString().split('T')[0],
             due_date,
-            items = [], // [{ product_id, quantity, unit_rate, discount_percentage }]
+            items: requestItems = [], // [{ product_id, quantity, unit_rate, discount_percentage }]
             freight_charges = 0,
             other_charges = 0,
             sales_order_id = null,
+            quotation_id = null,
+            quotation_edit_mode = false,
             terms_and_conditions,
             invoice_type = 'TAX_INVOICE'
         } = req.body;
@@ -34,6 +36,43 @@ export const createSalesInvoice = async (req, res) => {
         const companyId = req.body.company_id || req.user?.company_id;
         const branchId = req.body.branch_id || req.user?.branch_id || null;
         const createdBy = req.user?.employee_id || null;
+        let customer_id = requestCustomerId;
+        let items = requestItems;
+        let quotation = null;
+
+        if (quotation_id) {
+            const quotationRes = await client.query(`
+                SELECT * FROM quotations
+                WHERE quotation_id = $1 AND company_id = $2
+                FOR UPDATE
+            `, [quotation_id, companyId]);
+            if (quotationRes.rows.length === 0) {
+                throw new Error('Quotation not found.');
+            }
+            quotation = quotationRes.rows[0];
+            if (quotation.status !== 'DRAFT') {
+                throw new Error(`Quotation cannot be invoiced from status ${quotation.status}.`);
+            }
+
+            const existingInvoice = await client.query(
+                `SELECT sales_invoice_id FROM sales_invoices WHERE quotation_id = $1 LIMIT 1`,
+                [quotation_id]
+            );
+            if (existingInvoice.rows.length > 0) {
+                throw new Error('This quotation is already converted to a sales invoice.');
+            }
+
+            customer_id = quotation.customer_id;
+            if (!quotation_edit_mode) {
+                const quotationItems = await client.query(
+                    `SELECT product_id, quantity, quoted_rate AS unit_rate, discount_percentage, tax_rate,
+                            taxable_amount, cgst_amount, sgst_amount, igst_amount, total_amount
+                     FROM quotation_items WHERE quotation_id = $1 ORDER BY line_number`,
+                    [quotation_id]
+                );
+                items = quotationItems.rows;
+            }
+        }
 
         if (!companyId || !customer_id || items.length === 0) {
             await client.query('ROLLBACK');
@@ -90,14 +129,23 @@ export const createSalesInvoice = async (req, res) => {
 
             const gross = qty * rate;
             const discAmt = +(gross * (discPct / 100)).toFixed(2);
-            const taxable = +(gross - discAmt).toFixed(2);
+            const taxable = quotation && !quotation_edit_mode
+                ? parseFloat(item.taxable_amount || 0)
+                : +(gross - discAmt).toFixed(2);
 
             // Default GST tax rate from product or 18%
             const gstRate = parseFloat(item.tax_rate !== undefined ? item.tax_rate : (product.gst_rate || 18));
             let cgstRate = 0, sgstRate = 0, igstRate = 0;
             let cgstAmt = 0, sgstAmt = 0, igstAmt = 0;
 
-            if (isIntraState) {
+            if (quotation && !quotation_edit_mode) {
+                cgstRate = taxable ? +((parseFloat(item.cgst_amount || 0) / taxable) * 100).toFixed(2) : 0;
+                sgstRate = taxable ? +((parseFloat(item.sgst_amount || 0) / taxable) * 100).toFixed(2) : 0;
+                igstRate = taxable ? +((parseFloat(item.igst_amount || 0) / taxable) * 100).toFixed(2) : 0;
+                cgstAmt = parseFloat(item.cgst_amount || 0);
+                sgstAmt = parseFloat(item.sgst_amount || 0);
+                igstAmt = parseFloat(item.igst_amount || 0);
+            } else if (isIntraState) {
                 cgstRate = +(gstRate / 2).toFixed(2);
                 sgstRate = +(gstRate / 2).toFixed(2);
                 cgstAmt = +(taxable * (cgstRate / 100)).toFixed(2);
@@ -107,7 +155,9 @@ export const createSalesInvoice = async (req, res) => {
                 igstAmt = +(taxable * (igstRate / 100)).toFixed(2);
             }
 
-            const itemTotal = +(taxable + cgstAmt + sgstAmt + igstAmt).toFixed(2);
+            const itemTotal = quotation && !quotation_edit_mode && item.total_amount !== undefined
+                ? parseFloat(item.total_amount)
+                : +(taxable + cgstAmt + sgstAmt + igstAmt).toFixed(2);
 
             totalTaxable += taxable;
             totalDiscount += discAmt;
@@ -138,8 +188,12 @@ export const createSalesInvoice = async (req, res) => {
         const freight = parseFloat(freight_charges) || 0;
         const other = parseFloat(other_charges) || 0;
         const subtotal = totalTaxable + totalCgst + totalSgst + totalIgst + freight + other;
-        const roundedTotal = Math.round(subtotal);
-        const roundOff = +(roundedTotal - subtotal).toFixed(2);
+        const roundedTotal = quotation && !quotation_edit_mode
+            ? parseFloat(quotation.net_amount)
+            : Math.round(subtotal);
+        const roundOff = quotation && !quotation_edit_mode
+            ? +(roundedTotal - subtotal).toFixed(2)
+            : +(roundedTotal - subtotal).toFixed(2);
 
         // Fetch / Ensure General Sales Ledger
         const salesLedRes = await client.query(
@@ -168,7 +222,7 @@ export const createSalesInvoice = async (req, res) => {
         const invRes = await client.query(`
             INSERT INTO sales_invoices (
                 company_id, branch_id, customer_id, sales_ledger_id,
-                invoice_number, invoice_date, due_date, sales_order_id,
+                invoice_number, invoice_date, due_date, sales_order_id, quotation_id,
                 invoice_type, place_of_supply_state_code, currency_code,
                 total_taxable_amount, total_discount_amount,
                 total_cgst_amount, total_sgst_amount, total_igst_amount,
@@ -176,16 +230,16 @@ export const createSalesInvoice = async (req, res) => {
                 paid_amount, outstanding_amount, payment_status, status, created_by
             ) VALUES (
                 $1, $2, $3, $4,
-                $5, $6, $7, $8,
-                $9, $10, 'INR',
-                $11, $12,
-                $13, $14, $15,
-                $16, $17, $18, $19,
-                0.00, $19, 'UNPAID', 'POSTED', $20
+                $5, $6, $7, $8, $9,
+                $10, $11, 'INR',
+                $12, $13,
+                $14, $15, $16,
+                $17, $18, $19, $20,
+                0.00, $20, 'UNPAID', 'POSTED', $21
             ) RETURNING *
         `, [
             companyId, branchId, customer_id, salesLedgerId,
-            invoiceNumber, invoice_date, calculatedDueDate, sales_order_id,
+            invoiceNumber, invoice_date, calculatedDueDate, sales_order_id, quotation_id,
             invoice_type, customerStateCode,
             totalTaxable, totalDiscount,
             totalCgst, totalSgst, totalIgst,
@@ -364,6 +418,13 @@ export const createSalesInvoice = async (req, res) => {
             SET accounting_voucher_id = $1 
             WHERE sales_invoice_id = $2
         `, [voucher.voucher_id, invoice.sales_invoice_id]);
+
+        if (quotation_id) {
+            await client.query(
+                `UPDATE quotations SET status = 'CONVERTED', updated_at = CURRENT_TIMESTAMP WHERE quotation_id = $1`,
+                [quotation_id]
+            );
+        }
 
         await client.query('COMMIT');
 
@@ -683,10 +744,16 @@ export const getQuotations = async (req, res) => {
     try {
         const companyId = req.query.company_id || req.user?.company_id;
         const result = await pool.query(`
-            SELECT q.*, cp.trade_name AS customer_name, cp.phone
+            SELECT q.*, cp.trade_name AS customer_name, cp.phone,
+                   COALESCE(
+                       json_agg(qi ORDER BY qi.line_number) FILTER (WHERE qi.quotation_item_id IS NOT NULL),
+                       '[]'::json
+                   ) AS items
             FROM quotations q
             JOIN customer_profiles cp ON q.customer_id = cp.customer_id
+            LEFT JOIN quotation_items qi ON qi.quotation_id = q.quotation_id
             WHERE q.company_id = $1
+            GROUP BY q.quotation_id, cp.trade_name, cp.phone
             ORDER BY q.quotation_date DESC, q.quotation_id DESC
         `, [companyId]);
         return res.json({ success: true, data: result.rows });

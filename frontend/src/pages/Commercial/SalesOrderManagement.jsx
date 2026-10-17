@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import {
   sales as salesApi,
@@ -54,6 +54,11 @@ const SalesOrderManagement = () => {
   useEffect(() => {
     fetchData();
   }, [companyId]);
+
+  const availableQuotations = useMemo(
+    () => quotations.filter(quotation => quotation.status === 'DRAFT'),
+    [quotations]
+  );
 
   const updateItemRow = (index, field, value) => {
     const updated = [...form.items];
@@ -163,14 +168,14 @@ const SalesOrderManagement = () => {
                 <tr>
                   <td colSpan={6} className="text-center py-12 text-slate-400">Loading...</td>
                 </tr>
-              ) : quotations.length === 0 ? (
+              ) : availableQuotations.length === 0 ? (
                 <tr>
                   <td colSpan={6} className="text-center py-12 text-slate-400">
-                    No quotations found. Click the button above to create one.
+                    No unconverted quotations found for the selected customer.
                   </td>
                 </tr>
               ) : (
-                quotations.map((item) => (
+                availableQuotations.map((item) => (
                   <tr key={item.quotation_id} className="hover:bg-slate-50/50 transition">
                     <td className="px-6 py-4 font-mono font-semibold text-slate-900">
                       {item.quotation_number}
@@ -189,7 +194,7 @@ const SalesOrderManagement = () => {
                     </td>
                     <td className="px-6 py-4">
                       <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-indigo-50 text-indigo-700">
-                        {item.status}
+                        CREATED
                       </span>
                     </td>
                   </tr>

@@ -32,6 +32,7 @@ const SalesInvoiceManagement = () => {
   const [invoices, setInvoices] = useState([]);
   const [customersList, setCustomersList] = useState([]);
   const [productsList, setProductsList] = useState([]);
+  const [quotations, setQuotations] = useState([]);
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
@@ -50,7 +51,9 @@ const SalesInvoiceManagement = () => {
     other_charges: 0,
     items: [
       { product_id: '', quantity: 1, unit_rate: 0, discount_percentage: 0, tax_rate: 18 }
-    ]
+    ],
+    quotation_id: '',
+    quotation_edit_mode: false
   };
   const [form, setForm] = useState(initialForm);
 
@@ -71,12 +74,14 @@ const SalesInvoiceManagement = () => {
   const fetchDropdowns = async () => {
     if (!companyId) return;
     try {
-      const [cRes, pRes] = await Promise.all([
+      const [cRes, pRes, qRes] = await Promise.all([
         customersApi.getAll({ company_id: companyId, status: true }),
-        productsApi.getAll({ company_id: companyId })
+        productsApi.getAll({ company_id: companyId }),
+        salesApi.getQuotations({ company_id: companyId })
       ]);
       setCustomersList(cRes.data.data || []);
       setProductsList(pRes.data.data || pRes.data || []);
+      setQuotations(qRes.data.data || []);
     } catch (err) {
       console.error(err);
     }
@@ -91,6 +96,52 @@ const SalesInvoiceManagement = () => {
   const selectedCustomer = useMemo(() => {
     return customersList.find(c => String(c.customer_id) === String(form.customer_id));
   }, [form.customer_id, customersList]);
+
+  const availableQuotations = useMemo(
+    () => quotations.filter(quotation => quotation.status === 'DRAFT'),
+    [quotations]
+  );
+
+  const selectedQuotation = useMemo(
+    () => availableQuotations.find(
+      quotation => String(quotation.quotation_id) === String(form.quotation_id)
+    ),
+    [availableQuotations, form.quotation_id]
+  );
+
+  const quotationSelected = Boolean(selectedQuotation);
+  const quotationEditMode = quotationSelected && form.quotation_edit_mode;
+
+  const selectQuotation = (quotationId) => {
+    const quotation = availableQuotations.find(
+      item => String(item.quotation_id) === String(quotationId)
+    );
+
+    if (!quotation) {
+      setForm({
+        ...form,
+        quotation_id: '',
+        quotation_edit_mode: false
+      });
+      return;
+    }
+
+    setForm({
+      ...form,
+      quotation_id: quotationId,
+      quotation_edit_mode: false,
+      customer_id: String(quotation.customer_id),
+      items: (quotation.items || []).map(item => ({
+        product_id: String(item.product_id),
+        quantity: item.quantity,
+        unit_rate: item.quoted_rate,
+        discount_percentage: item.discount_percentage || 0,
+        tax_rate: item.tax_rate
+      })),
+      freight_charges: 0,
+      other_charges: 0
+    });
+  };
 
   // Handle Item Row Change
   const updateItemRow = (index, field, value) => {
@@ -130,6 +181,18 @@ const SalesInvoiceManagement = () => {
     let sgst = 0;
     let igst = 0;
 
+    if (selectedQuotation && !quotationEditMode) {
+      return {
+        taxable: parseFloat(selectedQuotation.total_taxable_amount || 0),
+        cgst: (selectedQuotation.items || []).reduce((sum, item) => sum + parseFloat(item.cgst_amount || 0), 0),
+        sgst: (selectedQuotation.items || []).reduce((sum, item) => sum + parseFloat(item.sgst_amount || 0), 0),
+        igst: (selectedQuotation.items || []).reduce((sum, item) => sum + parseFloat(item.igst_amount || 0), 0),
+        roundOff: 0,
+        total: parseFloat(selectedQuotation.net_amount || 0),
+        isIntraState: selectedCustomer ? selectedCustomer.billing_state_code === '27' : true
+      };
+    }
+
     const isIntraState = selectedCustomer ? selectedCustomer.billing_state_code === '27' : true;
 
     form.items.forEach(it => {
@@ -165,7 +228,7 @@ const SalesInvoiceManagement = () => {
       total: rounded,
       isIntraState
     };
-  }, [form.items, form.freight_charges, form.other_charges, selectedCustomer]);
+  }, [form.items, form.freight_charges, form.other_charges, selectedCustomer, selectedQuotation, quotationEditMode]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -173,7 +236,7 @@ const SalesInvoiceManagement = () => {
       toast.error('Please select a Customer');
       return;
     }
-    if (form.items.some(it => !it.product_id || parseFloat(it.quantity) <= 0)) {
+    if (!form.quotation_id && form.items.some(it => !it.product_id || parseFloat(it.quantity) <= 0)) {
       toast.error('All line items must have a Product and valid Quantity');
       return;
     }
@@ -188,7 +251,7 @@ const SalesInvoiceManagement = () => {
       toast.success('Tax Invoice & Double-Entry Voucher posted successfully!');
       setIsCreateOpen(false);
       setForm(initialForm);
-      fetchInvoices();
+      await Promise.all([fetchInvoices(), fetchDropdowns()]);
     } catch (err) {
       console.error(err);
       toast.error(err.response?.data?.message || 'Failed to create sales invoice');
@@ -381,6 +444,38 @@ const SalesInvoiceManagement = () => {
 
             <form onSubmit={handleSubmit} className="p-6 space-y-6 max-h-[80vh] overflow-y-auto">
               {/* Header Info */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Take From Quotation (Optional)
+                </label>
+                <select
+                  value={form.quotation_id}
+                  onChange={(e) => selectQuotation(e.target.value)}
+                  className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500/20"
+                >
+                  <option value="">Create invoice manually</option>
+                  {availableQuotations.map(quotation => (
+                    <option key={quotation.quotation_id} value={quotation.quotation_id}>
+                      {quotation.quotation_number} - {quotation.customer_name} - ₹{parseFloat(quotation.net_amount || 0).toFixed(2)}
+                    </option>
+                  ))}
+                </select>
+                {selectedQuotation && (
+                  <div className="flex items-center justify-between gap-3 mt-1">
+                    <p className="text-[11px] text-slate-500">
+                      Quotation values are loaded automatically and locked by default.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => setForm({ ...form, quotation_edit_mode: !form.quotation_edit_mode })}
+                      className="text-[11px] font-semibold text-indigo-600 hover:text-indigo-700 whitespace-nowrap"
+                    >
+                      {form.quotation_edit_mode ? 'Lock Quotation Values' : 'Edit Invoice'}
+                    </button>
+                  </div>
+                )}
+              </div>
+
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1">Customer *</label>
@@ -388,6 +483,7 @@ const SalesInvoiceManagement = () => {
                     required
                     value={form.customer_id}
                     onChange={(e) => setForm({ ...form, customer_id: e.target.value })}
+                    disabled={quotationSelected && !quotationEditMode}
                     className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500/20"
                   >
                     <option value="">Select Customer...</option>
@@ -434,6 +530,7 @@ const SalesInvoiceManagement = () => {
                   <button
                     type="button"
                     onClick={addItemRow}
+                    disabled={quotationSelected && !quotationEditMode}
                     className="text-xs text-indigo-600 hover:text-indigo-700 font-semibold flex items-center gap-1"
                   >
                     <Plus className="w-3.5 h-3.5" /> Add Item
@@ -460,7 +557,9 @@ const SalesInvoiceManagement = () => {
                         const disc = parseFloat(row.discount_percentage) || 0;
                         const taxable = (qty * rate) * (1 - disc / 100);
                         const tax = taxable * ((parseFloat(row.tax_rate) || 18) / 100);
-                        const rowTotal = taxable + tax;
+                        const rowTotal = quotationSelected && !quotationEditMode
+                          ? parseFloat((selectedQuotation.items || [])[idx]?.total_amount || 0)
+                          : taxable + tax;
 
                         return (
                           <tr key={idx} className="hover:bg-slate-50/50">
@@ -469,6 +568,7 @@ const SalesInvoiceManagement = () => {
                                 required
                                 value={row.product_id}
                                 onChange={(e) => updateItemRow(idx, 'product_id', e.target.value)}
+                                disabled={quotationSelected && !quotationEditMode}
                                 className="w-full px-2 py-1.5 bg-white border border-slate-200 rounded-lg focus:ring-1 focus:ring-indigo-500"
                               >
                                 <option value="">Select Finished Product...</option>
@@ -486,6 +586,7 @@ const SalesInvoiceManagement = () => {
                                 step="any"
                                 value={row.quantity}
                                 onChange={(e) => updateItemRow(idx, 'quantity', e.target.value)}
+                                readOnly={quotationSelected && !quotationEditMode}
                                 className="w-full px-2 py-1.5 bg-white border border-slate-200 rounded-lg text-right"
                               />
                             </td>
@@ -496,6 +597,7 @@ const SalesInvoiceManagement = () => {
                                 step="0.01"
                                 value={row.unit_rate}
                                 onChange={(e) => updateItemRow(idx, 'unit_rate', e.target.value)}
+                                readOnly={quotationSelected && !quotationEditMode}
                                 className="w-full px-2 py-1.5 bg-white border border-slate-200 rounded-lg text-right font-mono"
                               />
                             </td>
@@ -506,6 +608,7 @@ const SalesInvoiceManagement = () => {
                                 max="100"
                                 value={row.discount_percentage}
                                 onChange={(e) => updateItemRow(idx, 'discount_percentage', e.target.value)}
+                                readOnly={quotationSelected && !quotationEditMode}
                                 className="w-full px-2 py-1.5 bg-white border border-slate-200 rounded-lg text-right"
                               />
                             </td>
@@ -513,6 +616,7 @@ const SalesInvoiceManagement = () => {
                               <select
                                 value={row.tax_rate}
                                 onChange={(e) => updateItemRow(idx, 'tax_rate', e.target.value)}
+                                disabled={quotationSelected && !quotationEditMode}
                                 className="w-full px-2 py-1.5 bg-white border border-slate-200 rounded-lg"
                               >
                                 <option value="0">0%</option>
@@ -526,7 +630,7 @@ const SalesInvoiceManagement = () => {
                               ₹{rowTotal.toFixed(2)}
                             </td>
                             <td className="p-2 text-center">
-                              {form.items.length > 1 && (
+                              {form.items.length > 1 && (!quotationSelected || quotationEditMode) && (
                                 <button
                                   type="button"
                                   onClick={() => removeItemRow(idx)}
