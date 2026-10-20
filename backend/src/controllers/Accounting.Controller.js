@@ -781,8 +781,10 @@ export const getDayBook = async (req, res) => {
 export const getProfitAndLoss = async (req, res) => {
     try {
         const companyId = req.query.company_id || req.user?.company_id;
-        const fromDate = req.query.from_date || `${new Date().getFullYear()}-04-01`;
-        const toDate = req.query.to_date || new Date().toISOString().split('T')[0];
+        const today = new Date();
+        const fiscalYearStart = today.getMonth() >= 3 ? today.getFullYear() : today.getFullYear() - 1;
+        const fromDate = req.query.from_date || `${fiscalYearStart}-04-01`;
+        const toDate = req.query.to_date || today.toISOString().split('T')[0];
 
         // 1. Calculate Real-Time Closing Stock Valuation
         const rawStockValRes = await pool.query(`
@@ -966,7 +968,29 @@ export const getBalanceSheet = async (req, res) => {
                 netExpenseFromOps = (parseFloat(row.total_dr) || 0) - (parseFloat(row.total_cr) || 0);
             }
         }
-        const currentPeriodNetProfit = +(netIncomeFromOps - netExpenseFromOps).toFixed(2);
+        // Purchases are posted to expense ledgers while stock is maintained in
+        // inventory tables, so closing stock must be brought into current P&L.
+        const closingRawRes = await pool.query(`
+            SELECT COALESCE(SUM(available_quantity * unit_cost), 0)::NUMERIC(16,2) AS val
+            FROM raw_material_inventory
+            WHERE company_id = $1 AND available_quantity > 0
+        `, [companyId]);
+        const closingFgRes = await pool.query(`
+            SELECT COALESCE(SUM(available_quantity * unit_cost), 0)::NUMERIC(16,2) AS val
+            FROM product_inventory
+            WHERE company_id = $1 AND available_quantity > 0
+        `, [companyId]);
+        const closingStock = (parseFloat(closingRawRes.rows[0]?.val || 0) || 0) +
+            (parseFloat(closingFgRes.rows[0]?.val || 0) || 0);
+        const openingStockRes = await pool.query(`
+            SELECT COALESCE(SUM(opening_balance), 0)::NUMERIC(16,2) AS val
+            FROM ledgers l
+            JOIN account_groups ag ON l.group_id = ag.group_id
+            WHERE l.company_id = $1
+              AND (ag.group_code = 'GRP-STOCK' OR ag.group_code = 'STOCK_IN_HAND')
+        `, [companyId]);
+        const openingStock = parseFloat(openingStockRes.rows[0]?.val || 0) || 0;
+        const currentPeriodNetProfit = +(netIncomeFromOps - netExpenseFromOps + closingStock - openingStock).toFixed(2);
 
         // 2. Fetch Assets & Liabilities Ledgers with running balances
         const balLedgersRes = await pool.query(`
@@ -1041,11 +1065,25 @@ export const getBalanceSheet = async (req, res) => {
             const netDr = opBal + dr - cr;
             const netCr = -netDr;
 
+            const taxInputLedger = l.ledger_code?.startsWith('LED-TAX-IN-');
+
             if (l.nature === 'EQUITY') {
                 const amt = netCr;
                 liabilities.capital_and_reserves.total += amt;
                 liabilities.capital_and_reserves.ledgers.push({ ...l, amount: amt.toFixed(2) });
             } else if (l.nature === 'LIABILITY') {
+                if (netCr < 0 && taxInputLedger) {
+                    const inputTaxAsset = Math.abs(netCr);
+                    assets.current_assets.other_assets.total += inputTaxAsset;
+                    assets.current_assets.other_assets.ledgers.push({ ...l, amount: inputTaxAsset.toFixed(2), classification: 'DEBIT_BALANCE' });
+                    continue;
+                }
+                if (netCr < 0) {
+                    const debitBalance = Math.abs(netCr);
+                    assets.current_assets.other_assets.total += debitBalance;
+                    assets.current_assets.other_assets.ledgers.push({ ...l, amount: debitBalance.toFixed(2), classification: 'DEBIT_BALANCE' });
+                    continue;
+                }
                 if (l.group_code === 'GRP-LOAN') {
                     liabilities.loans_and_borrowings.total += netCr;
                     liabilities.loans_and_borrowings.ledgers.push({ ...l, amount: netCr.toFixed(2) });
@@ -1060,6 +1098,12 @@ export const getBalanceSheet = async (req, res) => {
                     liabilities.current_liabilities.other_liabilities.ledgers.push({ ...l, amount: netCr.toFixed(2) });
                 }
             } else if (l.nature === 'ASSET') {
+                if (netDr < 0) {
+                    const overdraft = Math.abs(netDr);
+                    liabilities.current_liabilities.other_liabilities.total += overdraft;
+                    liabilities.current_liabilities.other_liabilities.ledgers.push({ ...l, amount: overdraft.toFixed(2), classification: 'CREDIT_BALANCE' });
+                    continue;
+                }
                 if (l.group_code === 'GRP-FA') {
                     assets.fixed_assets.total += netDr;
                     assets.fixed_assets.ledgers.push({ ...l, amount: netDr.toFixed(2) });
@@ -1077,6 +1121,9 @@ export const getBalanceSheet = async (req, res) => {
                     assets.current_assets.bank_accounts.ledgers.push({ ...l, amount: netDr.toFixed(2) });
                 } else if (l.group_code === 'GRP-STOCK') {
                     // Physical stock valuation reflects real-time stock
+                } else if (taxInputLedger) {
+                    assets.current_assets.other_assets.total += netDr;
+                    assets.current_assets.other_assets.ledgers.push({ ...l, amount: netDr.toFixed(2) });
                 } else {
                     assets.current_assets.other_assets.total += netDr;
                     assets.current_assets.other_assets.ledgers.push({ ...l, amount: netDr.toFixed(2) });
@@ -1136,7 +1183,7 @@ export const getBalanceSheet = async (req, res) => {
                     total_liabilities: liabilities.total.toFixed(2),
                     total_assets: assets.total.toFixed(2),
                     difference: diff.toFixed(2),
-                    is_balanced: diff < 1.0,
+                    is_balanced: diff < 0.05,
                     working_capital: workingCapital.toFixed(2)
                 }
             }
@@ -1151,8 +1198,10 @@ export const getBalanceSheet = async (req, res) => {
 export const getExpenseStatement = async (req, res) => {
     try {
         const companyId = req.query.company_id || req.user?.company_id;
-        const fromDate = req.query.from_date || `${new Date().getFullYear()}-04-01`;
-        const toDate = req.query.to_date || new Date().toISOString().split('T')[0];
+        const today = new Date();
+        const fiscalYearStart = today.getMonth() >= 3 ? today.getFullYear() : today.getFullYear() - 1;
+        const fromDate = req.query.from_date || `${fiscalYearStart}-04-01`;
+        const toDate = req.query.to_date || today.toISOString().split('T')[0];
 
         const expensesRes = await pool.query(`
             SELECT 
