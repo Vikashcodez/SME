@@ -1,4 +1,5 @@
 import pool from '../config/database.js';
+import { applyLedgerBalance } from '../services/AccountingPosting.js';
 
 export const getPendingGrns = async (req, res) => {
     try {
@@ -369,10 +370,7 @@ export const createPurchaseInvoice = async (req, res) => {
         `, [vendVl.rows[0].line_id, vendorProfile.ledger_id, supplier_invoice_number, roundedTotal, calculatedDueDate]);
 
         // Increment Vendor Current Balance (Credit increases liability)
-        await client.query(`
-            UPDATE ledgers SET current_balance = current_balance + $1, updated_at = CURRENT_TIMESTAMP
-            WHERE ledger_id = $2
-        `, [roundedTotal, vendorProfile.ledger_id]);
+        await applyLedgerBalance(client, companyId, vendorProfile.ledger_id, 0, roundedTotal);
 
         // Line 2: DEBIT Purchase Ledger
         await client.query(`
@@ -381,10 +379,7 @@ export const createPurchaseInvoice = async (req, res) => {
             ) VALUES ($1, $2, $3, $4, 0.00, 'Purchase Cost')
         `, [voucher.voucher_id, lineNo++, purchaseLedgerId, totalTaxable]);
 
-        await client.query(`
-            UPDATE ledgers SET current_balance = current_balance + $1, updated_at = CURRENT_TIMESTAMP
-            WHERE ledger_id = $2
-        `, [totalTaxable, purchaseLedgerId]);
+        await applyLedgerBalance(client, companyId, purchaseLedgerId, totalTaxable, 0);
 
         // Line 3: DEBIT CGST Input
         if (totalCgst > 0) {
@@ -394,7 +389,7 @@ export const createPurchaseInvoice = async (req, res) => {
                     voucher_id, line_number, ledger_id, debit_amount, credit_amount, narration
                 ) VALUES ($1, $2, $3, $4, 0.00, 'CGST Input Tax Credit')
             `, [voucher.voucher_id, lineNo++, cgstLedId, totalCgst]);
-            await client.query(`UPDATE ledgers SET current_balance = current_balance + $1 WHERE ledger_id = $2`, [totalCgst, cgstLedId]);
+            await applyLedgerBalance(client, companyId, cgstLedId, totalCgst, 0);
         }
 
         // Line 4: DEBIT SGST Input
@@ -405,7 +400,7 @@ export const createPurchaseInvoice = async (req, res) => {
                     voucher_id, line_number, ledger_id, debit_amount, credit_amount, narration
                 ) VALUES ($1, $2, $3, $4, 0.00, 'SGST Input Tax Credit')
             `, [voucher.voucher_id, lineNo++, sgstLedId, totalSgst]);
-            await client.query(`UPDATE ledgers SET current_balance = current_balance + $1 WHERE ledger_id = $2`, [totalSgst, sgstLedId]);
+            await applyLedgerBalance(client, companyId, sgstLedId, totalSgst, 0);
         }
 
         // Line 5: DEBIT IGST Input
@@ -416,7 +411,7 @@ export const createPurchaseInvoice = async (req, res) => {
                     voucher_id, line_number, ledger_id, debit_amount, credit_amount, narration
                 ) VALUES ($1, $2, $3, $4, 0.00, 'IGST Input Tax Credit')
             `, [voucher.voucher_id, lineNo++, igstLedId, totalIgst]);
-            await client.query(`UPDATE ledgers SET current_balance = current_balance + $1 WHERE ledger_id = $2`, [totalIgst, igstLedId]);
+            await applyLedgerBalance(client, companyId, igstLedId, totalIgst, 0);
         }
 
         // Line 6: Round Off
@@ -429,6 +424,7 @@ export const createPurchaseInvoice = async (req, res) => {
                     voucher_id, line_number, ledger_id, debit_amount, credit_amount, narration
                 ) VALUES ($1, $2, $3, $4, $5, 'Round Off Adjustment')
             `, [voucher.voucher_id, lineNo++, roLedId, roDr, roCr]);
+            await applyLedgerBalance(client, companyId, roLedId, roDr, roCr);
         }
 
         // Update purchase invoice with voucher reference
@@ -655,10 +651,7 @@ export const recordVendorPayment = async (req, res) => {
             ) VALUES ($1, 1, $2, $3, 0.00, $4) RETURNING line_id
         `, [voucher.voucher_id, vendorLedgerId, paymentAmount, `Payment to ${vendor.vendor_trade_name}`]);
 
-        await client.query(`
-            UPDATE ledgers SET current_balance = current_balance - $1, updated_at = CURRENT_TIMESTAMP
-            WHERE ledger_id = $2
-        `, [paymentAmount, vendorLedgerId]);
+        await applyLedgerBalance(client, companyId, vendorLedgerId, paymentAmount, 0);
 
         // Line 2: CREDIT Cash / Bank Ledger
         await client.query(`
@@ -667,10 +660,7 @@ export const recordVendorPayment = async (req, res) => {
             ) VALUES ($1, 2, $2, 0.00, $3, $4)
         `, [voucher.voucher_id, paymentLedgerId, paymentAmount, `Paid via ${payment_mode} ref: ${instrument_reference_number || vNum}`]);
 
-        await client.query(`
-            UPDATE ledgers SET current_balance = current_balance - $1, updated_at = CURRENT_TIMESTAMP
-            WHERE ledger_id = $2
-        `, [paymentAmount, paymentLedgerId]);
+        await applyLedgerBalance(client, companyId, paymentLedgerId, 0, paymentAmount);
 
         // Bill Allocations: Settle Invoices (FIFO or Explicit)
         let remainingToAllocate = paymentAmount;
@@ -703,7 +693,8 @@ export const recordVendorPayment = async (req, res) => {
             const invRow = await client.query(
                 `SELECT outstanding_amount, paid_amount, supplier_invoice_number, due_date, vendor_id
                  FROM purchase_invoices
-                 WHERE purchase_invoice_id = $1 AND company_id = $2`,
+                 WHERE purchase_invoice_id = $1 AND company_id = $2
+                 FOR UPDATE`,
                 [bill.purchase_invoice_id, companyId]
             );
             if (invRow.rows.length === 0) {

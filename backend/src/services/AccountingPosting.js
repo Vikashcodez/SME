@@ -22,7 +22,7 @@ const resolveLedger = async (client, companyId, code, name, groupCode, normalSid
     return created.rows[0].ledger_id;
 };
 
-const applyBalance = async (client, companyId, ledgerId, debit, credit) => {
+export const applyLedgerBalance = async (client, companyId, ledgerId, debit, credit) => {
     const result = await client.query(`
         SELECT l.current_balance, l.current_balance_type, ag.nature
         FROM ledgers l
@@ -86,7 +86,7 @@ export const postAccountingVoucher = async (client, {
             INSERT INTO voucher_lines (voucher_id, line_number, ledger_id, debit_amount, credit_amount, narration)
             VALUES ($1, $2, $3, $4, $5, $6)
         `, [voucher.rows[0].voucher_id, index + 1, line.ledgerId, line.debit || 0, line.credit || 0, line.narration || narration]);
-        await applyBalance(client, companyId, line.ledgerId, Number(line.debit || 0), Number(line.credit || 0));
+        await applyLedgerBalance(client, companyId, line.ledgerId, Number(line.debit || 0), Number(line.credit || 0));
     }
 
     return voucher.rows[0];

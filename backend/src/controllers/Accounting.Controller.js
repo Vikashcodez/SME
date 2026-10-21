@@ -684,6 +684,13 @@ export const getDayBook = async (req, res) => {
         const toDate = req.query.to_date || date || fromDate;
         const voucherType = req.query.voucher_type;
 
+        if (fromDate > toDate) {
+            return res.status(400).json({
+                success: false,
+                message: 'From date cannot be after To date.'
+            });
+        }
+
         let query = `
             SELECT 
                 v.voucher_id,

@@ -32,7 +32,8 @@ const DayBook = () => {
   const { user } = useAuth();
   const companyId = user?.company_id;
 
-  const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
+  const [fromDate, setFromDate] = useState(new Date().toISOString().split('T')[0]);
+  const [toDate, setToDate] = useState(new Date().toISOString().split('T')[0]);
   const [selectedType, setSelectedType] = useState('');
   const [loading, setLoading] = useState(false);
   const [dayBookData, setDayBookData] = useState({
@@ -65,7 +66,8 @@ const DayBook = () => {
       setLoading(true);
       const res = await accountingApi.getDayBook({
         company_id: companyId,
-        date: date,
+        from_date: fromDate,
+        to_date: toDate,
         voucher_type: selectedType || undefined
       });
       setDayBookData(res.data.data || {
@@ -95,7 +97,7 @@ const DayBook = () => {
 
   useEffect(() => {
     fetchDayBook();
-  }, [companyId, date, selectedType]);
+  }, [companyId, fromDate, toDate, selectedType]);
 
   useEffect(() => {
     fetchLedgers();
@@ -157,7 +159,7 @@ const DayBook = () => {
           <div>
             <h1 className="text-2xl font-bold text-slate-900">Day Book</h1>
             <p className="text-sm text-slate-500">
-              Chronological register of all double-entry financial transactions recorded on {new Date(date).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })}
+              Chronological register of all double-entry financial transactions recorded for the selected period
             </p>
           </div>
         </div>
@@ -165,10 +167,19 @@ const DayBook = () => {
         <div className="flex flex-wrap items-center gap-3">
           <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 px-3 py-2 rounded-xl text-sm">
             <Calendar className="w-4 h-4 text-slate-400" />
+            <span className="text-slate-500">From</span>
             <input
               type="date"
-              value={date}
-              onChange={(e) => setDate(e.target.value)}
+              value={fromDate}
+              onChange={(e) => setFromDate(e.target.value)}
+              className="bg-transparent border-none text-slate-700 font-medium focus:outline-none"
+            />
+            <span className="text-slate-500">To</span>
+            <input
+              type="date"
+              value={toDate}
+              min={fromDate}
+              onChange={(e) => setToDate(e.target.value)}
               className="bg-transparent border-none text-slate-700 font-medium focus:outline-none"
             />
           </div>

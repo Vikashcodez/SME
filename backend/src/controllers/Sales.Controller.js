@@ -1,4 +1,5 @@
 import pool from '../config/database.js';
+import { applyLedgerBalance } from '../services/AccountingPosting.js';
 
 // Helper: Generate sequential invoice / quotation / order numbers
 const generateDocNumber = async (client, companyId, prefix) => {
@@ -322,11 +323,7 @@ export const createSalesInvoice = async (req, res) => {
         `, [custVl.rows[0].line_id, customer.ledger_id, invoiceNumber, roundedTotal, calculatedDueDate]);
 
         // Update Customer Ledger Current Balance (Increase Debit)
-        await client.query(`
-            UPDATE ledgers 
-            SET current_balance = current_balance + $1, updated_at = CURRENT_TIMESTAMP
-            WHERE ledger_id = $2
-        `, [roundedTotal, customer.ledger_id]);
+        await applyLedgerBalance(client, companyId, customer.ledger_id, roundedTotal, 0);
 
         // Line 2: CREDIT Sales Ledger
         await client.query(`
@@ -335,11 +332,7 @@ export const createSalesInvoice = async (req, res) => {
             ) VALUES ($1, $2, $3, 0.00, $4, 'Sales Revenue')
         `, [voucher.voucher_id, lineNo++, salesLedgerId, totalTaxable]);
 
-        await client.query(`
-            UPDATE ledgers 
-            SET current_balance = current_balance + $1, updated_at = CURRENT_TIMESTAMP
-            WHERE ledger_id = $2
-        `, [totalTaxable, salesLedgerId]);
+        await applyLedgerBalance(client, companyId, salesLedgerId, 0, totalTaxable);
 
         // Helper: Find or create tax ledgers
         const getTaxLedger = async (code, name, taxType = 'NONE') => {
@@ -363,11 +356,7 @@ export const createSalesInvoice = async (req, res) => {
                     voucher_id, line_number, ledger_id, debit_amount, credit_amount, narration
                 ) VALUES ($1, $2, $3, 0.00, $4, 'CGST Output')
             `, [voucher.voucher_id, lineNo++, cgstLedgerId, totalCgst]);
-            await client.query(`
-                UPDATE ledgers 
-                SET current_balance = current_balance + $1, updated_at = CURRENT_TIMESTAMP
-                WHERE ledger_id = $2
-            `, [totalCgst, cgstLedgerId]);
+            await applyLedgerBalance(client, companyId, cgstLedgerId, 0, totalCgst);
         }
 
         // Line 4: SGST Output (if intra-state)
@@ -378,11 +367,7 @@ export const createSalesInvoice = async (req, res) => {
                     voucher_id, line_number, ledger_id, debit_amount, credit_amount, narration
                 ) VALUES ($1, $2, $3, 0.00, $4, 'SGST Output')
             `, [voucher.voucher_id, lineNo++, sgstLedgerId, totalSgst]);
-            await client.query(`
-                UPDATE ledgers 
-                SET current_balance = current_balance + $1, updated_at = CURRENT_TIMESTAMP
-                WHERE ledger_id = $2
-            `, [totalSgst, sgstLedgerId]);
+            await applyLedgerBalance(client, companyId, sgstLedgerId, 0, totalSgst);
         }
 
         // Line 5: IGST Output (if inter-state)
@@ -393,11 +378,7 @@ export const createSalesInvoice = async (req, res) => {
                     voucher_id, line_number, ledger_id, debit_amount, credit_amount, narration
                 ) VALUES ($1, $2, $3, 0.00, $4, 'IGST Output')
             `, [voucher.voucher_id, lineNo++, igstLedgerId, totalIgst]);
-            await client.query(`
-                UPDATE ledgers 
-                SET current_balance = current_balance + $1, updated_at = CURRENT_TIMESTAMP
-                WHERE ledger_id = $2
-            `, [totalIgst, igstLedgerId]);
+            await applyLedgerBalance(client, companyId, igstLedgerId, 0, totalIgst);
         }
 
         // Line 6: Round Off (if any)
@@ -410,6 +391,7 @@ export const createSalesInvoice = async (req, res) => {
                     voucher_id, line_number, ledger_id, debit_amount, credit_amount, narration
                 ) VALUES ($1, $2, $3, $4, $5, 'Round Off')
             `, [voucher.voucher_id, lineNo++, roLedgerId, roDebit, roCredit]);
+            await applyLedgerBalance(client, companyId, roLedgerId, roDebit, roCredit);
         }
 
         // Update Invoice with Accounting Voucher Reference
@@ -643,11 +625,7 @@ export const recordReceiptSettlement = async (req, res) => {
         `, [voucher.voucher_id, paymentLedgerId, receiptAmount, `Receipt Ref: ${instrument_reference_number || vNum}`]);
 
         // Update Bank/Cash balance (Increase Debit)
-        await client.query(`
-            UPDATE ledgers 
-            SET current_balance = current_balance + $1, updated_at = CURRENT_TIMESTAMP
-            WHERE ledger_id = $2
-        `, [receiptAmount, paymentLedgerId]);
+        await applyLedgerBalance(client, companyId, paymentLedgerId, receiptAmount, 0);
 
         // 3. Line 2: CREDIT Customer Ledger
         const custLineRes = await client.query(`
@@ -658,11 +636,7 @@ export const recordReceiptSettlement = async (req, res) => {
         const custVoucherLineId = custLineRes.rows[0].line_id;
 
         // Update Customer Ledger balance (Decrease Debit)
-        await client.query(`
-            UPDATE ledgers 
-            SET current_balance = current_balance - $1, updated_at = CURRENT_TIMESTAMP
-            WHERE ledger_id = $2
-        `, [receiptAmount, customerLedgerId]);
+        await applyLedgerBalance(client, companyId, customerLedgerId, 0, receiptAmount);
 
         // 4. Process Bill-Wise Allocations & Update Invoices
         let allocatedTotal = 0;
