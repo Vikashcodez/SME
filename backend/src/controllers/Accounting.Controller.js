@@ -696,12 +696,16 @@ export const getDayBook = async (req, res) => {
                 vt.voucher_type_code,
                 vt.base_category,
                 e.first_name || ' ' || COALESCE(e.last_name, '') AS created_by_name,
-                COALESCE(SUM(vl.debit_amount), 0)::NUMERIC(16,2) AS total_amount
+                COALESCE(SUM(vl.debit_amount), 0)::NUMERIC(16,2) AS total_debit,
+                COALESCE(SUM(vl.credit_amount), 0)::NUMERIC(16,2) AS total_credit
             FROM vouchers v
             JOIN voucher_types vt ON v.voucher_type_id = vt.voucher_type_id
             LEFT JOIN employees e ON v.created_by = e.employee_id
             LEFT JOIN voucher_lines vl ON v.voucher_id = vl.voucher_id
-            WHERE v.company_id = $1 AND v.voucher_date >= $2 AND v.voucher_date <= $3
+            WHERE v.company_id = $1
+              AND v.voucher_date >= $2
+              AND v.voucher_date <= $3
+              AND v.source_module IS DISTINCT FROM 'PURCHASE_INVOICE'
         `;
         const params = [companyId, fromDate, toDate];
 
@@ -741,6 +745,7 @@ export const getDayBook = async (req, res) => {
         }
 
         let totalDebitSum = 0;
+        let totalCreditSum = 0;
         const vouchers = vouchersRes.rows.map(v => {
             const lines = linesByVoucher[v.voucher_id] || [];
             const debitLines = lines.filter(l => parseFloat(l.debit_amount) > 0);
@@ -751,12 +756,13 @@ export const getDayBook = async (req, res) => {
             } else {
                 particulars = creditLines[0]?.ledger_name || debitLines[0]?.ledger_name || 'Voucher Entry';
             }
-            const amt = parseFloat(v.total_amount) || 0;
-            totalDebitSum += amt;
+            totalDebitSum += parseFloat(v.total_debit) || 0;
+            totalCreditSum += parseFloat(v.total_credit) || 0;
 
             return {
                 ...v,
                 particulars,
+                total_amount: v.total_debit,
                 lines
             };
         });
@@ -768,6 +774,8 @@ export const getDayBook = async (req, res) => {
                 to_date: toDate,
                 count: vouchers.length,
                 total_amount: totalDebitSum.toFixed(2),
+                total_debit: totalDebitSum.toFixed(2),
+                total_credit: totalCreditSum.toFixed(2),
                 vouchers
             }
         });

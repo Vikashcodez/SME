@@ -35,7 +35,13 @@ const DayBook = () => {
   const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
   const [selectedType, setSelectedType] = useState('');
   const [loading, setLoading] = useState(false);
-  const [dayBookData, setDayBookData] = useState({ count: 0, total_amount: '0.00', vouchers: [] });
+  const [dayBookData, setDayBookData] = useState({
+    count: 0,
+    total_amount: '0.00',
+    total_debit: '0.00',
+    total_credit: '0.00',
+    vouchers: []
+  });
   const [selectedVoucher, setSelectedVoucher] = useState(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
 
@@ -62,7 +68,13 @@ const DayBook = () => {
         date: date,
         voucher_type: selectedType || undefined
       });
-      setDayBookData(res.data.data || { count: 0, total_amount: '0.00', vouchers: [] });
+      setDayBookData(res.data.data || {
+        count: 0,
+        total_amount: '0.00',
+        total_debit: '0.00',
+        total_credit: '0.00',
+        vouchers: []
+      });
     } catch (err) {
       console.error(err);
       toast.error('Failed to load Day Book');
@@ -170,7 +182,6 @@ const DayBook = () => {
             >
               <option value="">All Voucher Types</option>
               <option value="VCH-SALES">Sales Invoice</option>
-              <option value="VCH-PURCHASE">Purchase Invoice</option>
               <option value="VCH-RECEIPT">Receipt Voucher</option>
               <option value="VCH-PAYMENT">Payment Voucher</option>
               <option value="VCH-CONTRA">Contra Voucher</option>
@@ -277,10 +288,10 @@ const DayBook = () => {
                       {v.particulars}
                     </td>
                     <td className="py-3.5 px-4 text-right font-mono font-semibold text-slate-900">
-                      ₹{parseFloat(v.total_amount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                      ₹{parseFloat(v.total_debit || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                     </td>
                     <td className="py-3.5 px-4 text-right font-mono font-semibold text-slate-900">
-                      ₹{parseFloat(v.total_amount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                      ₹{parseFloat(v.total_credit || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                     </td>
                     <td className="py-3.5 px-4 text-xs text-slate-500 max-w-xs truncate">
                       {v.narration || '-'}
@@ -305,10 +316,10 @@ const DayBook = () => {
                     Total for Day ({dayBookData.count} transactions)
                   </td>
                   <td className="py-3.5 px-4 text-right font-mono text-emerald-700">
-                    ₹{parseFloat(dayBookData.total_amount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                    ₹{parseFloat(dayBookData.total_debit || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                   </td>
                   <td className="py-3.5 px-4 text-right font-mono text-emerald-700">
-                    ₹{parseFloat(dayBookData.total_amount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                    ₹{parseFloat(dayBookData.total_credit || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                   </td>
                   <td colSpan="2"></td>
                 </tr>
