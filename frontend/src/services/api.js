@@ -289,4 +289,15 @@ export const manufacturingAccounting = {
   getCostSummary: (params) => api.get('/manufacturing-accounting/cost-summary', { params }),
 };
 
+export const compliance = {
+  getDashboard: (params) => api.get('/compliance/dashboard', { params }),
+  getSettings: (params) => api.get('/compliance/settings', { params }),
+  saveSettings: (data) => api.post('/compliance/settings', data),
+  getRecords: (params) => api.get('/compliance/records', { params }),
+  createPayroll: (data) => api.post('/compliance/payroll-runs', data),
+  createChallan: (data) => api.post('/compliance/challans', data),
+  getForm16: (params) => api.get('/compliance/form16', { params }),
+  generateForm16: (data) => api.post('/compliance/form16/generate', data),
+};
+
 export default api;

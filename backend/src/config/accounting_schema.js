@@ -808,6 +808,112 @@ export const initAccountingSchema = async (dbPool) => {
                 timestamp TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
             CREATE INDEX IF NOT EXISTS idx_audit_entity ON accounting_audit_logs(entity_name, entity_id);
+
+            CREATE TABLE IF NOT EXISTS compliance_settings (
+                setting_id BIGSERIAL PRIMARY KEY,
+                company_id BIGINT NOT NULL REFERENCES companies(company_id) ON DELETE CASCADE,
+                financial_year VARCHAR(9) NOT NULL,
+                tax_regime VARCHAR(20) NOT NULL DEFAULT 'NEW' CHECK (tax_regime IN ('OLD', 'NEW')),
+                pf_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+                pf_employee_rate NUMERIC(6,4) NOT NULL DEFAULT 0.1200 CHECK (pf_employee_rate BETWEEN 0 AND 1),
+                pf_employer_rate NUMERIC(6,4) NOT NULL DEFAULT 0.1200 CHECK (pf_employer_rate BETWEEN 0 AND 1),
+                pf_wage_ceiling NUMERIC(16,2) NOT NULL DEFAULT 15000 CHECK (pf_wage_ceiling >= 0),
+                professional_tax_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+                tds_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+                created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                CONSTRAINT uq_compliance_settings_fy UNIQUE (company_id, financial_year)
+            );
+
+            CREATE TABLE IF NOT EXISTS employee_statutory_profiles (
+                statutory_profile_id BIGSERIAL PRIMARY KEY,
+                company_id BIGINT NOT NULL REFERENCES companies(company_id) ON DELETE CASCADE,
+                employee_id BIGINT NOT NULL REFERENCES employees(employee_id) ON DELETE CASCADE,
+                pan VARCHAR(10),
+                uan VARCHAR(20),
+                pf_number VARCHAR(30),
+                pf_applicable BOOLEAN NOT NULL DEFAULT FALSE,
+                tds_applicable BOOLEAN NOT NULL DEFAULT TRUE,
+                tax_regime VARCHAR(20) CHECK (tax_regime IN ('OLD', 'NEW')),
+                declaration_amount NUMERIC(16,2) NOT NULL DEFAULT 0 CHECK (declaration_amount >= 0),
+                effective_from DATE NOT NULL DEFAULT CURRENT_DATE,
+                CONSTRAINT uq_employee_statutory_profile UNIQUE (company_id, employee_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS payroll_runs (
+                payroll_run_id BIGSERIAL PRIMARY KEY,
+                company_id BIGINT NOT NULL REFERENCES companies(company_id) ON DELETE CASCADE,
+                branch_id BIGINT REFERENCES branches(branch_id) ON DELETE RESTRICT,
+                period_start DATE NOT NULL,
+                period_end DATE NOT NULL,
+                payment_date DATE NOT NULL,
+                status VARCHAR(20) NOT NULL DEFAULT 'POSTED' CHECK (status IN ('DRAFT', 'POSTED', 'CANCELLED')),
+                gross_amount NUMERIC(16,2) NOT NULL DEFAULT 0 CHECK (gross_amount >= 0),
+                employee_pf_amount NUMERIC(16,2) NOT NULL DEFAULT 0 CHECK (employee_pf_amount >= 0),
+                employer_pf_amount NUMERIC(16,2) NOT NULL DEFAULT 0 CHECK (employer_pf_amount >= 0),
+                tds_amount NUMERIC(16,2) NOT NULL DEFAULT 0 CHECK (tds_amount >= 0),
+                net_amount NUMERIC(16,2) NOT NULL DEFAULT 0 CHECK (net_amount >= 0),
+                accounting_voucher_id BIGINT REFERENCES vouchers(voucher_id),
+                created_by BIGINT REFERENCES employees(employee_id),
+                created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                CONSTRAINT ck_payroll_period CHECK (period_end >= period_start)
+            );
+
+            CREATE TABLE IF NOT EXISTS payroll_entries (
+                payroll_entry_id BIGSERIAL PRIMARY KEY,
+                payroll_run_id BIGINT NOT NULL REFERENCES payroll_runs(payroll_run_id) ON DELETE CASCADE,
+                employee_id BIGINT NOT NULL REFERENCES employees(employee_id) ON DELETE RESTRICT,
+                gross_amount NUMERIC(16,2) NOT NULL CHECK (gross_amount >= 0),
+                employee_pf_amount NUMERIC(16,2) NOT NULL DEFAULT 0 CHECK (employee_pf_amount >= 0),
+                employer_pf_amount NUMERIC(16,2) NOT NULL DEFAULT 0 CHECK (employer_pf_amount >= 0),
+                tds_amount NUMERIC(16,2) NOT NULL DEFAULT 0 CHECK (tds_amount >= 0),
+                professional_tax_amount NUMERIC(16,2) NOT NULL DEFAULT 0 CHECK (professional_tax_amount >= 0),
+                net_amount NUMERIC(16,2) NOT NULL CHECK (net_amount >= 0),
+                UNIQUE (payroll_run_id, employee_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS compliance_challans (
+                challan_id BIGSERIAL PRIMARY KEY,
+                company_id BIGINT NOT NULL REFERENCES companies(company_id) ON DELETE CASCADE,
+                challan_type VARCHAR(10) NOT NULL CHECK (challan_type IN ('TDS', 'PF', 'PT')),
+                period_start DATE NOT NULL,
+                period_end DATE NOT NULL,
+                amount NUMERIC(16,2) NOT NULL CHECK (amount > 0),
+                challan_number VARCHAR(100),
+                payment_date DATE,
+                status VARCHAR(20) NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING', 'PAID', 'CANCELLED')),
+                accounting_voucher_id BIGINT REFERENCES vouchers(voucher_id),
+                created_by BIGINT REFERENCES employees(employee_id),
+                created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS compliance_returns (
+                return_id BIGSERIAL PRIMARY KEY,
+                company_id BIGINT NOT NULL REFERENCES companies(company_id) ON DELETE CASCADE,
+                return_type VARCHAR(20) NOT NULL CHECK (return_type IN ('TDS_24Q', 'TDS_26Q', 'PF_ECR', 'PT_RETURN', 'GST')),
+                period_start DATE NOT NULL,
+                period_end DATE NOT NULL,
+                due_date DATE NOT NULL,
+                acknowledgement_number VARCHAR(100),
+                status VARCHAR(20) NOT NULL DEFAULT 'DRAFT' CHECK (status IN ('DRAFT', 'PREPARED', 'FILED', 'ACCEPTED', 'REJECTED')),
+                filed_at TIMESTAMP WITH TIME ZONE,
+                created_by BIGINT REFERENCES employees(employee_id),
+                created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS form16_records (
+                form16_id BIGSERIAL PRIMARY KEY,
+                company_id BIGINT NOT NULL REFERENCES companies(company_id) ON DELETE CASCADE,
+                employee_id BIGINT NOT NULL REFERENCES employees(employee_id) ON DELETE RESTRICT,
+                financial_year VARCHAR(9) NOT NULL,
+                gross_salary NUMERIC(16,2) NOT NULL DEFAULT 0,
+                taxable_income NUMERIC(16,2) NOT NULL DEFAULT 0,
+                tds_deducted NUMERIC(16,2) NOT NULL DEFAULT 0,
+                certificate_number VARCHAR(100),
+                status VARCHAR(20) NOT NULL DEFAULT 'DRAFT' CHECK (status IN ('DRAFT', 'GENERATED', 'ISSUED')),
+                generated_at TIMESTAMP WITH TIME ZONE,
+                UNIQUE (company_id, employee_id, financial_year)
+            );
         `);
 
         // =========================================================================

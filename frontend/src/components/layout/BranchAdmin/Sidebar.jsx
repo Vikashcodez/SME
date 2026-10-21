@@ -38,6 +38,7 @@ const Sidebar = ({ isCollapsed, onToggleCollapse }) => {
         { path: '/branch/trial-balance', label: 'Trial Balance & Audit' },
         { path: '/branch/profit-and-loss', label: 'Profit & Loss Account' },
         { path: '/branch/balance-sheet', label: 'Balance Sheet' },
+        { path: '/branch/compliance', label: 'Compliance & Payroll' },
       ]
     },
     {

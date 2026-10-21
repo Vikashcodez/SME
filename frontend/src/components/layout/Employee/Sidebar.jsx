@@ -10,6 +10,7 @@ import {
   BellRing,
   User,
   HelpCircle,
+  FileText,
   Clock,
   Sparkles,
   ChevronLeft,
@@ -44,6 +45,7 @@ const Sidebar = ({ isCollapsed, onToggleCollapse }) => {
       items: [
         { path: '/employee-dashboard#profile', label: 'Profile & Identity', icon: User },
         { path: '/employee-dashboard#support', label: 'Staff Support', icon: HelpCircle },
+        { path: '/employee/compliance', label: 'Compliance & Payroll', icon: FileText },
       ]
     }
   ];

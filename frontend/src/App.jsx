@@ -40,6 +40,7 @@ import ProfitAndLoss from './pages/Commercial/ProfitAndLoss';
 import BalanceSheet from './pages/Commercial/BalanceSheet';
 import PurchaseInvoiceManagement from './pages/Commercial/PurchaseInvoiceManagement';
 import ManufacturingJournal from './pages/Commercial/ManufacturingJournal';
+import Compliance from './pages/Commercial/Compliance';
 
 const AppContent = () => {
   const { isAuthenticated, isSuperAdmin, isCompanyAdmin, isBranchAdmin, isEmployee } = useAuth();
@@ -78,6 +79,17 @@ const AppContent = () => {
           <ProtectedRoute requiredRole="company_admin">
             <CompanyAdminLayout>
               <CompanyDashboard />
+            </CompanyAdminLayout>
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/compliance"
+        element={
+          <ProtectedRoute requiredRole="company_admin">
+            <CompanyAdminLayout>
+              <Compliance />
             </CompanyAdminLayout>
           </ProtectedRoute>
         }
@@ -657,6 +669,17 @@ const AppContent = () => {
       />
 
       <Route
+        path="/branch/compliance"
+        element={
+          <ProtectedRoute requiredRole="branch_admin">
+            <BranchAdminLayout>
+              <Compliance />
+            </BranchAdminLayout>
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
         path="/branch/purchase-invoices"
         element={
           <ProtectedRoute requiredRole="branch_admin">
@@ -690,6 +713,17 @@ const AppContent = () => {
           <ProtectedRoute requiredRole="employee">
             <EmployeeLayout>
               <EmployeeDashboard />
+            </EmployeeLayout>
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/employee/compliance"
+        element={
+          <ProtectedRoute requiredRole="employee">
+            <EmployeeLayout>
+              <Compliance />
             </EmployeeLayout>
           </ProtectedRoute>
         }

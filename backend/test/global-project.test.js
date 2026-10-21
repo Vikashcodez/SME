@@ -117,3 +117,18 @@ test('accounting schema enforces one-sided voucher lines', () => {
     assert.match(schema, /debit_amount > 0 AND credit_amount = 0/);
     assert.match(schema, /credit_amount > 0 AND debit_amount = 0/);
 });
+
+test('compliance payroll is integrated with accounting and statutory records', () => {
+    const controller = read(path.join(backendSourceRoot, 'controllers', 'Compliance.Controller.js'));
+    const routes = read(path.join(backendSourceRoot, 'routes', 'Compliance.Routes.js'));
+    const schema = read(path.join(backendSourceRoot, 'config', 'accounting_schema.js'));
+    assert.match(schema, /CREATE TABLE IF NOT EXISTS payroll_runs/);
+    assert.match(schema, /CREATE TABLE IF NOT EXISTS compliance_challans/);
+    assert.match(schema, /CREATE TABLE IF NOT EXISTS form16_records/);
+    assert.match(controller, /postJournal/);
+    assert.match(controller, /applyLedgerBalance/);
+    assert.match(controller, /generateForm16/);
+    assert.match(routes, /\/payroll-runs/);
+    assert.match(routes, /\/challans/);
+    assert.match(routes, /\/form16/);
+});
