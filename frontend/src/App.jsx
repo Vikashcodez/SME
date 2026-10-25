@@ -41,6 +41,7 @@ import BalanceSheet from './pages/Commercial/BalanceSheet';
 import PurchaseInvoiceManagement from './pages/Commercial/PurchaseInvoiceManagement';
 import ManufacturingJournal from './pages/Commercial/ManufacturingJournal';
 import Compliance from './pages/Commercial/Compliance';
+import LedgerManagement from './pages/Commercial/LedgerManagement';
 
 const AppContent = () => {
   const { isAuthenticated, isSuperAdmin, isCompanyAdmin, isBranchAdmin, isEmployee } = useAuth();
@@ -79,6 +80,17 @@ const AppContent = () => {
           <ProtectedRoute requiredRole="company_admin">
             <CompanyAdminLayout>
               <CompanyDashboard />
+            </CompanyAdminLayout>
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/ledger-management"
+        element={
+          <ProtectedRoute requiredRole="company_admin">
+            <CompanyAdminLayout>
+              <LedgerManagement />
             </CompanyAdminLayout>
           </ProtectedRoute>
         }

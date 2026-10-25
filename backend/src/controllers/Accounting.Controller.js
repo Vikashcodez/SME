@@ -215,6 +215,118 @@ export const createLedger = async (req, res) => {
     }
 };
 
+// 5a. Get bank accounts with their linked ledger balances
+export const getBankAccounts = async (req, res) => {
+    try {
+        const companyId = req.scopeCompanyId || req.query.company_id || req.user?.company_id;
+        if (!companyId) {
+            return res.status(400).json({ success: false, message: 'Company ID is required' });
+        }
+
+        const result = await pool.query(`
+            SELECT ba.*, l.ledger_name, l.ledger_code, l.current_balance,
+                   l.current_balance_type, l.opening_balance, l.opening_balance_type
+            FROM bank_accounts ba
+            JOIN ledgers l ON l.ledger_id = ba.ledger_id
+            WHERE ba.company_id = $1 AND ba.is_active = TRUE
+            ORDER BY ba.bank_name ASC, ba.account_number ASC
+        `, [companyId]);
+
+        return res.json({ success: true, data: result.rows });
+    } catch (error) {
+        console.error('Error in getBankAccounts:', error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// 5b. Create a bank account and its corresponding Bank Accounts ledger
+export const createBankAccount = async (req, res) => {
+    const client = await pool.connect();
+    try {
+        const {
+            bank_name,
+            account_number,
+            ifsc_code,
+            branch_name,
+            account_type = 'CURRENT',
+            account_holder_name,
+            opening_balance = 0,
+            opening_balance_type = 'DR'
+        } = req.body;
+        const companyId = req.scopeCompanyId || req.body.company_id || req.user?.company_id;
+        const balance = Number(opening_balance);
+
+        if (!companyId || !bank_name?.trim() || !account_number?.trim() || !ifsc_code?.trim()) {
+            return res.status(400).json({
+                success: false,
+                message: 'Company ID, bank name, account number, and IFSC code are required'
+            });
+        }
+        if (!['CURRENT', 'SAVINGS', 'OVERDRAFT', 'CASH_CREDIT'].includes(account_type)) {
+            return res.status(400).json({ success: false, message: 'Invalid bank account type' });
+        }
+        if (!Number.isFinite(balance) || balance < 0) {
+            return res.status(400).json({ success: false, message: 'Opening balance must be a non-negative number' });
+        }
+        if (!['DR', 'CR'].includes(opening_balance_type)) {
+            return res.status(400).json({ success: false, message: 'Opening balance type must be DR or CR' });
+        }
+
+        await client.query('BEGIN');
+        const groupResult = await client.query(
+            `SELECT group_id FROM account_groups WHERE company_id = $1 AND group_code = 'GRP-BANK'`,
+            [companyId]
+        );
+        if (groupResult.rows.length === 0) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({ success: false, message: 'Bank Accounts group is not configured for this company' });
+        }
+
+        const ledgerName = `${bank_name.trim()} - ${account_number.trim().slice(-4)}`;
+        const ledgerCode = `LED-BANK-${Date.now().toString().slice(-8)}`;
+        const ledgerResult = await client.query(`
+            INSERT INTO ledgers (
+                company_id, group_id, ledger_name, ledger_code, opening_balance,
+                opening_balance_type, current_balance, current_balance_type, tax_type, is_active
+            ) VALUES ($1, $2, $3, $4, $5, $6, $5, $6, 'NONE', TRUE)
+            RETURNING *
+        `, [companyId, groupResult.rows[0].group_id, ledgerName, ledgerCode, balance, opening_balance_type]);
+
+        const bankResult = await client.query(`
+            INSERT INTO bank_accounts (
+                company_id, ledger_id, bank_name, account_number, ifsc_code,
+                branch_name, account_type, account_holder_name, is_active
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, TRUE)
+            RETURNING *
+        `, [
+            companyId,
+            ledgerResult.rows[0].ledger_id,
+            bank_name.trim(),
+            account_number.trim(),
+            ifsc_code.trim().toUpperCase(),
+            branch_name?.trim() || null,
+            account_type,
+            account_holder_name?.trim() || null
+        ]);
+
+        await client.query('COMMIT');
+        return res.status(201).json({
+            success: true,
+            message: 'Bank account and ledger created successfully',
+            data: { ...bankResult.rows[0], ledger: ledgerResult.rows[0] }
+        });
+    } catch (error) {
+        await client.query('ROLLBACK');
+        console.error('Error in createBankAccount:', error);
+        if (error.code === '23505') {
+            return res.status(409).json({ success: false, message: 'A bank account with this account number already exists' });
+        }
+        return res.status(500).json({ success: false, message: error.message });
+    } finally {
+        client.release();
+    }
+};
+
 // 6. Get Ledger Statement (Running Debit/Credit Ledger Book)
 export const getLedgerStatement = async (req, res) => {
     try {
@@ -712,7 +824,6 @@ export const getDayBook = async (req, res) => {
             WHERE v.company_id = $1
               AND v.voucher_date >= $2
               AND v.voucher_date <= $3
-              AND v.source_module IS DISTINCT FROM 'PURCHASE_INVOICE'
         `;
         const params = [companyId, fromDate, toDate];
 
@@ -843,6 +954,7 @@ export const getProfitAndLoss = async (req, res) => {
             JOIN voucher_lines vl ON l.ledger_id = vl.ledger_id
             JOIN vouchers v ON vl.voucher_id = v.voucher_id AND v.is_posted = TRUE
             WHERE l.company_id = $1 AND v.voucher_date >= $2 AND v.voucher_date <= $3
+              AND v.source_module IS DISTINCT FROM 'PURCHASE_INVOICE'
               AND ag.nature IN ('INCOME', 'EXPENSE')
             GROUP BY l.ledger_id, l.ledger_name, l.ledger_code, ag.group_name, ag.group_code, ag.nature, ag.affects_gross_profit
             ORDER BY ag.nature, l.ledger_name ASC
@@ -970,7 +1082,9 @@ export const getBalanceSheet = async (req, res) => {
             JOIN account_groups ag ON l.group_id = ag.group_id
             JOIN voucher_lines vl ON l.ledger_id = vl.ledger_id
             JOIN vouchers v ON vl.voucher_id = v.voucher_id AND v.is_posted = TRUE
-            WHERE l.company_id = $1 AND v.voucher_date <= $2 AND ag.nature IN ('INCOME', 'EXPENSE')
+            WHERE l.company_id = $1 AND v.voucher_date <= $2
+              AND v.source_module IS DISTINCT FROM 'PURCHASE_INVOICE'
+              AND ag.nature IN ('INCOME', 'EXPENSE')
             GROUP BY ag.nature
         `, [companyId, asOnDate]);
 
@@ -1233,6 +1347,7 @@ export const getExpenseStatement = async (req, res) => {
             JOIN voucher_lines vl ON l.ledger_id = vl.ledger_id
             JOIN vouchers v ON vl.voucher_id = v.voucher_id AND v.is_posted = TRUE
             WHERE l.company_id = $1 AND v.voucher_date >= $2 AND v.voucher_date <= $3
+              AND v.source_module IS DISTINCT FROM 'PURCHASE_INVOICE'
               AND ag.nature = 'EXPENSE'
             GROUP BY l.ledger_id, l.ledger_name, l.ledger_code, ag.group_name, ag.group_code, ag.affects_gross_profit
             ORDER BY ag.affects_gross_profit DESC, total_expense DESC

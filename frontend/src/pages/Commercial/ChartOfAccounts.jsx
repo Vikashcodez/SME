@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { accounting as accountingApi } from '../../services/api';
 import toast from 'react-hot-toast';
@@ -159,7 +159,7 @@ const ChartOfAccounts = () => {
             <h1 className="text-2xl font-bold text-slate-900">Chart of Accounts & Ledgers</h1>
           </div>
           <p className="text-sm text-slate-500 mt-1">
-            Hierarchical 5-nature Double-Entry General Ledger architecture inspired by TallyPrime standards.
+            Your Tally-style account tree. Assets and expenses normally carry debit balances; liabilities, capital, and income normally carry credit balances.
           </p>
         </div>
         <button

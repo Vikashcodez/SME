@@ -682,10 +682,12 @@ export const initAccountingSchema = async (dbPool) => {
                 account_number VARCHAR(50) NOT NULL,
                 ifsc_code VARCHAR(11) NOT NULL,
                 branch_name VARCHAR(100),
+                account_holder_name VARCHAR(150),
                 account_type VARCHAR(20) NOT NULL CHECK (account_type IN ('CURRENT', 'SAVINGS', 'OVERDRAFT', 'CASH_CREDIT')),
                 is_active BOOLEAN NOT NULL DEFAULT TRUE,
                 CONSTRAINT uq_company_account_number UNIQUE (company_id, account_number)
             );
+            ALTER TABLE bank_accounts ADD COLUMN IF NOT EXISTS account_holder_name VARCHAR(150);
 
             CREATE TABLE IF NOT EXISTS bank_reconciliation_records (
                 reconciliation_id BIGSERIAL PRIMARY KEY,

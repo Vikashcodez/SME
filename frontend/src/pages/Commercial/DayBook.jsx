@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { accounting as accountingApi } from '../../services/api';
 import toast from 'react-hot-toast';
@@ -193,6 +193,7 @@ const DayBook = () => {
             >
               <option value="">All Voucher Types</option>
               <option value="VCH-SALES">Sales Invoice</option>
+              <option value="VCH-PURCHASE">Purchase Invoice</option>
               <option value="VCH-RECEIPT">Receipt Voucher</option>
               <option value="VCH-PAYMENT">Payment Voucher</option>
               <option value="VCH-CONTRA">Contra Voucher</option>
@@ -200,6 +201,14 @@ const DayBook = () => {
               <option value="VCH-CRNOTE">Credit Note</option>
               <option value="VCH-DRNOTE">Debit Note</option>
             </select>
+          </div>
+
+          <div className="bg-indigo-50 border border-indigo-100 rounded-2xl px-5 py-4 text-sm text-indigo-900">
+            <p className="font-semibold">How to read a Tally purchase entry</p>
+            <p className="mt-1 text-indigo-700">
+              Stock received is debited as an asset, eligible input GST is debited as tax credit, and the vendor is credited as a payable.
+              It does not become an expense or profit until the stock is consumed or sold.
+            </p>
           </div>
 
           <button

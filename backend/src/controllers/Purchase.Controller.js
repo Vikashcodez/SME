@@ -57,6 +57,34 @@ const getTaxLedger = async (client, companyId, code, name, taxType = 'NONE') => 
     return resL.rows[0].ledger_id;
 };
 
+const getStockLedger = async (client, companyId, code, name) => {
+    const existing = await client.query(
+        `SELECT ledger_id FROM ledgers WHERE company_id = $1 AND ledger_code = $2`,
+        [companyId, code]
+    );
+    if (existing.rows.length > 0) return existing.rows[0].ledger_id;
+
+    const group = await client.query(
+        `SELECT group_id FROM account_groups
+         WHERE company_id = $1 AND group_code = 'GRP-STOCK'
+         LIMIT 1`,
+        [companyId]
+    );
+    if (group.rows.length === 0) {
+        throw new Error('Stock-in-Hand account group is not configured.');
+    }
+
+    const created = await client.query(`
+        INSERT INTO ledgers (
+            company_id, group_id, ledger_name, ledger_code,
+            opening_balance_type, current_balance_type, is_active
+        ) VALUES ($1, $2, $3, $4, 'DR', 'DR', TRUE)
+        ON CONFLICT (company_id, ledger_code) DO UPDATE SET ledger_name = EXCLUDED.ledger_name
+        RETURNING ledger_id
+    `, [companyId, group.rows[0].group_id, name, code]);
+    return created.rows[0].ledger_id;
+};
+
 // 1. CREATE PURCHASE INVOICE (Raw Material / Vendor Commercial & Accounting Integration)
 export const createPurchaseInvoice = async (req, res) => {
     const client = await pool.connect();
@@ -372,14 +400,27 @@ export const createPurchaseInvoice = async (req, res) => {
         // Increment Vendor Current Balance (Credit increases liability)
         await applyLedgerBalance(client, companyId, vendorProfile.ledger_id, 0, roundedTotal);
 
-        // Line 2: DEBIT Purchase Ledger
-        await client.query(`
-            INSERT INTO voucher_lines (
-                voucher_id, line_number, ledger_id, debit_amount, credit_amount, narration
-            ) VALUES ($1, $2, $3, $4, 0.00, 'Purchase Cost')
-        `, [voucher.voucher_id, lineNo++, purchaseLedgerId, totalTaxable]);
-
-        await applyLedgerBalance(client, companyId, purchaseLedgerId, totalTaxable, 0);
+        // Line 2+: DEBIT the asset received. A purchase of stock is not an
+        // expense until that stock is consumed or sold.
+        const stockTotals = new Map();
+        for (const item of calculatedItems) {
+            const stockCode = item.raw_material_id ? 'LED-STOCK-RAW' : 'LED-STOCK-FG';
+            const stockName = item.raw_material_id ? 'Raw Material Stock' : 'Finished Goods Stock';
+            const stockLedgerId = await getStockLedger(client, companyId, stockCode, stockName);
+            stockTotals.set(stockLedgerId, (stockTotals.get(stockLedgerId) || 0) + item.taxable_amount);
+        }
+        if (stockTotals.size === 0) {
+            const stockLedgerId = await getStockLedger(client, companyId, 'LED-STOCK-GEN', 'Stock-in-Hand');
+            stockTotals.set(stockLedgerId, totalTaxable);
+        }
+        for (const [stockLedgerId, stockAmount] of stockTotals) {
+            await client.query(`
+                INSERT INTO voucher_lines (
+                    voucher_id, line_number, ledger_id, debit_amount, credit_amount, narration
+                ) VALUES ($1, $2, $3, $4, 0.00, $5)
+            `, [voucher.voucher_id, lineNo++, stockLedgerId, stockAmount, 'Stock received from vendor']);
+            await applyLedgerBalance(client, companyId, stockLedgerId, stockAmount, 0);
+        }
 
         // Line 3: DEBIT CGST Input
         if (totalCgst > 0) {
