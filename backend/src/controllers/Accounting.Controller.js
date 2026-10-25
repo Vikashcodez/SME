@@ -824,6 +824,14 @@ export const getDayBook = async (req, res) => {
             WHERE v.company_id = $1
               AND v.voucher_date >= $2
               AND v.voucher_date <= $3
+              AND NOT (
+                  v.source_module = 'SALES_INVOICE'
+                  OR (
+                      v.source_module IS NULL
+                      AND vt.base_category = 'SALES'
+                      AND v.narration LIKE 'Sales Invoice %'
+                  )
+              )
         `;
         const params = [companyId, fromDate, toDate];
 

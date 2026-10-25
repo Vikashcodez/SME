@@ -290,17 +290,17 @@ export const createSalesInvoice = async (req, res) => {
         const voucherRes = await client.query(`
             INSERT INTO vouchers (
                 company_id, branch_id, voucher_type_id, voucher_number, voucher_date,
-                reference_number, reference_date, narration,
+                reference_number, reference_date, narration, source_module, source_document_id,
                 is_posted, created_by, posted_by, posted_at
             ) VALUES (
                 $1, $2, $3, $4, $5,
-                $6, $5, $7,
+                $6, $5, $7, 'SALES_INVOICE', $9,
                 TRUE, $8, $8, CURRENT_TIMESTAMP
             ) RETURNING *
         `, [
             companyId, branchId, voucherTypeId, vNum, invoice_date,
             invoiceNumber, `Sales Invoice ${invoiceNumber} issued to ${customer.trade_name}`,
-            createdBy
+            createdBy, invoice.sales_invoice_id
         ]);
         const voucher = voucherRes.rows[0];
 
@@ -604,10 +604,11 @@ export const recordReceiptSettlement = async (req, res) => {
         const voucherRes = await client.query(`
             INSERT INTO vouchers (
                 company_id, branch_id, voucher_type_id, voucher_number, voucher_date,
-                reference_number, narration, is_posted, created_by, posted_by, posted_at
+                reference_number, narration, source_module, source_document_id,
+                is_posted, created_by, posted_by, posted_at
             ) VALUES (
                 $1, $2, $3, $4, $5,
-                $6, $7, TRUE, $8, $8, CURRENT_TIMESTAMP
+                $6, $7, 'RECEIPT', NULL, TRUE, $8, $8, CURRENT_TIMESTAMP
             ) RETURNING *
         `, [
             companyId, branchId, voucherTypeId, vNum, settlement_date,

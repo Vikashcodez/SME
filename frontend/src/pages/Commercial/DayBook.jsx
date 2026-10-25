@@ -31,6 +31,13 @@ const VOUCHER_TYPE_COLORS = {
 const INCOME_CATEGORIES = ['SALES', 'RECEIPT'];
 const EXPENSE_CATEGORIES = ['PURCHASE', 'PAYMENT', 'DEBIT_NOTE'];
 
+const getIncomeAmount = (voucher) => {
+  if (voucher.base_category === 'RECEIPT') {
+    return parseFloat(voucher.total_debit) || 0;
+  }
+  return parseFloat(voucher.total_credit) || 0;
+};
+
 const DayBook = () => {
   const { user } = useAuth();
   const companyId = user?.company_id;
@@ -195,7 +202,7 @@ const DayBook = () => {
       };
       summary.count += 1;
       if (INCOME_CATEGORIES.includes(voucher.base_category)) {
-        summary.income += parseFloat(voucher.total_credit) || parseFloat(voucher.total_debit) || 0;
+        summary.income += getIncomeAmount(voucher);
       } else if (EXPENSE_CATEGORIES.includes(voucher.base_category)) {
         summary.expense += parseFloat(voucher.total_debit) || parseFloat(voucher.total_credit) || 0;
       }
@@ -213,7 +220,7 @@ const DayBook = () => {
 
   const transactionTotals = useMemo(() => visibleVouchers.reduce((totals, voucher) => {
     if (INCOME_CATEGORIES.includes(voucher.base_category)) {
-      totals.income += parseFloat(voucher.total_credit) || parseFloat(voucher.total_debit) || 0;
+      totals.income += getIncomeAmount(voucher);
       totals.incomeCount += 1;
     } else if (EXPENSE_CATEGORIES.includes(voucher.base_category)) {
       totals.expense += parseFloat(voucher.total_debit) || parseFloat(voucher.total_credit) || 0;
@@ -428,10 +435,10 @@ const DayBook = () => {
                         <span>{v.particulars}</span>
                       </div>
                     </td>
-                    <td className={`py-3.5 px-4 text-right font-mono font-semibold ${EXPENSE_CATEGORIES.includes(v.base_category) ? 'text-rose-700' : 'text-slate-900'}`}>
+                    <td className={`py-3.5 px-4 text-right font-mono font-semibold ${EXPENSE_CATEGORIES.includes(v.base_category) ? 'text-rose-700' : v.base_category === 'RECEIPT' ? 'text-emerald-700' : 'text-slate-900'}`}>
                       ₹{parseFloat(v.total_debit || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                     </td>
-                    <td className={`py-3.5 px-4 text-right font-mono font-semibold ${INCOME_CATEGORIES.includes(v.base_category) ? 'text-emerald-700' : 'text-slate-900'}`}>
+                    <td className={`py-3.5 px-4 text-right font-mono font-semibold ${v.base_category === 'SALES' ? 'text-emerald-700' : 'text-slate-900'}`}>
                       ₹{parseFloat(v.total_credit || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                     </td>
                     <td className="py-3.5 px-4 text-xs text-slate-500 max-w-xs truncate">
