@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { accounting as accountingApi } from '../../services/api';
 import toast from 'react-hot-toast';
@@ -12,9 +12,10 @@ import {
   Printer,
   ArrowDownLeft,
   ArrowUpRight,
-  Search,
   CheckCircle2,
-  X
+  X,
+  BarChart3,
+  MousePointer2
 } from 'lucide-react';
 
 const VOUCHER_TYPE_COLORS = {
@@ -27,6 +28,8 @@ const VOUCHER_TYPE_COLORS = {
   CREDIT_NOTE: 'bg-pink-50 text-pink-700 border-pink-200',
   DEBIT_NOTE: 'bg-orange-50 text-orange-700 border-orange-200',
 };
+const INCOME_CATEGORIES = ['SALES', 'RECEIPT'];
+const EXPENSE_CATEGORIES = ['PURCHASE', 'PAYMENT', 'DEBIT_NOTE'];
 
 const DayBook = () => {
   const { user } = useAuth();
@@ -35,6 +38,7 @@ const DayBook = () => {
   const [fromDate, setFromDate] = useState(new Date().toISOString().split('T')[0]);
   const [toDate, setToDate] = useState(new Date().toISOString().split('T')[0]);
   const [selectedType, setSelectedType] = useState('');
+  const [selectedGraphDate, setSelectedGraphDate] = useState('');
   const [loading, setLoading] = useState(false);
   const [dayBookData, setDayBookData] = useState({
     count: 0,
@@ -43,6 +47,7 @@ const DayBook = () => {
     total_credit: '0.00',
     vouchers: []
   });
+  const [chartVouchers, setChartVouchers] = useState([]);
   const [selectedVoucher, setSelectedVoucher] = useState(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
 
@@ -85,6 +90,25 @@ const DayBook = () => {
     }
   };
 
+  const fetchChartData = async () => {
+    if (!companyId) return;
+    const today = new Date();
+    const financialYearStart = `${today.getMonth() >= 3 ? today.getFullYear() : today.getFullYear() - 1}-04-01`;
+
+    try {
+      const res = await accountingApi.getDayBook({
+        company_id: companyId,
+        from_date: financialYearStart,
+        to_date: today.toISOString().split('T')[0],
+        voucher_type: selectedType || undefined
+      });
+      setChartVouchers(res.data.data?.vouchers || []);
+    } catch (err) {
+      console.error(err);
+      toast.error('Failed to load day-wise chart');
+    }
+  };
+
   const fetchLedgers = async () => {
     if (!companyId) return;
     try {
@@ -98,6 +122,10 @@ const DayBook = () => {
   useEffect(() => {
     fetchDayBook();
   }, [companyId, fromDate, toDate, selectedType]);
+
+  useEffect(() => {
+    fetchChartData();
+  }, [companyId, selectedType]);
 
   useEffect(() => {
     fetchLedgers();
@@ -148,124 +176,194 @@ const DayBook = () => {
     }
   };
 
+  const dailySummaries = useMemo(() => {
+    const summaries = new Map();
+
+    chartVouchers.forEach((voucher) => {
+      const date = voucher.voucher_date?.split('T')[0] || voucher.voucher_date;
+      if (!date) return;
+
+      const summary = summaries.get(date) || {
+        date,
+        count: 0,
+        income: 0,
+        expense: 0
+      };
+      summary.count += 1;
+      if (INCOME_CATEGORIES.includes(voucher.base_category)) {
+        summary.income += parseFloat(voucher.total_credit) || parseFloat(voucher.total_debit) || 0;
+      } else if (EXPENSE_CATEGORIES.includes(voucher.base_category)) {
+        summary.expense += parseFloat(voucher.total_debit) || parseFloat(voucher.total_credit) || 0;
+      }
+      summaries.set(date, summary);
+    });
+
+    return Array.from(summaries.values()).sort((a, b) => a.date.localeCompare(b.date));
+  }, [chartVouchers]);
+
+  const visibleVouchers = useMemo(() => (
+    selectedGraphDate
+      ? chartVouchers.filter((voucher) => voucher.voucher_date?.startsWith(selectedGraphDate))
+      : dayBookData.vouchers
+  ), [chartVouchers, dayBookData.vouchers, selectedGraphDate]);
+
+  const transactionTotals = useMemo(() => visibleVouchers.reduce((totals, voucher) => {
+    if (INCOME_CATEGORIES.includes(voucher.base_category)) {
+      totals.income += parseFloat(voucher.total_credit) || parseFloat(voucher.total_debit) || 0;
+      totals.incomeCount += 1;
+    } else if (EXPENSE_CATEGORIES.includes(voucher.base_category)) {
+      totals.expense += parseFloat(voucher.total_debit) || parseFloat(voucher.total_credit) || 0;
+      totals.expenseCount += 1;
+    }
+    return totals;
+  }, { income: 0, expense: 0, incomeCount: 0, expenseCount: 0 }), [visibleVouchers]);
+
+  const selectedDaySummary = dailySummaries.find((summary) => summary.date === selectedGraphDate);
+  const chartMax = Math.max(...dailySummaries.flatMap((summary) => [summary.income, summary.expense]), 1);
+  const formatDate = (date) => new Date(`${date}T00:00:00`).toLocaleDateString('en-IN', {
+    day: '2-digit',
+    month: 'short'
+  });
+
   return (
-    <div className="p-6 max-w-7xl mx-auto space-y-6">
+    <div className="p-4 sm:p-5 max-w-7xl mx-auto space-y-4">
       {/* Header */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white p-6 rounded-2xl border border-slate-200/80 shadow-sm">
-        <div className="flex items-center gap-3">
-          <div className="p-3 bg-indigo-50 text-indigo-600 rounded-xl">
-            <BookOpen className="w-6 h-6" />
-          </div>
-          <div>
-            <h1 className="text-2xl font-bold text-slate-900">Day Book</h1>
-            <p className="text-sm text-slate-500">
-              Chronological register of all double-entry financial transactions recorded for the selected period
-            </p>
-          </div>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-3">
-          <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 px-3 py-2 rounded-xl text-sm">
-            <Calendar className="w-4 h-4 text-slate-400" />
-            <span className="text-slate-500">From</span>
-            <input
-              type="date"
-              value={fromDate}
-              onChange={(e) => setFromDate(e.target.value)}
-              className="bg-transparent border-none text-slate-700 font-medium focus:outline-none"
-            />
-            <span className="text-slate-500">To</span>
-            <input
-              type="date"
-              value={toDate}
-              min={fromDate}
-              onChange={(e) => setToDate(e.target.value)}
-              className="bg-transparent border-none text-slate-700 font-medium focus:outline-none"
-            />
+      <div className="bg-white rounded-xl border border-slate-200 shadow-sm">
+        <div className="px-4 py-3 flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+          <div className="flex items-center gap-2.5">
+            <div className="p-2 bg-indigo-50 text-indigo-600 rounded-lg">
+              <BookOpen className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h1 className="text-lg font-bold text-slate-900">Day Book</h1>
+                <span className="hidden sm:inline-flex px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 text-[10px] font-bold uppercase tracking-wide">
+                  Double-entry verified
+                </span>
+              </div>
+              <p className="text-xs text-slate-500">Daily transaction register</p>
+            </div>
           </div>
 
-          <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 px-3 py-2 rounded-xl text-sm">
-            <Filter className="w-4 h-4 text-slate-400" />
-            <select
-              value={selectedType}
-              onChange={(e) => setSelectedType(e.target.value)}
-              className="bg-transparent border-none text-slate-700 font-medium focus:outline-none"
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="flex items-center gap-2 px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs">
+              <Calendar className="w-3.5 h-3.5 text-slate-400" />
+              <label className="text-slate-400">From</label>
+              <input
+                type="date"
+                value={fromDate}
+                onChange={(e) => {
+                  setFromDate(e.target.value);
+                  setSelectedGraphDate('');
+                }}
+                className="w-[125px] bg-transparent border-none text-slate-700 font-medium focus:outline-none"
+              />
+              <label className="text-slate-400">To</label>
+              <input
+                type="date"
+                value={toDate}
+                min={fromDate}
+                onChange={(e) => {
+                  setToDate(e.target.value);
+                  setSelectedGraphDate('');
+                }}
+                className="w-[125px] bg-transparent border-none text-slate-700 font-medium focus:outline-none"
+              />
+            </div>
+
+            <div className="flex items-center gap-2 px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs">
+              <Filter className="w-3.5 h-3.5 text-slate-400" />
+              <select
+                value={selectedType}
+                onChange={(e) => {
+                  setSelectedType(e.target.value);
+                  setSelectedGraphDate('');
+                }}
+                className="max-w-[145px] bg-transparent border-none text-slate-700 font-medium focus:outline-none"
+              >
+                <option value="">All Voucher Types</option>
+                <option value="VCH-SALES">Sales Invoice</option>
+                <option value="VCH-PURCHASE">Purchase Invoice</option>
+                <option value="VCH-RECEIPT">Receipt Voucher</option>
+                <option value="VCH-PAYMENT">Payment Voucher</option>
+                <option value="VCH-CONTRA">Contra Voucher</option>
+                <option value="VCH-JOURNAL">Journal Voucher</option>
+                <option value="VCH-CRNOTE">Credit Note</option>
+                <option value="VCH-DRNOTE">Debit Note</option>
+              </select>
+            </div>
+
+            <button
+              onClick={() => setIsNewVoucherOpen(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-semibold shadow-sm transition"
             >
-              <option value="">All Voucher Types</option>
-              <option value="VCH-SALES">Sales Invoice</option>
-              <option value="VCH-PURCHASE">Purchase Invoice</option>
-              <option value="VCH-RECEIPT">Receipt Voucher</option>
-              <option value="VCH-PAYMENT">Payment Voucher</option>
-              <option value="VCH-CONTRA">Contra Voucher</option>
-              <option value="VCH-JOURNAL">Journal Voucher</option>
-              <option value="VCH-CRNOTE">Credit Note</option>
-              <option value="VCH-DRNOTE">Debit Note</option>
-            </select>
+              <Plus className="w-3.5 h-3.5" />
+              New Voucher
+            </button>
+
+            <button
+              onClick={() => window.print()}
+              className="p-1.5 border border-slate-200 hover:bg-slate-50 rounded-lg text-slate-600"
+              title="Print Day Book"
+            >
+              <Printer className="w-4 h-4" />
+            </button>
           </div>
-
-          <div className="bg-indigo-50 border border-indigo-100 rounded-2xl px-5 py-4 text-sm text-indigo-900">
-            <p className="font-semibold">How to read a Tally purchase entry</p>
-            <p className="mt-1 text-indigo-700">
-              Stock received is debited as an asset, eligible input GST is debited as tax credit, and the vendor is credited as a payable.
-              It does not become an expense or profit until the stock is consumed or sold.
-            </p>
-          </div>
-
-          <button
-            onClick={() => setIsNewVoucherOpen(true)}
-            className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-semibold shadow-sm transition"
-          >
-            <Plus className="w-4 h-4" />
-            New Voucher
-          </button>
-
-          <button
-            onClick={() => window.print()}
-            className="p-2 border border-slate-200 hover:bg-slate-50 rounded-xl text-slate-600"
-            title="Print Day Book"
-          >
-            <Printer className="w-5 h-5" />
-          </button>
         </div>
       </div>
 
       {/* KPI Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-sm flex items-center justify-between">
-          <div>
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+        <div className="bg-white p-4 rounded-xl border border-slate-200/80 shadow-sm flex items-center justify-between">
+          <div className="p-4 bg-white">
             <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Total Transactions</p>
-            <p className="text-2xl font-bold text-slate-900 mt-1">{dayBookData.count}</p>
+            <p className="text-2xl font-bold text-slate-900 mt-1">{visibleVouchers.length}</p>
           </div>
           <div className="p-3 bg-blue-50 text-blue-600 rounded-xl">
             <BookOpen className="w-6 h-6" />
           </div>
         </div>
 
-        <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-sm flex items-center justify-between">
-          <div>
-            <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Total Daily Turnover / Flow</p>
-            <p className="text-2xl font-bold text-slate-900 mt-1">₹{parseFloat(dayBookData.total_amount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</p>
+        <div className="bg-white p-4 rounded-xl border border-slate-200/80 shadow-sm flex items-center justify-between">
+          <div className="p-4 bg-white">
+            <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Income (Credit)</p>
+            <p className="text-2xl font-bold text-emerald-600 mt-1">₹{transactionTotals.income.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</p>
+            <p className="text-[11px] text-slate-400 mt-1">{transactionTotals.incomeCount} sales / receipt entries</p>
           </div>
           <div className="p-3 bg-emerald-50 text-emerald-600 rounded-xl">
-            <CheckCircle2 className="w-6 h-6" />
+            <ArrowUpRight className="w-6 h-6" />
           </div>
         </div>
 
-        <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-sm flex items-center justify-between">
-          <div>
-            <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Audit Status</p>
-            <div className="flex items-center gap-1.5 mt-1 text-emerald-600 font-semibold text-sm">
-              <CheckCircle2 className="w-4 h-4" /> Balanced & Double-Entry Verified
-            </div>
+        <div className="bg-white p-4 rounded-xl border border-slate-200/80 shadow-sm flex items-center justify-between">
+          <div className="p-4 bg-white">
+            <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Expense (Debit)</p>
+            <p className="text-2xl font-bold text-rose-600 mt-1">₹{transactionTotals.expense.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</p>
+            <p className="text-[11px] text-slate-400 mt-1">{transactionTotals.expenseCount} purchase / payment entries</p>
           </div>
-          <div className="p-3 bg-indigo-50 text-indigo-600 rounded-xl">
-            <RefreshCw className="w-6 h-6" />
+          <div className="p-3 bg-rose-50 text-rose-600 rounded-xl">
+            <ArrowDownLeft className="w-6 h-6" />
           </div>
         </div>
       </div>
 
       {/* Day Book Table */}
-      <div className="bg-white rounded-2xl border border-slate-200/80 shadow-sm overflow-hidden">
+      <div className="bg-white rounded-xl border border-slate-200/80 shadow-sm overflow-hidden">
+        <div className="px-4 py-3 border-b border-slate-200 bg-white flex items-center justify-between gap-3">
+          <div className="p-4 bg-white">
+            <h2 className="font-bold text-slate-900">
+              {selectedDaySummary ? `Transactions for ${formatDate(selectedDaySummary.date)}` : 'Day Book Transactions'}
+            </h2>
+            <p className="text-xs text-slate-500 mt-1">
+              {selectedDaySummary ? `${selectedDaySummary.count} transaction${selectedDaySummary.count === 1 ? '' : 's'} selected from the graph` : 'Select a graph column to focus on one day'}
+            </p>
+          </div>
+          {selectedGraphDate && (
+            <span className="px-2.5 py-1 rounded-full bg-indigo-50 text-indigo-700 text-xs font-semibold">
+              {formatDate(selectedGraphDate)}
+            </span>
+          )}
+        </div>
         <div className="overflow-x-auto">
           <table className="w-full text-left text-sm text-slate-600 border-collapse">
             <thead className="bg-slate-50 border-b border-slate-200 text-xs uppercase font-semibold text-slate-500 tracking-wider">
@@ -287,15 +385,19 @@ const DayBook = () => {
                     Loading Day Book transactions...
                   </td>
                 </tr>
-              ) : dayBookData.vouchers.length === 0 ? (
+              ) : visibleVouchers.length === 0 ? (
                 <tr>
                   <td colSpan="7" className="py-12 text-center text-slate-400">
                     No transactions recorded on this date.
                   </td>
                 </tr>
               ) : (
-                dayBookData.vouchers.map((v) => (
-                  <tr key={v.voucher_id} className="hover:bg-slate-50/70 transition">
+                visibleVouchers.map((v) => (
+                  <tr
+                    key={v.voucher_id}
+                    onClick={() => handleOpenVoucherModal(v)}
+                    className={`cursor-pointer transition ${INCOME_CATEGORIES.includes(v.base_category) ? 'bg-emerald-50/30 hover:bg-emerald-50' : EXPENSE_CATEGORIES.includes(v.base_category) ? 'bg-rose-50/30 hover:bg-rose-50' : 'hover:bg-slate-50/70'}`}
+                  >
                     <td className="py-3.5 px-4 font-mono font-medium text-slate-900">
                       {v.voucher_number}
                     </td>
@@ -305,12 +407,15 @@ const DayBook = () => {
                       </span>
                     </td>
                     <td className="py-3.5 px-4 font-semibold text-slate-800">
-                      {v.particulars}
+                      <div className="flex items-center gap-2">
+                        <span className={`w-1.5 h-7 rounded-full ${INCOME_CATEGORIES.includes(v.base_category) ? 'bg-emerald-500' : EXPENSE_CATEGORIES.includes(v.base_category) ? 'bg-rose-500' : 'bg-slate-300'}`} />
+                        <span>{v.particulars}</span>
+                      </div>
                     </td>
-                    <td className="py-3.5 px-4 text-right font-mono font-semibold text-slate-900">
+                    <td className={`py-3.5 px-4 text-right font-mono font-semibold ${EXPENSE_CATEGORIES.includes(v.base_category) ? 'text-rose-700' : 'text-slate-900'}`}>
                       ₹{parseFloat(v.total_debit || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                     </td>
-                    <td className="py-3.5 px-4 text-right font-mono font-semibold text-slate-900">
+                    <td className={`py-3.5 px-4 text-right font-mono font-semibold ${INCOME_CATEGORIES.includes(v.base_category) ? 'text-emerald-700' : 'text-slate-900'}`}>
                       ₹{parseFloat(v.total_credit || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                     </td>
                     <td className="py-3.5 px-4 text-xs text-slate-500 max-w-xs truncate">
@@ -329,17 +434,19 @@ const DayBook = () => {
                 ))
               )}
             </tbody>
-            {dayBookData.vouchers.length > 0 && (
-              <tfoot className="bg-slate-50 font-bold text-slate-900 border-t border-slate-200">
+            {visibleVouchers.length > 0 && (
+              <tfoot className="bg-slate-50 border-t border-slate-200">
                 <tr>
-                  <td colSpan="3" className="py-3.5 px-4 uppercase text-xs tracking-wider">
-                    Total for Day ({dayBookData.count} transactions)
+                  <td colSpan="3" className="py-3.5 px-4 uppercase text-xs tracking-wider font-bold text-slate-600">
+                    Selection summary ({visibleVouchers.length} transactions)
                   </td>
-                  <td className="py-3.5 px-4 text-right font-mono text-emerald-700">
-                    ₹{parseFloat(dayBookData.total_debit || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                  <td className="py-3.5 px-4 text-right font-mono font-bold text-rose-700">
+                    <span className="block text-[10px] font-sans uppercase tracking-wide text-slate-400">Expense</span>
+                    ₹{transactionTotals.expense.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                   </td>
-                  <td className="py-3.5 px-4 text-right font-mono text-emerald-700">
-                    ₹{parseFloat(dayBookData.total_credit || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                  <td className="py-3.5 px-4 text-right font-mono font-bold text-emerald-700">
+                    <span className="block text-[10px] font-sans uppercase tracking-wide text-slate-400">Income</span>
+                    ₹{transactionTotals.income.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                   </td>
                   <td colSpan="2"></td>
                 </tr>
@@ -349,84 +456,174 @@ const DayBook = () => {
         </div>
       </div>
 
+      {/* Day-wise chart */}
+      <div className="bg-white rounded-xl border border-slate-200/80 shadow-sm overflow-hidden">
+        <div className="px-4 py-3 border-b border-slate-200 bg-slate-50/70 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div>
+            <div className="flex items-center gap-2">
+              <BarChart3 className="w-4 h-4 text-indigo-600" />
+              <h2 className="font-bold text-slate-900">Day-wise income & expense</h2>
+            </div>
+            <p className="text-xs text-slate-500 mt-1">
+              Current financial year · select a day to open its transactions
+            </p>
+          </div>
+          <div className="flex items-center gap-3 text-xs font-semibold">
+            <span className="flex items-center gap-1.5 text-emerald-700">
+              <span className="w-2.5 h-2.5 rounded-sm bg-emerald-500" /> Income
+            </span>
+            <span className="flex items-center gap-1.5 text-rose-700">
+              <span className="w-2.5 h-2.5 rounded-sm bg-rose-500" /> Expense
+            </span>
+            {selectedGraphDate && (
+              <button
+                type="button"
+                onClick={() => setSelectedGraphDate('')}
+                className="ml-1 px-2 py-1 rounded-md border border-slate-200 text-slate-500 hover:bg-slate-100"
+              >
+                Clear
+              </button>
+            )}
+          </div>
+        </div>
+        <div className="p-4">
+          {dailySummaries.length === 0 ? (
+            <div className="h-32 flex items-center justify-center text-sm text-slate-400">
+              No daily activity in the selected period.
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <div className="min-w-[560px]">
+                <div className="h-44 flex items-end gap-2 sm:gap-3 border-b border-slate-200 px-2">
+                  {dailySummaries.map((summary) => {
+                    const isSelected = summary.date === selectedGraphDate;
+                    const incomeHeight = summary.income > 0 ? Math.max((summary.income / chartMax) * 100, 4) : 0;
+                    const expenseHeight = summary.expense > 0 ? Math.max((summary.expense / chartMax) * 100, 4) : 0;
+                    return (
+                      <button
+                        type="button"
+                        key={summary.date}
+                        onClick={() => setSelectedGraphDate(isSelected ? '' : summary.date)}
+                        className={`group flex-1 min-w-14 h-full flex flex-col justify-end items-center rounded-lg px-1 pt-2 focus:outline-none focus:ring-2 focus:ring-indigo-400 ${isSelected ? 'bg-indigo-50 ring-1 ring-indigo-200' : 'hover:bg-slate-50'}`}
+                        title={`${formatDate(summary.date)} · Income ₹${summary.income.toLocaleString('en-IN', { minimumFractionDigits: 2 })} · Expense ₹${summary.expense.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`}
+                      >
+                        <div className="flex items-end justify-center gap-1 h-full w-full">
+                          <span
+                            className="w-1/2 max-w-6 rounded-t-sm bg-emerald-500 group-hover:bg-emerald-600 transition-all"
+                            style={{ height: `${incomeHeight}%` }}
+                          />
+                          <span
+                            className="w-1/2 max-w-6 rounded-t-sm bg-rose-500 group-hover:bg-rose-600 transition-all"
+                            style={{ height: `${expenseHeight}%` }}
+                          />
+                        </div>
+                        <span className={`text-[10px] mt-2 whitespace-nowrap ${isSelected ? 'font-bold text-indigo-700' : 'text-slate-500'}`}>
+                          {formatDate(summary.date)}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+                <div className="flex items-center gap-2 mt-3 text-xs text-slate-400">
+                  <MousePointer2 className="w-3.5 h-3.5" />
+                  <span>Green = income · red = expense · {dailySummaries.length} active {dailySummaries.length === 1 ? 'day' : 'days'}</span>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
       {/* Voucher Detail Modal */}
       {isModalOpen && selectedVoucher && (
-        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white w-full max-w-3xl rounded-2xl shadow-xl border border-slate-200 overflow-hidden animate-in fade-in zoom-in-95">
-            <div className="flex items-center justify-between p-6 border-b border-slate-100 bg-slate-50/50">
+        <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-sm flex items-center justify-center p-3 sm:p-6">
+          <div className="bg-white w-full max-w-6xl max-h-[94vh] rounded-2xl shadow-2xl border border-slate-200 overflow-hidden animate-in fade-in zoom-in-95 flex flex-col">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200 bg-slate-900 text-white">
               <div>
-                <span className="text-xs font-bold text-indigo-600 uppercase tracking-wider">Double-Entry Audit View</span>
-                <h2 className="text-xl font-bold text-slate-900 mt-0.5">{selectedVoucher.voucher_number}</h2>
+                <span className="text-[10px] font-bold text-indigo-300 uppercase tracking-[0.16em]">Day Book · Voucher Detail</span>
+                <h2 className="text-2xl font-bold mt-0.5">{selectedVoucher.voucher_number}</h2>
               </div>
               <button
                 onClick={() => setIsModalOpen(false)}
-                className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-xl"
+                className="p-2 text-slate-300 hover:text-white hover:bg-white/10 rounded-xl"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            <div className="p-6 space-y-4">
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 p-4 bg-slate-50 rounded-xl text-xs">
-                <div>
-                  <span className="text-slate-400">Date:</span>
-                  <p className="font-semibold text-slate-800">{new Date(selectedVoucher.voucher_date).toLocaleDateString()}</p>
+            <div className="p-6 space-y-5 overflow-y-auto">
+              <div className="grid grid-cols-2 md:grid-cols-5 gap-px bg-slate-200 rounded-xl overflow-hidden border border-slate-200">
+                <div className="p-4 bg-white">
+                  <span className="text-slate-400 text-xs">Date</span>
+                  <p className="font-semibold text-slate-800 mt-1">{new Date(selectedVoucher.voucher_date).toLocaleDateString()}</p>
                 </div>
-                <div>
-                  <span className="text-slate-400">Voucher Type:</span>
-                  <p className="font-semibold text-slate-800">{selectedVoucher.voucher_type_name}</p>
+                <div className="p-4 bg-white">
+                  <span className="text-slate-400 text-xs">Voucher Type</span>
+                  <p className="font-semibold text-slate-800 mt-1">{selectedVoucher.voucher_type_name}</p>
                 </div>
-                <div>
-                  <span className="text-slate-400">Reference:</span>
-                  <p className="font-semibold text-slate-800">{selectedVoucher.reference_number || 'N/A'}</p>
+                <div className="p-4 bg-white">
+                  <span className="text-slate-400 text-xs">Reference</span>
+                  <p className="font-semibold text-slate-800 mt-1">{selectedVoucher.reference_number || 'N/A'}</p>
                 </div>
-                <div>
-                  <span className="text-slate-400">Posted By:</span>
-                  <p className="font-semibold text-slate-800">{selectedVoucher.created_by_name || 'System'}</p>
+                <div className="p-4 bg-white">
+                  <span className="text-slate-400 text-xs">Posted By</span>
+                  <p className="font-semibold text-slate-800 mt-1">{selectedVoucher.created_by_name || 'System'}</p>
+                </div>
+                <div className="p-4 bg-white">
+                  <span className="text-slate-400 text-xs">Status</span>
+                  <p className="font-semibold text-emerald-600 mt-1">{selectedVoucher.is_posted ? 'Posted' : 'Draft'}</p>
+                </div>
+                <div className="col-span-2 md:col-span-5 p-4 bg-white">
+                  <span className="text-slate-400 text-xs">Voucher Narration</span>
+                  <p className="font-medium text-slate-800 mt-1">{selectedVoucher.narration || 'No narration recorded'}</p>
                 </div>
               </div>
 
               <div>
-                <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Accounting Lines</h3>
+                <div className="flex items-center justify-between mb-2">
+                  <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider">Particulars / Accounting Lines</h3>
+                  <span className="text-xs text-slate-400">Full double-entry view</span>
+                </div>
                 <table className="w-full text-left text-sm border-collapse border border-slate-200 rounded-xl overflow-hidden">
                   <thead className="bg-slate-50 text-xs uppercase font-semibold text-slate-600 border-b border-slate-200">
                     <tr>
-                      <th className="py-2.5 px-3">#</th>
-                      <th className="py-2.5 px-3">Account / Ledger</th>
-                      <th className="py-2.5 px-3 text-right">Debit (₹)</th>
-                      <th className="py-2.5 px-3 text-right">Credit (₹)</th>
-                      <th className="py-2.5 px-3">Narration</th>
+                      <th className="py-3 px-4">#</th>
+                      <th className="py-3 px-4">Account / Ledger</th>
+                      <th className="py-3 px-4">Group / Nature</th>
+                      <th className="py-3 px-4 text-right">Debit (₹)</th>
+                      <th className="py-3 px-4 text-right">Credit (₹)</th>
+                      <th className="py-3 px-4">Narration</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
                     {selectedVoucher.lines?.map((line, idx) => (
                       <tr key={idx} className="hover:bg-slate-50">
-                        <td className="py-2.5 px-3 text-slate-400 text-xs">{line.line_number}</td>
-                        <td className="py-2.5 px-3 font-semibold text-slate-800">
+                        <td className="py-3 px-4 text-slate-400 text-xs">{line.line_number}</td>
+                        <td className="py-3 px-4 font-semibold text-slate-800">
                           {line.ledger_name}
                           <span className="block text-xs font-mono text-slate-400">{line.ledger_code}</span>
                         </td>
-                        <td className="py-2.5 px-3 text-right font-mono font-medium text-slate-900">
+                        <td className="py-3 px-4 text-xs text-slate-500">
+                          {line.group_name || '-'}
+                          <span className="block uppercase text-[10px] text-slate-400">{line.nature || '-'}</span>
+                        </td>
+                        <td className="py-3 px-4 text-right font-mono font-medium text-rose-700">
                           {parseFloat(line.debit_amount) > 0 ? `₹${parseFloat(line.debit_amount).toFixed(2)}` : '-'}
                         </td>
-                        <td className="py-2.5 px-3 text-right font-mono font-medium text-slate-900">
+                        <td className="py-3 px-4 text-right font-mono font-medium text-emerald-700">
                           {parseFloat(line.credit_amount) > 0 ? `₹${parseFloat(line.credit_amount).toFixed(2)}` : '-'}
                         </td>
-                        <td className="py-2.5 px-3 text-xs text-slate-500">{line.narration || '-'}</td>
+                        <td className="py-3 px-4 text-xs text-slate-500">{line.narration || '-'}</td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               </div>
 
-              {selectedVoucher.narration && (
-                <div className="p-3 bg-amber-50/50 border border-amber-200/60 rounded-xl text-xs text-amber-900">
-                  <span className="font-bold">Narration:</span> {selectedVoucher.narration}
-                </div>
-              )}
             </div>
 
-            <div className="p-4 border-t border-slate-100 bg-slate-50/50 flex justify-end">
+            <div className="px-6 py-4 border-t border-slate-200 bg-slate-50 flex justify-between items-center">
+              <p className="text-xs text-slate-500">Debit and credit totals must balance for a posted voucher.</p>
               <button
                 onClick={() => setIsModalOpen(false)}
                 className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-sm font-semibold transition"
