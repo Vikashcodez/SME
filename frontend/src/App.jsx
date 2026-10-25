@@ -604,6 +604,17 @@ const AppContent = () => {
       />
 
       <Route
+        path="/branch/ledger-management"
+        element={
+          <ProtectedRoute requiredRole="branch_admin">
+            <BranchAdminLayout>
+              <LedgerManagement />
+            </BranchAdminLayout>
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
         path="/branch/sales-invoices"
         element={
           <ProtectedRoute requiredRole="branch_admin">

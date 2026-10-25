@@ -836,6 +836,79 @@ export const getDayBook = async (req, res) => {
 
         const vouchersRes = await pool.query(query, params);
 
+        const openingCashRes = await pool.query(`
+            SELECT COALESCE(SUM(
+                CASE WHEN l.opening_balance_type = 'CR'
+                    THEN -l.opening_balance
+                    ELSE l.opening_balance
+                END
+            ), 0)::NUMERIC(16,2) AS opening_cash
+            FROM ledgers l
+            JOIN account_groups ag ON l.group_id = ag.group_id
+            WHERE l.company_id = $1
+              AND ag.group_code IN ('GRP-CASH', 'GRP-BANK')
+              AND l.is_active = TRUE
+        `, [companyId]);
+
+        const cashMovementParams = [companyId, toDate];
+        let cashMovementQuery = `
+            SELECT v.voucher_date,
+                   COALESCE(SUM(vl.debit_amount - vl.credit_amount), 0)::NUMERIC(16,2) AS movement
+            FROM vouchers v
+            JOIN voucher_lines vl ON vl.voucher_id = v.voucher_id
+            JOIN ledgers l ON l.ledger_id = vl.ledger_id
+            JOIN account_groups ag ON ag.group_id = l.group_id
+            WHERE v.company_id = $1
+              AND v.is_posted = TRUE
+              AND v.voucher_date <= $2
+              AND ag.group_code IN ('GRP-CASH', 'GRP-BANK')
+        `;
+        if (voucherType) {
+            cashMovementParams.push(voucherType.toUpperCase());
+            cashMovementQuery += ` AND v.voucher_type_id IN (
+                SELECT voucher_type_id
+                FROM voucher_types
+                WHERE voucher_type_code = $${cashMovementParams.length}
+                  AND (company_id = $1 OR company_id IS NULL)
+            )`;
+        }
+        cashMovementQuery += ' GROUP BY v.voucher_date ORDER BY v.voucher_date ASC';
+        const cashMovementsRes = await pool.query(cashMovementQuery, cashMovementParams);
+
+        const openingCash = parseFloat(openingCashRes.rows[0]?.opening_cash || 0);
+        const movementByDate = new Map(cashMovementsRes.rows.map((row) => {
+            const date = row.voucher_date.toISOString
+                ? row.voucher_date.toISOString().split('T')[0]
+                : String(row.voucher_date).split('T')[0];
+            return [date, parseFloat(row.movement) || 0];
+        }));
+        const balanceDates = new Set([
+            ...cashMovementsRes.rows.map((row) => row.voucher_date.toISOString
+                ? row.voucher_date.toISOString().split('T')[0]
+                : String(row.voucher_date).split('T')[0]),
+            ...vouchersRes.rows.map((row) => row.voucher_date.toISOString
+                ? row.voucher_date.toISOString().split('T')[0]
+                : String(row.voucher_date).split('T')[0])
+        ]);
+        let runningCash = openingCash;
+        const dailyBalances = [];
+        for (const date of Array.from(balanceDates).sort()) {
+            if (date > toDate) continue;
+            const movement = movementByDate.get(date) || 0;
+            const openingBalance = runningCash;
+            runningCash += movement;
+            if (date >= fromDate && date <= toDate) {
+                dailyBalances.push({
+                    date,
+                    opening_balance: openingBalance.toFixed(2),
+                    movement: movement.toFixed(2),
+                    closing_balance: runningCash.toFixed(2),
+                    opening_balance_type: openingBalance >= 0 ? 'DR' : 'CR',
+                    closing_balance_type: runningCash >= 0 ? 'DR' : 'CR'
+                });
+            }
+        }
+
         // Fetch lines for these vouchers
         const voucherIds = vouchersRes.rows.map(v => v.voucher_id);
         let linesByVoucher = {};
@@ -894,6 +967,7 @@ export const getDayBook = async (req, res) => {
                 total_amount: totalDebitSum.toFixed(2),
                 total_debit: totalDebitSum.toFixed(2),
                 total_credit: totalCreditSum.toFixed(2),
+                daily_balances: dailyBalances,
                 vouchers
             }
         });

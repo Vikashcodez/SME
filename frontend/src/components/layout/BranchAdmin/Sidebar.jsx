@@ -17,6 +17,7 @@ const Sidebar = ({ isCollapsed, onToggleCollapse }) => {
     {
       label: 'Master Data',
       items: [
+        { path: '/branch/ledger-management', label: 'Ledger & Banking' },
         { path: '/branch/roles', label: 'Roles Master' },
         { path: '/branch/departments', label: 'Departments' },
         { path: '/branch/employees', label: 'Employees' },

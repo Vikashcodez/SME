@@ -65,6 +65,16 @@ const TrialBalance = () => {
     });
   }, [reportData.rows, selectedNature, search]);
 
+  const nominalSummary = useMemo(() => (reportData.rows || []).reduce((summary, row) => {
+    if (row.nature === 'EXPENSE') {
+      summary.expense += parseFloat(row.closing_debit) || 0;
+    }
+    if (row.nature === 'INCOME') {
+      summary.income += parseFloat(row.closing_credit) || 0;
+    }
+    return summary;
+  }, { expense: 0, income: 0 }), [reportData.rows]);
+
   return (
     <div className="p-6 max-w-7xl mx-auto space-y-6">
       {/* Header */}
@@ -77,7 +87,7 @@ const TrialBalance = () => {
             <h1 className="text-2xl font-bold text-slate-900">Trial Balance Statement</h1>
           </div>
           <p className="text-sm text-slate-500 mt-1">
-            Real-time double-entry audit verification showing mathematical equality of Total Debits and Total Credits.
+            Tally-style closing balances: expenses remain on the debit side and income remains on the credit side.
           </p>
         </div>
 
@@ -142,6 +152,28 @@ const TrialBalance = () => {
         </div>
       </div>
 
+      {/* Nominal account split */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div className="bg-rose-50 border border-rose-200 rounded-xl px-4 py-3 flex items-center justify-between">
+          <div>
+            <p className="text-xs font-bold uppercase tracking-wider text-rose-700">Expenses · Debit side</p>
+            <p className="text-[11px] text-rose-600 mt-1">Charged to Profit & Loss</p>
+          </div>
+          <p className="text-lg font-bold font-mono text-rose-700">
+            ₹{nominalSummary.expense.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+          </p>
+        </div>
+        <div className="bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-3 flex items-center justify-between">
+          <div>
+            <p className="text-xs font-bold uppercase tracking-wider text-emerald-700">Income · Credit side</p>
+            <p className="text-[11px] text-emerald-600 mt-1">Transferred to Profit & Loss</p>
+          </div>
+          <p className="text-lg font-bold font-mono text-emerald-700">
+            ₹{nominalSummary.income.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+          </p>
+        </div>
+      </div>
+
       {/* Filters */}
       <div className="flex flex-col sm:flex-row items-center justify-between gap-3 bg-white p-4 rounded-2xl border border-slate-200/80 shadow-sm">
         <div className="relative w-full sm:w-80">
@@ -196,8 +228,16 @@ const TrialBalance = () => {
                   <td colSpan={6} className="text-center py-12 text-slate-400 font-sans">No ledger accounts found.</td>
                 </tr>
               ) : (
-                filteredRows.map((r) => (
-                  <tr key={r.ledger_id} className="hover:bg-slate-50/50 transition">
+                filteredRows.map((r, index) => (
+                  <React.Fragment key={r.ledger_id}>
+                    {(index === 0 || filteredRows[index - 1].nature !== r.nature) && (
+                      <tr className="bg-slate-100/80 border-y border-slate-200">
+                        <td colSpan={6} className="px-6 py-2 font-sans text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                          {r.nature === 'EXPENSE' ? 'Debit side · Expenses' : r.nature === 'INCOME' ? 'Credit side · Income' : `${r.nature} accounts`}
+                        </td>
+                      </tr>
+                    )}
+                    <tr className={`transition ${r.nature === 'EXPENSE' ? 'bg-rose-50/20 hover:bg-rose-50/60' : r.nature === 'INCOME' ? 'bg-emerald-50/20 hover:bg-emerald-50/60' : 'hover:bg-slate-50/50'}`}>
                     <td className="px-6 py-3 font-sans font-medium text-slate-900">
                       <div>{r.ledger_name}</div>
                       <div className="text-[10px] text-slate-400 font-mono">{r.ledger_code}</div>
@@ -211,13 +251,14 @@ const TrialBalance = () => {
                     <td className="px-6 py-3 text-right text-slate-500">
                       {parseFloat(r.opening_balance) > 0 ? `${parseFloat(r.opening_balance).toFixed(2)} ${r.opening_balance_type}` : '-'}
                     </td>
-                    <td className="px-6 py-3 text-right font-medium text-slate-900">
+                    <td className={`px-6 py-3 text-right font-medium ${r.nature === 'EXPENSE' ? 'text-rose-700' : 'text-slate-900'}`}>
                       {parseFloat(r.closing_debit) > 0 ? parseFloat(r.closing_debit).toFixed(2) : '-'}
                     </td>
-                    <td className="px-6 py-3 text-right font-medium text-slate-900">
+                    <td className={`px-6 py-3 text-right font-medium ${r.nature === 'INCOME' ? 'text-emerald-700' : 'text-slate-900'}`}>
                       {parseFloat(r.closing_credit) > 0 ? parseFloat(r.closing_credit).toFixed(2) : '-'}
                     </td>
-                  </tr>
+                    </tr>
+                  </React.Fragment>
                 ))
               )}
             </tbody>

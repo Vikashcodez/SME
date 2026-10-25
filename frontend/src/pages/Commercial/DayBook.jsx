@@ -45,9 +45,11 @@ const DayBook = () => {
     total_amount: '0.00',
     total_debit: '0.00',
     total_credit: '0.00',
+    daily_balances: [],
     vouchers: []
   });
   const [chartVouchers, setChartVouchers] = useState([]);
+  const [chartDailyBalances, setChartDailyBalances] = useState([]);
   const [selectedVoucher, setSelectedVoucher] = useState(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
 
@@ -80,6 +82,7 @@ const DayBook = () => {
         total_amount: '0.00',
         total_debit: '0.00',
         total_credit: '0.00',
+        daily_balances: [],
         vouchers: []
       });
     } catch (err) {
@@ -103,6 +106,7 @@ const DayBook = () => {
         voucher_type: selectedType || undefined
       });
       setChartVouchers(res.data.data?.vouchers || []);
+      setChartDailyBalances(res.data.data?.daily_balances || []);
     } catch (err) {
       console.error(err);
       toast.error('Failed to load day-wise chart');
@@ -219,6 +223,8 @@ const DayBook = () => {
   }, { income: 0, expense: 0, incomeCount: 0, expenseCount: 0 }), [visibleVouchers]);
 
   const selectedDaySummary = dailySummaries.find((summary) => summary.date === selectedGraphDate);
+  const activeDailyBalances = selectedGraphDate ? chartDailyBalances : (dayBookData.daily_balances || []);
+  const selectedDailyBalance = activeDailyBalances.find((balance) => balance.date === selectedGraphDate);
   const chartMax = Math.max(...dailySummaries.flatMap((summary) => [summary.income, summary.expense]), 1);
   const formatDate = (date) => new Date(`${date}T00:00:00`).toLocaleDateString('en-IN', {
     day: '2-digit',
@@ -357,6 +363,16 @@ const DayBook = () => {
             <p className="text-xs text-slate-500 mt-1">
               {selectedDaySummary ? `${selectedDaySummary.count} transaction${selectedDaySummary.count === 1 ? '' : 's'} selected from the graph` : 'Select a graph column to focus on one day'}
             </p>
+            {selectedDailyBalance && (
+              <div className="flex flex-wrap gap-2 mt-2 text-[11px] font-semibold">
+                <span className="px-2 py-1 rounded-md bg-slate-100 text-slate-600">
+                  Opening cash/bank: ₹{Number(selectedDailyBalance.opening_balance).toLocaleString('en-IN', { minimumFractionDigits: 2 })} {selectedDailyBalance.opening_balance_type}
+                </span>
+                <span className="px-2 py-1 rounded-md bg-indigo-50 text-indigo-700">
+                  Closing cash/bank: ₹{Number(selectedDailyBalance.closing_balance).toLocaleString('en-IN', { minimumFractionDigits: 2 })} {selectedDailyBalance.closing_balance_type}
+                </span>
+              </div>
+            )}
           </div>
           {selectedGraphDate && (
             <span className="px-2.5 py-1 rounded-full bg-indigo-50 text-indigo-700 text-xs font-semibold">
@@ -505,7 +521,7 @@ const DayBook = () => {
                         key={summary.date}
                         onClick={() => setSelectedGraphDate(isSelected ? '' : summary.date)}
                         className={`group flex-1 min-w-14 h-full flex flex-col justify-end items-center rounded-lg px-1 pt-2 focus:outline-none focus:ring-2 focus:ring-indigo-400 ${isSelected ? 'bg-indigo-50 ring-1 ring-indigo-200' : 'hover:bg-slate-50'}`}
-                        title={`${formatDate(summary.date)} · Income ₹${summary.income.toLocaleString('en-IN', { minimumFractionDigits: 2 })} · Expense ₹${summary.expense.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`}
+                        title={`${formatDate(summary.date)} · Income ₹${summary.income.toLocaleString('en-IN', { minimumFractionDigits: 2 })} · Expense ₹${summary.expense.toLocaleString('en-IN', { minimumFractionDigits: 2 })}${activeDailyBalances.find((balance) => balance.date === summary.date) ? ` · Closing cash/bank ₹${activeDailyBalances.find((balance) => balance.date === summary.date).closing_balance}` : ''}`}
                       >
                         <div className="flex items-end justify-center gap-1 h-full w-full">
                           <span
@@ -528,6 +544,31 @@ const DayBook = () => {
                   <MousePointer2 className="w-3.5 h-3.5" />
                   <span>Green = income · red = expense · {dailySummaries.length} active {dailySummaries.length === 1 ? 'day' : 'days'}</span>
                 </div>
+                {chartDailyBalances.length > 0 && (
+                  <div className="mt-4 border border-slate-200 rounded-lg overflow-hidden">
+                    <div className="px-3 py-2 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Daily cash / bank running balance</span>
+                      <span className="text-[10px] text-slate-400">Opening → Closing</span>
+                    </div>
+                    <div className="max-h-44 overflow-y-auto divide-y divide-slate-100">
+                      {chartDailyBalances.map((balance) => (
+                        <button
+                          type="button"
+                          key={balance.date}
+                          onClick={() => setSelectedGraphDate(balance.date === selectedGraphDate ? '' : balance.date)}
+                          className={`w-full px-3 py-2 flex items-center justify-between text-xs text-left hover:bg-indigo-50 ${balance.date === selectedGraphDate ? 'bg-indigo-50' : 'bg-white'}`}
+                        >
+                          <span className="font-semibold text-slate-700">{formatDate(balance.date)}</span>
+                          <span className="font-mono text-slate-600">
+                            ₹{Number(balance.opening_balance).toLocaleString('en-IN', { minimumFractionDigits: 2 })} {balance.opening_balance_type}
+                            <span className="mx-2 text-slate-300">→</span>
+                            <span className="font-bold text-indigo-700">₹{Number(balance.closing_balance).toLocaleString('en-IN', { minimumFractionDigits: 2 })} {balance.closing_balance_type}</span>
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           )}

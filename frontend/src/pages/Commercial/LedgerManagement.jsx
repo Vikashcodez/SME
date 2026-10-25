@@ -2,10 +2,10 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { accounting as accountingApi } from '../../services/api';
 import toast from 'react-hot-toast';
-import { Landmark, Plus, Wallet, Scale, RefreshCw } from 'lucide-react';
+import { Landmark, Plus, Wallet, Scale, RefreshCw, Search, ChevronRight } from 'lucide-react';
 
 const emptyLedger = {
-  entry_type: 'CURRENT_ASSET',
+  group_id: '',
   ledger_name: '',
   ledger_code: '',
   opening_balance: '',
@@ -25,23 +25,6 @@ const emptyBank = {
 
 const money = (value) => `₹${Number(value || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
 
-const LedgerList = ({ title, groupCode, icon: Icon, ledgers }) => {
-  const entries = ledgers.filter((ledger) => ledger.group_code === groupCode);
-  const total = entries.reduce((sum, ledger) => sum + Number(ledger.current_balance || 0), 0);
-  return (
-    <section className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-      <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
-        <div className="flex items-center gap-2"><Icon className="w-5 h-5 text-indigo-600" /><h2 className="font-semibold text-slate-900">{title}</h2></div>
-        <span className="text-sm font-semibold text-slate-700">{money(total)}</span>
-      </div>
-      <div className="divide-y divide-slate-100">
-        {entries.length === 0 && <p className="p-5 text-sm text-slate-500">No entries yet.</p>}
-        {entries.map((ledger) => <div key={ledger.ledger_id} className="px-5 py-3 flex items-center justify-between"><div><p className="text-sm font-medium text-slate-800">{ledger.ledger_name}</p><p className="text-xs text-slate-400">{ledger.ledger_code}</p></div><span className="font-mono text-sm text-slate-700">{money(ledger.current_balance)} {ledger.current_balance_type}</span></div>)}
-      </div>
-    </section>
-  );
-};
-
 const LedgerManagement = () => {
   const { user } = useAuth();
   const companyId = user?.company_id;
@@ -54,6 +37,8 @@ const LedgerManagement = () => {
   const [showBankForm, setShowBankForm] = useState(false);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [search, setSearch] = useState('');
+  const [activeView, setActiveView] = useState('ALL');
 
   const loadData = useCallback(async () => {
     if (!companyId) return;
@@ -79,11 +64,6 @@ const LedgerManagement = () => {
     return () => clearTimeout(timer);
   }, [loadData]);
 
-  const groupByCode = useMemo(
-    () => Object.fromEntries(groups.map((group) => [group.group_code, group])),
-    [groups]
-  );
-
   const categoryLedgers = (groupCode) => ledgers.filter((ledger) => ledger.group_code === groupCode);
   const totals = {
     assets: categoryLedgers('GRP-CA').reduce((sum, ledger) => sum + Number(ledger.current_balance || 0), 0),
@@ -91,22 +71,25 @@ const LedgerManagement = () => {
     cash: categoryLedgers('GRP-CASH').reduce((sum, ledger) => sum + Number(ledger.current_balance || 0), 0),
     banks: bankAccounts.reduce((sum, account) => sum + Number(account.current_balance || 0), 0)
   };
+  const visibleLedgers = useMemo(() => ledgers.filter((ledger) => {
+    const matchesView = activeView === 'ALL' || ledger.group_code === activeView;
+    const query = search.trim().toLowerCase();
+    return matchesView && (!query || ledger.ledger_name.toLowerCase().includes(query) || ledger.ledger_code.toLowerCase().includes(query));
+  }), [activeView, ledgers, search]);
 
   const update = (setter) => (event) => setter((current) => ({ ...current, [event.target.name]: event.target.value }));
 
   const saveLedger = async (event) => {
     event.preventDefault();
-    const groupCode = ledgerForm.entry_type === 'CURRENT_LIABILITY' ? 'GRP-CL'
-      : ledgerForm.entry_type === 'CASH' ? 'GRP-CASH' : 'GRP-CA';
-    if (!ledgerForm.ledger_name.trim() || !groupByCode[groupCode]) {
-      toast.error('Ledger name and an initialized account group are required');
+    if (!ledgerForm.ledger_name.trim() || !ledgerForm.group_id) {
+      toast.error('Ledger name and account group are required');
       return;
     }
     try {
       setSaving(true);
       await accountingApi.createLedger({
         company_id: companyId,
-        group_id: groupByCode[groupCode].group_id,
+        group_id: ledgerForm.group_id,
         ledger_name: ledgerForm.ledger_name,
         ledger_code: ledgerForm.ledger_code,
         opening_balance: Number(ledgerForm.opening_balance || 0),
@@ -146,29 +129,62 @@ const LedgerManagement = () => {
   };
 
   return (
-    <div className="p-6 max-w-7xl mx-auto space-y-6">
-      <header className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div><div className="flex items-center gap-3"><div className="p-3 bg-indigo-50 rounded-xl"><Scale className="w-6 h-6 text-indigo-600" /></div><h1 className="text-2xl font-bold text-slate-900">Ledger & Banking</h1></div><p className="text-sm text-slate-500 mt-2">Add Tally-style current assets, current liabilities, cash on hand, and bank ledgers.</p></div>
-        <div className="flex gap-2"><button onClick={() => setShowLedgerForm(true)} className="px-4 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-medium flex items-center gap-2"><Plus className="w-4 h-4" /> Add ledger entry</button><button onClick={() => setShowBankForm(true)} className="px-4 py-2.5 rounded-xl bg-emerald-600 text-white text-sm font-medium flex items-center gap-2"><Landmark className="w-4 h-4" /> Add bank account</button><button onClick={loadData} className="p-2.5 border border-slate-200 rounded-xl" title="Refresh"><RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} /></button></div>
+    <div className="p-4 sm:p-5 max-w-7xl mx-auto space-y-4">
+      <header className="bg-white rounded-xl border border-slate-200 shadow-sm">
+        <div className="px-4 py-3 flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+          <div className="flex items-center gap-2.5">
+            <div className="p-2 bg-indigo-50 rounded-lg"><Scale className="w-5 h-5 text-indigo-600" /></div>
+            <div>
+              <div className="flex items-center gap-2"><h1 className="text-lg font-bold text-slate-900">Ledger & Banking</h1><span className="px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 text-[10px] font-bold uppercase">Chart of accounts</span></div>
+              <p className="text-xs text-slate-500">Manage accounts, opening balances and bank ledgers</p>
+            </div>
+          </div>
+          <div className="flex gap-2">
+            <button onClick={() => setShowLedgerForm(true)} className="px-3 py-2 rounded-lg bg-indigo-600 text-white text-xs font-semibold flex items-center gap-1.5"><Plus className="w-3.5 h-3.5" /> New ledger</button>
+            <button onClick={() => setShowBankForm(true)} className="px-3 py-2 rounded-lg bg-emerald-600 text-white text-xs font-semibold flex items-center gap-1.5"><Landmark className="w-3.5 h-3.5" /> New bank</button>
+            <button onClick={loadData} className="p-2 border border-slate-200 rounded-lg text-slate-500" title="Refresh"><RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} /></button>
+          </div>
+        </div>
       </header>
 
-      <div className="bg-slate-900 text-white rounded-2xl p-5 grid md:grid-cols-3 gap-4">
-        <div><p className="font-semibold">1. Choose the account</p><p className="text-sm text-slate-300 mt-1">Use current asset for money or amounts owed to you, current liability for amounts you owe, and cash for physical cash.</p></div>
-        <div><p className="font-semibold">2. Add opening balance</p><p className="text-sm text-slate-300 mt-1">Enter the balance as it exists today. Debit is normal for assets; credit is normal for liabilities.</p></div>
-        <div><p className="font-semibold">3. Record transactions</p><p className="text-sm text-slate-300 mt-1">Sales, purchases, receipts, payments, and transfers update these ledgers automatically through vouchers.</p></div>
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        {[['Current assets', totals.assets, 'text-blue-600', 'bg-blue-50'], ['Current liabilities', totals.liabilities, 'text-amber-600', 'bg-amber-50'], ['Cash on hand', totals.cash, 'text-emerald-600', 'bg-emerald-50'], ['Bank balances', totals.banks, 'text-indigo-600', 'bg-indigo-50']].map(([label, value, color, bg]) => (
+          <div key={label} className="bg-white px-4 py-3 rounded-xl border border-slate-200 shadow-sm flex items-center justify-between">
+            <div><p className="text-[10px] uppercase tracking-wider text-slate-500">{label}</p><p className={`text-lg font-bold mt-1 ${color}`}>{money(value)}</p></div>
+            <div className={`p-2 rounded-lg ${bg}`}><Wallet className={`w-4 h-4 ${color}`} /></div>
+          </div>
+        ))}
       </div>
 
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        {[['Current assets', totals.assets, 'text-blue-600'], ['Current liabilities', totals.liabilities, 'text-amber-600'], ['Cash on hand', totals.cash, 'text-emerald-600'], ['Bank balances', totals.banks, 'text-indigo-600']].map(([label, value, color]) => <div key={label} className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm"><p className="text-xs uppercase tracking-wider text-slate-500">{label}</p><p className={`text-xl font-bold mt-2 ${color}`}>{money(value)}</p></div>)}
-      </div>
+      <section className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+        <div className="px-4 py-3 border-b border-slate-200 flex flex-col md:flex-row md:items-center justify-between gap-3">
+          <div><h2 className="font-semibold text-slate-900">Accounts</h2><p className="text-xs text-slate-500 mt-0.5">{ledgers.length} ledger entries · choose one to use in vouchers</p></div>
+          <div className="flex items-center gap-2">
+            <div className="relative"><Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search ledgers" className="w-48 pl-8 pr-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500/20" /></div>
+            <select value={activeView} onChange={(event) => setActiveView(event.target.value)} className="px-2.5 py-2 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-none">
+              <option value="ALL">All accounts</option><option value="GRP-CA">Current assets</option><option value="GRP-CL">Liabilities</option><option value="GRP-CASH">Cash</option><option value="GRP-BANK">Bank</option>
+            </select>
+          </div>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-slate-50 text-[10px] uppercase tracking-wider text-slate-500"><tr><th className="text-left px-4 py-2.5">Ledger</th><th className="text-left px-4 py-2.5">Group</th><th className="text-left px-4 py-2.5">Nature</th><th className="text-right px-4 py-2.5">Opening</th><th className="text-right px-4 py-2.5">Current balance</th><th className="w-6"></th></tr></thead>
+            <tbody className="divide-y divide-slate-100">
+              {visibleLedgers.map((ledger) => <tr key={ledger.ledger_id} className="hover:bg-indigo-50/40 transition"><td className="px-4 py-2.5 font-medium text-slate-800">{ledger.ledger_name}<span className="block text-[10px] text-slate-400 font-mono">{ledger.ledger_code}</span></td><td className="px-4 py-2.5 text-xs text-slate-600">{ledger.group_name}</td><td className="px-4 py-2.5"><span className="px-2 py-0.5 rounded-full bg-slate-100 text-[10px] font-semibold text-slate-600">{ledger.nature}</span></td><td className="px-4 py-2.5 text-right font-mono text-xs text-slate-500">{money(ledger.opening_balance)} {ledger.opening_balance_type}</td><td className="px-4 py-2.5 text-right font-mono text-xs font-semibold text-slate-700">{money(ledger.current_balance)} {ledger.current_balance_type}</td><td className="px-4 py-2.5"><ChevronRight className="w-4 h-4 text-slate-300" /></td></tr>)}
+            </tbody>
+          </table>
+          {visibleLedgers.length === 0 && <p className="px-4 py-8 text-center text-sm text-slate-500">No ledgers match this view.</p>}
+        </div>
+      </section>
 
-      <div className="grid lg:grid-cols-3 gap-5"><LedgerList title="Current Assets" groupCode="GRP-CA" icon={Wallet} ledgers={ledgers} /><LedgerList title="Current Liabilities" groupCode="GRP-CL" icon={Scale} ledgers={ledgers} /><LedgerList title="Cash on Hand" groupCode="GRP-CASH" icon={Wallet} ledgers={ledgers} /></div>
+      <section className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+        <div className="px-4 py-3 border-b border-slate-200 flex items-center justify-between"><div className="flex items-center gap-2"><Landmark className="w-4 h-4 text-emerald-600" /><h2 className="font-semibold text-slate-900">Bank accounts</h2></div><span className="text-xs text-slate-500">{bankAccounts.length} account(s)</span></div>
+        <div className="overflow-x-auto"><table className="w-full text-sm"><thead className="bg-slate-50 text-[10px] uppercase tracking-wider text-slate-500"><tr><th className="text-left px-4 py-2.5">Bank</th><th className="text-left px-4 py-2.5">Account</th><th className="text-left px-4 py-2.5">IFSC</th><th className="text-left px-4 py-2.5">Type</th><th className="text-right px-4 py-2.5">Balance</th></tr></thead><tbody className="divide-y divide-slate-100">{bankAccounts.map((account) => <tr key={account.bank_account_id} className="hover:bg-emerald-50/40"><td className="px-4 py-2.5 font-medium">{account.bank_name}<span className="block text-[10px] text-slate-400">{account.account_holder_name || '—'}</span></td><td className="px-4 py-2.5 text-xs">•••• {account.account_number.slice(-4)}</td><td className="px-4 py-2.5 text-xs">{account.ifsc_code}</td><td className="px-4 py-2.5 text-xs">{account.account_type}</td><td className="px-4 py-2.5 text-right font-mono text-xs">{money(account.current_balance)} {account.current_balance_type}</td></tr>)}</tbody></table>{bankAccounts.length === 0 && <p className="px-4 py-6 text-sm text-slate-500">No bank accounts added yet.</p>}</div>
+      </section>
 
-      <section className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden"><div className="px-5 py-4 border-b border-slate-100 flex justify-between"><h2 className="font-semibold text-slate-900 flex gap-2 items-center"><Landmark className="w-5 h-5 text-emerald-600" /> Bank accounts</h2><span className="text-sm text-slate-500">{bankAccounts.length} account(s)</span></div><div className="overflow-x-auto"><table className="w-full text-sm"><thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr><th className="text-left p-4">Bank</th><th className="text-left p-4">Account</th><th className="text-left p-4">IFSC</th><th className="text-left p-4">Type</th><th className="text-right p-4">Ledger balance</th></tr></thead><tbody className="divide-y divide-slate-100">{bankAccounts.map((account) => <tr key={account.bank_account_id}><td className="p-4 font-medium">{account.bank_name}<span className="block text-xs text-slate-400">{account.account_holder_name || '—'}</span></td><td className="p-4">•••• {account.account_number.slice(-4)}</td><td className="p-4">{account.ifsc_code}</td><td className="p-4">{account.account_type}</td><td className="p-4 text-right font-mono">{money(account.current_balance)} {account.current_balance_type}</td></tr>)}</tbody></table>{bankAccounts.length === 0 && <p className="p-5 text-sm text-slate-500">No bank accounts added yet.</p>}</div></section>
+      {showLedgerForm && <div className="fixed inset-0 bg-slate-950/50 backdrop-blur-sm z-50 flex items-center justify-center p-4"><form onSubmit={saveLedger} className="bg-white rounded-xl shadow-2xl w-full max-w-xl overflow-hidden"><div className="px-5 py-4 bg-slate-900 text-white flex items-center justify-between"><div><p className="text-[10px] uppercase tracking-wider text-indigo-300">New account</p><h2 className="text-lg font-bold">Create ledger entry</h2></div><button type="button" onClick={() => setShowLedgerForm(false)} className="text-slate-300 hover:text-white text-xl">×</button></div><div className="p-5 grid grid-cols-2 gap-3">      <label className="col-span-2 text-xs font-semibold text-slate-600">Under group<select required name="group_id" value={ledgerForm.group_id} onChange={update(setLedgerForm)} className="mt-1 w-full border border-slate-200 rounded-lg p-2.5 text-sm"><option value="">Select the parent group</option>{groups.map((group) => <option key={group.group_id} value={group.group_id}>{group.group_name} · {group.nature}</option>)}</select></label><label className="col-span-2 text-xs font-semibold text-slate-600">Ledger name<input required name="ledger_name" value={ledgerForm.ledger_name} onChange={update(setLedgerForm)} placeholder="e.g. Sowenji Suppliers" className="mt-1 w-full border border-slate-200 rounded-lg p-2.5 text-sm" /></label><label className="text-xs font-semibold text-slate-600">Ledger code<input name="ledger_code" value={ledgerForm.ledger_code} onChange={update(setLedgerForm)} placeholder="Optional" className="mt-1 w-full border border-slate-200 rounded-lg p-2.5 text-sm" /></label><label className="text-xs font-semibold text-slate-600">Opening balance<div className="flex mt-1"><input type="number" min="0" step="0.01" name="opening_balance" value={ledgerForm.opening_balance} onChange={update(setLedgerForm)} placeholder="0.00" className="w-full border border-slate-200 rounded-l-lg p-2.5 text-sm" /><select name="opening_balance_type" value={ledgerForm.opening_balance_type} onChange={update(setLedgerForm)} className="border border-l-0 border-slate-200 rounded-r-lg px-2 text-sm"><option value="DR">DR</option><option value="CR">CR</option></select></div></label></div><div className="px-5 py-3 border-t border-slate-200 bg-slate-50 flex justify-end gap-2"><button type="button" onClick={() => setShowLedgerForm(false)} className="px-3 py-2 border border-slate-200 rounded-lg text-sm">Cancel</button><button disabled={saving} className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-semibold">{saving ? 'Saving...' : 'Create ledger'}</button></div></form></div>}
 
-      {showLedgerForm && <div className="fixed inset-0 bg-slate-900/40 z-50 flex items-center justify-center p-4"><form onSubmit={saveLedger} className="bg-white rounded-2xl p-6 w-full max-w-lg space-y-4"><h2 className="text-xl font-bold">Add ledger entry</h2><select name="entry_type" value={ledgerForm.entry_type} onChange={update(setLedgerForm)} className="w-full border rounded-xl p-3"><option value="CURRENT_ASSET">Current asset</option><option value="CURRENT_LIABILITY">Current liability</option><option value="CASH">Cash on hand</option></select><input required name="ledger_name" value={ledgerForm.ledger_name} onChange={update(setLedgerForm)} placeholder="Ledger name" className="w-full border rounded-xl p-3" /><input name="ledger_code" value={ledgerForm.ledger_code} onChange={update(setLedgerForm)} placeholder="Ledger code (optional)" className="w-full border rounded-xl p-3" /><div className="grid grid-cols-2 gap-3"><input type="number" min="0" step="0.01" name="opening_balance" value={ledgerForm.opening_balance} onChange={update(setLedgerForm)} placeholder="Opening balance" className="border rounded-xl p-3" /><select name="opening_balance_type" value={ledgerForm.opening_balance_type} onChange={update(setLedgerForm)} className="border rounded-xl p-3"><option value="DR">Debit</option><option value="CR">Credit</option></select></div><div className="flex justify-end gap-2"><button type="button" onClick={() => setShowLedgerForm(false)} className="px-4 py-2 border rounded-xl">Cancel</button><button disabled={saving} className="px-4 py-2 bg-indigo-600 text-white rounded-xl">{saving ? 'Saving...' : 'Save ledger'}</button></div></form></div>}
-
-      {showBankForm && <div className="fixed inset-0 bg-slate-900/40 z-50 flex items-center justify-center p-4"><form onSubmit={saveBank} className="bg-white rounded-2xl p-6 w-full max-w-2xl space-y-4"><h2 className="text-xl font-bold">Add bank account & ledger</h2><div className="grid md:grid-cols-2 gap-3">{[['bank_name', 'Bank name'], ['account_holder_name', 'Account holder name'], ['account_number', 'Account number'], ['ifsc_code', 'IFSC code'], ['branch_name', 'Branch name']].map(([name, placeholder]) => <input key={name} required={['bank_name', 'account_number', 'ifsc_code'].includes(name)} name={name} value={bankForm[name]} onChange={update(setBankForm)} placeholder={placeholder} className="border rounded-xl p-3" />)}<select name="account_type" value={bankForm.account_type} onChange={update(setBankForm)} className="border rounded-xl p-3"><option>CURRENT</option><option>SAVINGS</option><option>OVERDRAFT</option><option>CASH_CREDIT</option></select><input type="number" min="0" step="0.01" name="opening_balance" value={bankForm.opening_balance} onChange={update(setBankForm)} placeholder="Opening balance" className="border rounded-xl p-3" /><select name="opening_balance_type" value={bankForm.opening_balance_type} onChange={update(setBankForm)} className="border rounded-xl p-3"><option value="DR">Debit</option><option value="CR">Credit</option></select></div><div className="flex justify-end gap-2"><button type="button" onClick={() => setShowBankForm(false)} className="px-4 py-2 border rounded-xl">Cancel</button><button disabled={saving} className="px-4 py-2 bg-emerald-600 text-white rounded-xl">{saving ? 'Saving...' : 'Save bank account'}</button></div></form></div>}
+      {showBankForm && <div className="fixed inset-0 bg-slate-950/50 backdrop-blur-sm z-50 flex items-center justify-center p-4"><form onSubmit={saveBank} className="bg-white rounded-xl shadow-2xl w-full max-w-2xl overflow-hidden"><div className="px-5 py-4 bg-slate-900 text-white flex items-center justify-between"><div><p className="text-[10px] uppercase tracking-wider text-emerald-300">Bank master</p><h2 className="text-lg font-bold">Add bank account</h2></div><button type="button" onClick={() => setShowBankForm(false)} className="text-slate-300 hover:text-white text-xl">×</button></div><div className="p-5 grid grid-cols-2 gap-3">{[['bank_name', 'Bank name'], ['account_holder_name', 'Account holder name'], ['account_number', 'Account number'], ['ifsc_code', 'IFSC code'], ['branch_name', 'Branch name']].map(([name, placeholder]) => <label key={name} className="text-xs font-semibold text-slate-600">{placeholder}<input required={['bank_name', 'account_number', 'ifsc_code'].includes(name)} name={name} value={bankForm[name]} onChange={update(setBankForm)} placeholder={placeholder} className="mt-1 w-full border border-slate-200 rounded-lg p-2.5 text-sm" /></label>)}<label className="text-xs font-semibold text-slate-600">Account type<select name="account_type" value={bankForm.account_type} onChange={update(setBankForm)} className="mt-1 w-full border border-slate-200 rounded-lg p-2.5 text-sm"><option>CURRENT</option><option>SAVINGS</option><option>OVERDRAFT</option><option>CASH_CREDIT</option></select></label><label className="text-xs font-semibold text-slate-600">Opening balance<div className="flex mt-1"><input type="number" min="0" step="0.01" name="opening_balance" value={bankForm.opening_balance} onChange={update(setBankForm)} placeholder="0.00" className="w-full border border-slate-200 rounded-l-lg p-2.5 text-sm" /><select name="opening_balance_type" value={bankForm.opening_balance_type} onChange={update(setBankForm)} className="border border-l-0 border-slate-200 rounded-r-lg px-2 text-sm"><option value="DR">DR</option><option value="CR">CR</option></select></div></label></div><div className="px-5 py-3 border-t border-slate-200 bg-slate-50 flex justify-end gap-2"><button type="button" onClick={() => setShowBankForm(false)} className="px-3 py-2 border border-slate-200 rounded-lg text-sm">Cancel</button><button disabled={saving} className="px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-semibold">{saving ? 'Saving...' : 'Create bank account'}</button></div></form></div>}
     </div>
   );
 };
