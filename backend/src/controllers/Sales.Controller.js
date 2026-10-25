@@ -89,7 +89,8 @@ export const createSalesInvoice = async (req, res) => {
             FROM customer_profiles cp
             JOIN ledgers l ON cp.ledger_id = l.ledger_id
             WHERE cp.customer_id = $1
-        `, [customer_id]);
+              AND cp.company_id = $2
+        `, [customer_id, companyId]);
 
         if (custRes.rows.length === 0) {
             await client.query('ROLLBACK');
@@ -449,6 +450,7 @@ export const getSalesInvoices = async (req, res) => {
             JOIN customer_profiles cp ON si.customer_id = cp.customer_id
             LEFT JOIN vouchers v ON si.accounting_voucher_id = v.voucher_id
             WHERE si.company_id = $1
+              AND si.status = 'POSTED'
         `;
         const params = [companyId];
 
@@ -497,7 +499,8 @@ export const getSalesInvoiceById = async (req, res) => {
             JOIN customer_profiles cp ON si.customer_id = cp.customer_id
             LEFT JOIN vouchers v ON si.accounting_voucher_id = v.voucher_id
             WHERE si.sales_invoice_id = $1
-        `, [id]);
+              AND si.company_id = $2
+        `, [id, req.query.company_id || req.user?.company_id]);
 
         if (invRes.rows.length === 0) {
             return res.status(404).json({ success: false, message: 'Sales invoice not found' });
@@ -524,6 +527,64 @@ export const getSalesInvoiceById = async (req, res) => {
         });
     } catch (error) {
         console.error('Error in getSalesInvoiceById:', error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// 3b. Customer outstanding and ageing summary
+export const getCustomerOutstanding = async (req, res) => {
+    try {
+        const companyId = req.query.company_id || req.user?.company_id;
+        const customerId = req.params.customer_id;
+        if (!companyId || !customerId) {
+            return res.status(400).json({ success: false, message: 'Company ID and customer ID are required.' });
+        }
+
+        const result = await pool.query(`
+            SELECT
+                si.sales_invoice_id AS invoice_id,
+                si.invoice_number,
+                si.invoice_date,
+                si.due_date,
+                si.net_total_amount,
+                si.paid_amount,
+                si.outstanding_amount,
+                si.payment_status,
+                GREATEST(0, CURRENT_DATE - si.due_date)::INT AS overdue_days,
+                CASE
+                    WHEN CURRENT_DATE <= si.due_date THEN 'CURRENT'
+                    WHEN CURRENT_DATE - si.due_date <= 30 THEN '1-30 DAYS'
+                    WHEN CURRENT_DATE - si.due_date <= 60 THEN '31-60 DAYS'
+                    WHEN CURRENT_DATE - si.due_date <= 90 THEN '61-90 DAYS'
+                    ELSE '90+ DAYS'
+                END AS ageing_bucket
+            FROM sales_invoices si
+            WHERE si.company_id = $1
+              AND si.customer_id = $2
+              AND si.status = 'POSTED'
+              AND si.outstanding_amount > 0
+            ORDER BY si.due_date ASC, si.sales_invoice_id ASC
+        `, [companyId, customerId]);
+
+        const summary = result.rows.reduce((totals, invoice) => {
+            const amount = Number(invoice.outstanding_amount) || 0;
+            totals.total += amount;
+            totals[invoice.ageing_bucket] = (totals[invoice.ageing_bucket] || 0) + amount;
+            return totals;
+        }, { total: 0 });
+
+        return res.json({
+            success: true,
+            data: {
+                customer_id: Number(customerId),
+                invoices: result.rows,
+                summary: Object.fromEntries(
+                    Object.entries(summary).map(([key, value]) => [key, Number(value).toFixed(2)])
+                )
+            }
+        });
+    } catch (error) {
+        console.error('Error in getCustomerOutstanding:', error);
         return res.status(500).json({ success: false, message: error.message });
     }
 };
@@ -566,7 +627,8 @@ export const recordReceiptSettlement = async (req, res) => {
             FROM customer_profiles cp 
             JOIN ledgers l ON cp.ledger_id = l.ledger_id 
             WHERE cp.customer_id = $1
-        `, [customer_id]);
+              AND cp.company_id = $2
+        `, [customer_id, companyId]);
         if (custRes.rows.length === 0) {
             await client.query('ROLLBACK');
             return res.status(404).json({ success: false, message: 'Customer not found' });
@@ -591,11 +653,12 @@ export const recordReceiptSettlement = async (req, res) => {
         if (normalizedAllocations.length === 1) {
             const allocation = normalizedAllocations[0];
             const invoiceRes = await client.query(`
-                SELECT sales_invoice_id, outstanding_amount, payment_status
+                SELECT sales_invoice_id, outstanding_amount, payment_status, status
                 FROM sales_invoices
                 WHERE sales_invoice_id = $1
                   AND customer_id = $2
                   AND company_id = $3
+                AND status = 'POSTED'
                 FOR UPDATE
             `, [allocation.invoice_id, customer_id, companyId]);
 
@@ -608,7 +671,7 @@ export const recordReceiptSettlement = async (req, res) => {
             }
 
             const outstandingAmount = Number(invoiceRes.rows[0].outstanding_amount) || 0;
-            if (invoiceRes.rows[0].payment_status === 'PAID' || outstandingAmount <= 0) {
+            if (invoiceRes.rows[0].status !== 'POSTED' || invoiceRes.rows[0].payment_status === 'PAID' || outstandingAmount <= 0) {
                 await client.query('ROLLBACK');
                 return res.status(400).json({
                     success: false,
@@ -714,7 +777,7 @@ export const recordReceiptSettlement = async (req, res) => {
                 if (invCheck.rows.length > 0) {
                     const inv = invCheck.rows[0];
                     const newPaid = parseFloat(inv.paid_amount) + allocAmt;
-                    const newOutstanding = Math.max(0, parseFloat(inv.net_total_amount) - newPaid);
+                    const newOutstanding = Math.max(0, +(parseFloat(inv.outstanding_amount) - allocAmt).toFixed(2));
                     const newStatus = newOutstanding <= 0.01 ? 'PAID' : 'PARTIALLY_PAID';
 
                     await client.query(`

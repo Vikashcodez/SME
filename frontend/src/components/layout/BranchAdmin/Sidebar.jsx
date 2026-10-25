@@ -12,6 +12,7 @@ const Sidebar = ({ isCollapsed, onToggleCollapse }) => {
       label: 'Overview',
       items: [
         { path: '/branch-dashboard', label: 'Branch Dashboard' },
+        { path: '/branch/accounting', label: 'Accounting Gateway' },
       ]
     },
     {

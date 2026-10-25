@@ -7,6 +7,11 @@ import {
     createLedger,
     getBankAccounts,
     createBankAccount,
+    getBankReconciliation,
+    updateBankReconciliation,
+    getCostCentres,
+    createCostCentre,
+    getBudgetVariance,
     getLedgerStatement,
     createVoucher,
     getVouchers,
@@ -19,6 +24,8 @@ import {
     getFinancialYears,
     createFinancialYear,
     setPeriodLock,
+    closeFinancialYear,
+    getAccountingAuditLogs,
     reverseVoucher
 } from '../controllers/Accounting.Controller.js';
 import { authenticate } from '../middleware/auth.js';
@@ -38,6 +45,11 @@ router.post('/ledgers', createLedger);
 router.get('/ledgers/:ledger_id/statement', getLedgerStatement);
 router.get('/bank-accounts', getBankAccounts);
 router.post('/bank-accounts', createBankAccount);
+router.get('/bank-reconciliation', getBankReconciliation);
+router.post('/bank-reconciliation', updateBankReconciliation);
+router.get('/cost-centres', getCostCentres);
+router.post('/cost-centres', createCostCentre);
+router.get('/budgets/variance', getBudgetVariance);
 
 // Double-Entry Vouchers
 router.get('/vouchers', getVouchers);
@@ -49,6 +61,8 @@ router.post('/vouchers/:id/reverse', reverseVoucher);
 router.get('/financial-years', getFinancialYears);
 router.post('/financial-years', createFinancialYear);
 router.post('/periods/:period_id/lock', setPeriodLock);
+router.post('/financial-years/:financial_year_id/close', closeFinancialYear);
+router.get('/audit-logs', getAccountingAuditLogs);
 
 // Reports
 router.get('/reports/trial-balance', getTrialBalance);

@@ -517,6 +517,7 @@ export const getPurchaseInvoices = async (req, res) => {
             LEFT JOIN vouchers v ON pi.accounting_voucher_id = v.voucher_id
             LEFT JOIN grns g ON pi.grn_id = g.id
             WHERE pi.company_id = $1
+              AND pi.status = 'POSTED'
         `;
         const params = [companyId];
 

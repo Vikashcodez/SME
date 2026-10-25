@@ -3,6 +3,7 @@ import {
     createSalesInvoice,
     getSalesInvoices,
     getSalesInvoiceById,
+    getCustomerOutstanding,
     recordReceiptSettlement,
     getQuotations,
     createQuotation,
@@ -20,6 +21,7 @@ router.use(authenticate);
 router.post('/invoices', createSalesInvoice);
 router.get('/invoices', getSalesInvoices);
 router.get('/invoices/:id', getSalesInvoiceById);
+router.get('/customers/:customer_id/outstanding', getCustomerOutstanding);
 
 // Bill Settlements / Receipts
 router.post('/receipts', recordReceiptSettlement);

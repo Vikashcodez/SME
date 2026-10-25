@@ -42,6 +42,9 @@ import PurchaseInvoiceManagement from './pages/Commercial/PurchaseInvoiceManagem
 import ManufacturingJournal from './pages/Commercial/ManufacturingJournal';
 import Compliance from './pages/Commercial/Compliance';
 import LedgerManagement from './pages/Commercial/LedgerManagement';
+import AccountingGateway from './pages/Commercial/AccountingGateway';
+import AccountingControls from './pages/Commercial/AccountingControls';
+import AccountingManagement from './pages/Commercial/AccountingManagement';
 
 const AppContent = () => {
   const { isAuthenticated, isSuperAdmin, isCompanyAdmin, isBranchAdmin, isEmployee } = useAuth();
@@ -80,6 +83,39 @@ const AppContent = () => {
           <ProtectedRoute requiredRole="company_admin">
             <CompanyAdminLayout>
               <CompanyDashboard />
+            </CompanyAdminLayout>
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/accounting"
+        element={
+          <ProtectedRoute requiredRole="company_admin">
+            <CompanyAdminLayout>
+              <AccountingGateway />
+            </CompanyAdminLayout>
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/accounting-controls"
+        element={
+          <ProtectedRoute requiredRole="company_admin">
+            <CompanyAdminLayout>
+              <AccountingControls />
+            </CompanyAdminLayout>
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/accounting-management"
+        element={
+          <ProtectedRoute requiredRole="company_admin">
+            <CompanyAdminLayout>
+              <AccountingManagement />
             </CompanyAdminLayout>
           </ProtectedRoute>
         }
@@ -411,6 +447,39 @@ const AppContent = () => {
           <ProtectedRoute requiredRole="branch_admin">
             <BranchAdminLayout>
               <BranchAdminDashboard />
+            </BranchAdminLayout>
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/branch/accounting"
+        element={
+          <ProtectedRoute requiredRole="branch_admin">
+            <BranchAdminLayout>
+              <AccountingGateway />
+            </BranchAdminLayout>
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/branch/accounting-controls"
+        element={
+          <ProtectedRoute requiredRole="branch_admin">
+            <BranchAdminLayout>
+              <AccountingControls />
+            </BranchAdminLayout>
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/branch/accounting-management"
+        element={
+          <ProtectedRoute requiredRole="branch_admin">
+            <BranchAdminLayout>
+              <AccountingManagement />
             </BranchAdminLayout>
           </ProtectedRoute>
         }

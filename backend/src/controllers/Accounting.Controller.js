@@ -1,5 +1,32 @@
 import pool from '../config/database.js';
 
+const recordAccountingAudit = async (client, {
+    companyId,
+    entityName,
+    entityId,
+    actionType,
+    preState = null,
+    postState = null,
+    performedBy = null,
+    clientIp = null
+}) => {
+    await client.query(`
+        INSERT INTO accounting_audit_logs (
+            company_id, entity_name, entity_id, action_type,
+            pre_state, post_state, performed_by, client_ip_address
+        ) VALUES ($1, $2, $3, $4, $5::JSONB, $6::JSONB, $7, $8)
+    `, [
+        companyId,
+        entityName,
+        entityId,
+        actionType,
+        preState ? JSON.stringify(preState) : null,
+        postState ? JSON.stringify(postState) : null,
+        performedBy,
+        clientIp
+    ]);
+};
+
 // Helper: Generate voucher number
 const generateVoucherNumber = async (client, companyId, branchId, voucherCode) => {
     const year = new Date().getFullYear();
@@ -327,6 +354,187 @@ export const createBankAccount = async (req, res) => {
     }
 };
 
+// 5c. Bank reconciliation and statement matching
+export const getBankReconciliation = async (req, res) => {
+    try {
+        const companyId = req.scopeCompanyId || req.query.company_id || req.user?.company_id;
+        const bankAccountId = req.query.bank_account_id;
+        if (!companyId) return res.status(400).json({ success: false, message: 'Company ID is required.' });
+
+        const result = await pool.query(`
+            SELECT
+                br.reconciliation_id,
+                br.bank_account_id,
+                br.clearing_date,
+                br.instrument_number,
+                br.reconciliation_status,
+                br.bank_statement_reference,
+                br.reconciled_at,
+                ba.bank_name,
+                ba.account_number,
+                v.voucher_id,
+                v.voucher_number,
+                v.voucher_date,
+                vl.line_id,
+                vl.debit_amount,
+                vl.credit_amount,
+                vl.narration
+            FROM bank_reconciliation_records br
+            JOIN bank_accounts ba ON ba.bank_account_id = br.bank_account_id
+            JOIN voucher_lines vl ON vl.line_id = br.voucher_line_id
+            JOIN vouchers v ON v.voucher_id = vl.voucher_id
+            WHERE ba.company_id = $1
+              AND v.is_posted = TRUE
+              AND v.is_reversed = FALSE
+              ${bankAccountId ? 'AND br.bank_account_id = $2' : ''}
+            ORDER BY v.voucher_date DESC, v.voucher_id DESC
+        `, bankAccountId ? [companyId, bankAccountId] : [companyId]);
+
+        return res.json({ success: true, data: result.rows });
+    } catch (error) {
+        console.error('Error loading bank reconciliation:', error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+export const updateBankReconciliation = async (req, res) => {
+    try {
+        const companyId = req.scopeCompanyId || req.body.company_id || req.user?.company_id;
+        const { voucher_line_id, bank_account_id, reconciliation_status = 'CLEARED', clearing_date, instrument_number, bank_statement_reference } = req.body;
+        const validStatuses = ['UNCLEARED', 'CLEARED', 'BOUNCED', 'CANCELLED'];
+        if (!companyId || !voucher_line_id || !bank_account_id || !validStatuses.includes(reconciliation_status)) {
+            return res.status(400).json({ success: false, message: 'Company, voucher line, bank account, and a valid reconciliation status are required.' });
+        }
+
+        const ownership = await pool.query(`
+            SELECT 1
+            FROM bank_accounts ba
+            JOIN voucher_lines vl ON vl.line_id = $2
+            JOIN vouchers v ON v.voucher_id = vl.voucher_id
+            WHERE ba.company_id = $1
+              AND ba.bank_account_id = $3
+              AND v.company_id = $1
+              AND v.is_posted = TRUE
+              AND v.is_reversed = FALSE
+              AND vl.ledger_id = ba.ledger_id
+        `, [companyId, voucher_line_id, bank_account_id]);
+        if (ownership.rows.length === 0) {
+            return res.status(400).json({ success: false, message: 'The voucher line is not a posted entry for the selected bank account.' });
+        }
+
+        const result = await pool.query(`
+            INSERT INTO bank_reconciliation_records (
+                voucher_line_id, bank_account_id, clearing_date, instrument_number,
+                reconciliation_status, bank_statement_reference, reconciled_by, reconciled_at
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, CASE WHEN $5 = 'CLEARED' THEN CURRENT_TIMESTAMP ELSE NULL END)
+            ON CONFLICT (voucher_line_id) DO UPDATE SET
+                bank_account_id = EXCLUDED.bank_account_id,
+                clearing_date = EXCLUDED.clearing_date,
+                instrument_number = EXCLUDED.instrument_number,
+                reconciliation_status = EXCLUDED.reconciliation_status,
+                bank_statement_reference = EXCLUDED.bank_statement_reference,
+                reconciled_by = EXCLUDED.reconciled_by,
+                reconciled_at = EXCLUDED.reconciled_at
+            RETURNING *
+        `, [voucher_line_id, bank_account_id, clearing_date || null, instrument_number || null, reconciliation_status, bank_statement_reference || null, req.user?.employee_id || null]);
+
+        return res.json({ success: true, data: result.rows[0] });
+    } catch (error) {
+        console.error('Error updating bank reconciliation:', error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+export const getCostCentres = async (req, res) => {
+    try {
+        const companyId = req.scopeCompanyId || req.query.company_id || req.user?.company_id;
+        const result = await pool.query(`
+            SELECT cc.*, c.category_name, p.cost_centre_name AS parent_cost_centre_name
+            FROM cost_centres cc
+            JOIN cost_categories c ON c.cost_category_id = cc.cost_category_id
+            LEFT JOIN cost_centres p ON p.cost_centre_id = cc.parent_cost_centre_id
+            WHERE cc.company_id = $1
+            ORDER BY c.category_name, cc.cost_centre_name
+        `, [companyId]);
+        return res.json({ success: true, data: result.rows });
+    } catch (error) {
+        console.error('Error loading cost centres:', error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+export const createCostCentre = async (req, res) => {
+    try {
+        const companyId = req.scopeCompanyId || req.body.company_id || req.user?.company_id;
+        const { category_name, cost_centre_name, cost_centre_code, parent_cost_centre_id = null } = req.body;
+        if (!companyId || !category_name?.trim() || !cost_centre_name?.trim() || !cost_centre_code?.trim()) {
+            return res.status(400).json({ success: false, message: 'Company, category, cost centre name, and code are required.' });
+        }
+        const category = await pool.query(`
+            INSERT INTO cost_categories (company_id, category_name)
+            VALUES ($1, $2)
+            ON CONFLICT (company_id, category_name) DO UPDATE SET category_name = EXCLUDED.category_name
+            RETURNING cost_category_id
+        `, [companyId, category_name.trim()]);
+        const result = await pool.query(`
+            INSERT INTO cost_centres (company_id, cost_category_id, parent_cost_centre_id, cost_centre_name, cost_centre_code)
+            VALUES ($1, $2, $3, $4, $5)
+            RETURNING *
+        `, [companyId, category.rows[0].cost_category_id, parent_cost_centre_id || null, cost_centre_name.trim(), cost_centre_code.trim().toUpperCase()]);
+        return res.status(201).json({ success: true, data: result.rows[0] });
+    } catch (error) {
+        console.error('Error creating cost centre:', error);
+        return res.status(error.code === '23505' ? 409 : 500).json({ success: false, message: error.message });
+    }
+};
+
+export const getBudgetVariance = async (req, res) => {
+    try {
+        const companyId = req.scopeCompanyId || req.query.company_id || req.user?.company_id;
+        const financialYearId = req.query.financial_year_id;
+        if (!companyId || !financialYearId) return res.status(400).json({ success: false, message: 'Company and financial year are required.' });
+        const result = await pool.query(`
+            SELECT
+                b.budget_id,
+                b.budget_name,
+                b.allocated_amount,
+                l.ledger_name,
+                ag.group_name,
+                COALESCE(SUM(
+                    CASE WHEN v.voucher_id IS NULL THEN 0
+                         WHEN ag.nature = 'EXPENSE' THEN vl.debit_amount - vl.credit_amount
+                         WHEN ag.nature = 'INCOME' THEN vl.credit_amount - vl.debit_amount
+                         ELSE 0 END
+                ), 0)::NUMERIC(16,2) AS actual_amount
+            FROM budgets b
+            LEFT JOIN ledgers l ON l.ledger_id = b.ledger_id
+            LEFT JOIN account_groups ag ON ag.group_id = COALESCE(l.group_id, b.group_id)
+            LEFT JOIN voucher_lines vl ON vl.ledger_id = b.ledger_id
+            LEFT JOIN vouchers v ON v.voucher_id = vl.voucher_id
+                AND v.company_id = b.company_id
+                AND v.is_posted = TRUE
+                AND v.is_reversed = FALSE
+            WHERE b.company_id = $1
+              AND b.financial_year_id = $2
+            GROUP BY b.budget_id, b.budget_name, b.allocated_amount, l.ledger_name, ag.group_name
+            ORDER BY b.budget_name
+        `, [companyId, financialYearId]);
+        return res.json({
+            success: true,
+            data: result.rows.map((row) => ({
+                ...row,
+                variance_amount: (Number(row.allocated_amount) - Number(row.actual_amount)).toFixed(2),
+                utilization_percentage: Number(row.allocated_amount) > 0
+                    ? ((Number(row.actual_amount) / Number(row.allocated_amount)) * 100).toFixed(2)
+                    : '0.00'
+            }))
+        });
+    } catch (error) {
+        console.error('Error loading budget variance:', error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 // 6. Get Ledger Statement (Running Debit/Credit Ledger Book)
 export const getLedgerStatement = async (req, res) => {
     try {
@@ -364,10 +572,12 @@ export const getLedgerStatement = async (req, res) => {
             FROM voucher_lines vl
             JOIN vouchers v ON vl.voucher_id = v.voucher_id
             JOIN voucher_types vt ON v.voucher_type_id = vt.voucher_type_id
-            WHERE vl.ledger_id = $1 AND v.is_posted = TRUE
+            WHERE vl.ledger_id = $1
+              AND v.company_id = $2
+              AND v.is_posted = TRUE
+              AND v.is_reversed = FALSE
         `;
         const params = [ledger_id, companyId];
-        query = query.replace('WHERE vl.ledger_id = $1', 'WHERE vl.ledger_id = $1 AND v.company_id = $2');
 
         if (from_date) {
             params.push(from_date);
@@ -484,6 +694,58 @@ export const createVoucher = async (req, res) => {
             });
         }
 
+        const ledgerIds = [...new Set(lines.map((line) => Number(line.ledger_id)))];
+        if (ledgerIds.some((ledgerId) => !Number.isInteger(ledgerId) || ledgerId <= 0)) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({
+                success: false,
+                message: 'Every voucher line must reference a valid ledger.'
+            });
+        }
+
+        const ledgerRes = await client.query(`
+            SELECT l.ledger_id, l.is_active
+            FROM ledgers l
+            WHERE l.company_id = $1
+              AND l.ledger_id = ANY($2::BIGINT[])
+            FOR UPDATE
+        `, [companyId, ledgerIds]);
+        if (ledgerRes.rows.length !== ledgerIds.length) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({
+                success: false,
+                message: 'One or more voucher ledgers do not belong to this company.'
+            });
+        }
+        const inactiveLedger = ledgerRes.rows.find((ledger) => !ledger.is_active);
+        if (inactiveLedger) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({
+                success: false,
+                message: `Ledger ${inactiveLedger.ledger_id} is inactive and cannot receive postings.`
+            });
+        }
+
+        const periodRes = await client.query(`
+            SELECT fy.financial_year_id, fy.is_closed, ap.is_locked
+            FROM financial_years fy
+            LEFT JOIN accounting_periods ap
+              ON ap.financial_year_id = fy.financial_year_id
+             AND $2::DATE BETWEEN ap.start_date AND ap.end_date
+            WHERE fy.company_id = $1
+              AND $2::DATE BETWEEN fy.start_date AND fy.end_date
+            ORDER BY fy.start_date DESC
+            LIMIT 1
+        `, [companyId, voucher_date]);
+        const accountingPeriod = periodRes.rows[0];
+        if (accountingPeriod?.is_closed || accountingPeriod?.is_locked) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({
+                success: false,
+                message: 'The selected accounting period is locked and cannot accept new vouchers.'
+            });
+        }
+
         // Fetch voucher type
         const vtRes = await client.query(
             `SELECT voucher_type_id FROM voucher_types
@@ -505,16 +767,18 @@ export const createVoucher = async (req, res) => {
             INSERT INTO vouchers (
                 company_id, branch_id, voucher_type_id, voucher_number, voucher_date,
                 reference_number, reference_date, narration,
+                source_module, financial_year_id,
                 is_posted, created_by, posted_by, posted_at
             ) VALUES (
                 $1, $2, $3, $4, $5,
                 $6, $7, $8,
-                TRUE, $9, $9, CURRENT_TIMESTAMP
+                'MANUAL', $9,
+                TRUE, $10, $10, CURRENT_TIMESTAMP
             ) RETURNING *
         `, [
             companyId, branchId, voucherTypeId, voucherNumber, voucher_date,
             reference_number || null, reference_date || null, narration || null,
-            createdBy
+            accountingPeriod?.financial_year_id || null, createdBy
         ]);
         const voucher = voucherRes.rows[0];
 
@@ -578,6 +842,16 @@ export const createVoucher = async (req, res) => {
                 `, [newBal, newBalType, line.ledger_id]);
             }
         }
+
+        await recordAccountingAudit(client, {
+            companyId,
+            entityName: 'vouchers',
+            entityId: voucher.voucher_id,
+            actionType: 'POST',
+            postState: { ...voucher, total_debit: totalDebit, total_credit: totalCredit },
+            performedBy: createdBy,
+            clientIp: req.ip
+        });
 
         // Bill Allocations if any
         if (Array.isArray(bill_allocations) && bill_allocations.length > 0) {
@@ -740,7 +1014,10 @@ export const getTrialBalance = async (req, res) => {
             FROM ledgers l
             JOIN account_groups ag ON l.group_id = ag.group_id
             LEFT JOIN voucher_lines vl ON l.ledger_id = vl.ledger_id
-            LEFT JOIN vouchers v ON vl.voucher_id = v.voucher_id AND v.is_posted = TRUE AND v.voucher_date <= $2
+            LEFT JOIN vouchers v ON vl.voucher_id = v.voucher_id
+                AND v.is_posted = TRUE
+                AND v.is_reversed = FALSE
+                AND v.voucher_date <= $2
             WHERE l.company_id = $1
             GROUP BY l.ledger_id, l.ledger_name, l.ledger_code, ag.group_name, ag.nature, l.opening_balance, l.opening_balance_type, l.current_balance, l.current_balance_type
             ORDER BY ag.nature, l.ledger_name ASC
@@ -824,6 +1101,8 @@ export const getDayBook = async (req, res) => {
             WHERE v.company_id = $1
               AND v.voucher_date >= $2
               AND v.voucher_date <= $3
+              AND v.is_posted = TRUE
+              AND v.is_reversed = FALSE
               AND NOT (
                   v.source_module = 'SALES_INVOICE'
                   OR (
@@ -868,6 +1147,7 @@ export const getDayBook = async (req, res) => {
             JOIN account_groups ag ON ag.group_id = l.group_id
             WHERE v.company_id = $1
               AND v.is_posted = TRUE
+              AND v.is_reversed = FALSE
               AND v.voucher_date <= $2
               AND ag.group_code IN ('GRP-CASH', 'GRP-BANK')
         `;
@@ -1034,7 +1314,7 @@ export const getProfitAndLoss = async (req, res) => {
             FROM ledgers l
             JOIN account_groups ag ON l.group_id = ag.group_id
             JOIN voucher_lines vl ON l.ledger_id = vl.ledger_id
-            JOIN vouchers v ON vl.voucher_id = v.voucher_id AND v.is_posted = TRUE
+            JOIN vouchers v ON vl.voucher_id = v.voucher_id AND v.is_posted = TRUE AND v.is_reversed = FALSE
             WHERE l.company_id = $1 AND v.voucher_date >= $2 AND v.voucher_date <= $3
               AND v.source_module IS DISTINCT FROM 'PURCHASE_INVOICE'
               AND ag.nature IN ('INCOME', 'EXPENSE')
@@ -1163,7 +1443,7 @@ export const getBalanceSheet = async (req, res) => {
             FROM ledgers l
             JOIN account_groups ag ON l.group_id = ag.group_id
             JOIN voucher_lines vl ON l.ledger_id = vl.ledger_id
-            JOIN vouchers v ON vl.voucher_id = v.voucher_id AND v.is_posted = TRUE
+            JOIN vouchers v ON vl.voucher_id = v.voucher_id AND v.is_posted = TRUE AND v.is_reversed = FALSE
             WHERE l.company_id = $1 AND v.voucher_date <= $2
               AND v.source_module IS DISTINCT FROM 'PURCHASE_INVOICE'
               AND ag.nature IN ('INCOME', 'EXPENSE')
@@ -1221,7 +1501,10 @@ export const getBalanceSheet = async (req, res) => {
             FROM ledgers l
             JOIN account_groups ag ON l.group_id = ag.group_id
             LEFT JOIN voucher_lines vl ON l.ledger_id = vl.ledger_id
-            LEFT JOIN vouchers v ON vl.voucher_id = v.voucher_id AND v.is_posted = TRUE AND v.voucher_date <= $2
+            LEFT JOIN vouchers v ON vl.voucher_id = v.voucher_id
+                AND v.is_posted = TRUE
+                AND v.is_reversed = FALSE
+                AND v.voucher_date <= $2
             WHERE l.company_id = $1 AND ag.nature IN ('ASSET', 'LIABILITY', 'EQUITY')
             GROUP BY l.ledger_id, l.ledger_name, l.ledger_code, ag.group_name, ag.group_code, ag.nature, l.opening_balance, l.opening_balance_type, l.current_balance, l.current_balance_type
             ORDER BY ag.nature, ag.group_name, l.ledger_name ASC
@@ -1427,7 +1710,7 @@ export const getExpenseStatement = async (req, res) => {
             FROM ledgers l
             JOIN account_groups ag ON l.group_id = ag.group_id
             JOIN voucher_lines vl ON l.ledger_id = vl.ledger_id
-            JOIN vouchers v ON vl.voucher_id = v.voucher_id AND v.is_posted = TRUE
+            JOIN vouchers v ON vl.voucher_id = v.voucher_id AND v.is_posted = TRUE AND v.is_reversed = FALSE
             WHERE l.company_id = $1 AND v.voucher_date >= $2 AND v.voucher_date <= $3
               AND v.source_module IS DISTINCT FROM 'PURCHASE_INVOICE'
               AND ag.nature = 'EXPENSE'
@@ -1481,8 +1764,19 @@ export const getFinancialYears = async (req, res) => {
     try {
         const companyId = req.scopeCompanyId || req.user?.company_id;
         const result = await pool.query(`
-            SELECT fy.*, COUNT(ap.period_id)::INT AS period_count,
-                   COUNT(ap.period_id) FILTER (WHERE ap.is_locked)::INT AS locked_period_count
+            SELECT fy.*,
+                   COUNT(ap.period_id)::INT AS period_count,
+                   COUNT(ap.period_id) FILTER (WHERE ap.is_locked)::INT AS locked_period_count,
+                   COALESCE(json_agg(
+                       json_build_object(
+                           'period_id', ap.period_id,
+                           'period_number', ap.period_number,
+                           'start_date', ap.start_date,
+                           'end_date', ap.end_date,
+                           'is_locked', ap.is_locked,
+                           'locked_at', ap.locked_at
+                       ) ORDER BY ap.period_number
+                   ) FILTER (WHERE ap.period_id IS NOT NULL), '[]'::JSON) AS periods
             FROM financial_years fy
             LEFT JOIN accounting_periods ap ON ap.financial_year_id = fy.financial_year_id
             WHERE fy.company_id = $1
@@ -1516,6 +1810,15 @@ export const createFinancialYear = async (req, res) => {
             FROM generate_series(1, 12) AS month_no
             WHERE ($2::date + ((month_no - 1) || ' months')::interval)::date <= $3::date
         `, [yearRes.rows[0].financial_year_id, start_date, end_date]);
+        await recordAccountingAudit(client, {
+            companyId,
+            entityName: 'financial_years',
+            entityId: yearRes.rows[0].financial_year_id,
+            actionType: 'INSERT',
+            postState: yearRes.rows[0],
+            performedBy: req.user?.employee_id || null,
+            clientIp: req.ip
+        });
         await client.query('COMMIT');
         return res.status(201).json({ success: true, data: yearRes.rows[0] });
     } catch (error) {
@@ -1527,11 +1830,13 @@ export const createFinancialYear = async (req, res) => {
 };
 
 export const setPeriodLock = async (req, res) => {
+    const client = await pool.connect();
     try {
         const companyId = req.scopeCompanyId || req.user?.company_id;
         const periodId = req.params.period_id;
         const locked = req.body.locked !== false;
-        const result = await pool.query(`
+        await client.query('BEGIN');
+        const result = await client.query(`
             UPDATE accounting_periods ap
             SET is_locked = $1, locked_at = CASE WHEN $1 THEN CURRENT_TIMESTAMP ELSE NULL END,
                 locked_by = CASE WHEN $1 THEN $2 ELSE NULL END
@@ -1539,10 +1844,112 @@ export const setPeriodLock = async (req, res) => {
             WHERE ap.period_id = $3 AND ap.financial_year_id = fy.financial_year_id AND fy.company_id = $4
             RETURNING ap.*
         `, [locked, req.user?.employee_id || null, periodId, companyId]);
-        if (result.rows.length === 0) return res.status(404).json({ success: false, message: 'Accounting period not found.' });
+        if (result.rows.length === 0) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({ success: false, message: 'Accounting period not found.' });
+        }
+        await recordAccountingAudit(client, {
+            companyId,
+            entityName: 'accounting_periods',
+            entityId: periodId,
+            actionType: locked ? 'LOCK' : 'UNLOCK',
+            postState: result.rows[0],
+            performedBy: req.user?.employee_id || null,
+            clientIp: req.ip
+        });
+        await client.query('COMMIT');
         return res.json({ success: true, data: result.rows[0] });
     } catch (error) {
+        await client.query('ROLLBACK');
         return res.status(400).json({ success: false, message: error.message });
+    } finally {
+        client.release();
+    }
+};
+
+export const closeFinancialYear = async (req, res) => {
+    const client = await pool.connect();
+    try {
+        const companyId = req.scopeCompanyId || req.body.company_id || req.user?.company_id;
+        const financialYearId = req.params.financial_year_id;
+        await client.query('BEGIN');
+        const yearRes = await client.query(`
+            SELECT * FROM financial_years
+            WHERE financial_year_id = $1 AND company_id = $2
+            FOR UPDATE
+        `, [financialYearId, companyId]);
+        if (yearRes.rows.length === 0) throw new Error('Financial year not found.');
+        if (yearRes.rows[0].is_closed) throw new Error('Financial year is already closed.');
+
+        const openPeriods = await client.query(`
+            SELECT COUNT(*)::INT AS count
+            FROM accounting_periods
+            WHERE financial_year_id = $1 AND is_locked = FALSE
+        `, [financialYearId]);
+        if (openPeriods.rows[0].count > 0) {
+            throw new Error('Lock all accounting periods before closing the financial year.');
+        }
+
+        const balanceCheck = await client.query(`
+            SELECT v.voucher_id,
+                   COALESCE(SUM(vl.debit_amount), 0) AS debit_total,
+                   COALESCE(SUM(vl.credit_amount), 0) AS credit_total
+            FROM vouchers v
+            LEFT JOIN voucher_lines vl ON vl.voucher_id = v.voucher_id
+            WHERE v.company_id = $1
+              AND v.financial_year_id = $2
+              AND v.is_posted = TRUE
+              AND v.is_reversed = FALSE
+            GROUP BY v.voucher_id
+            HAVING COALESCE(SUM(vl.debit_amount), 0) <= 0
+                OR COALESCE(SUM(vl.debit_amount), 0) <> COALESCE(SUM(vl.credit_amount), 0)
+            LIMIT 1
+        `, [companyId, financialYearId]);
+        if (balanceCheck.rows.length > 0) {
+            throw new Error(`Cannot close year: voucher ${balanceCheck.rows[0].voucher_id} is unbalanced.`);
+        }
+
+        const result = await client.query(`
+            UPDATE financial_years
+            SET is_closed = TRUE, closed_at = CURRENT_TIMESTAMP, closed_by = $1
+            WHERE financial_year_id = $2 AND company_id = $3
+            RETURNING *
+        `, [req.user?.employee_id || null, financialYearId, companyId]);
+        await recordAccountingAudit(client, {
+            companyId,
+            entityName: 'financial_years',
+            entityId: financialYearId,
+            actionType: 'LOCK',
+            preState: yearRes.rows[0],
+            postState: result.rows[0],
+            performedBy: req.user?.employee_id || null,
+            clientIp: req.ip
+        });
+        await client.query('COMMIT');
+        return res.json({ success: true, data: result.rows[0] });
+    } catch (error) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ success: false, message: error.message });
+    } finally {
+        client.release();
+    }
+};
+
+export const getAccountingAuditLogs = async (req, res) => {
+    try {
+        const companyId = req.scopeCompanyId || req.query.company_id || req.user?.company_id;
+        const limit = Math.min(Math.max(Number(req.query.limit) || 100, 1), 500);
+        const result = await pool.query(`
+            SELECT al.*, e.first_name || ' ' || COALESCE(e.last_name, '') AS performed_by_name
+            FROM accounting_audit_logs al
+            LEFT JOIN employees e ON e.employee_id = al.performed_by
+            WHERE al.company_id = $1
+            ORDER BY al.timestamp DESC
+            LIMIT $2
+        `, [companyId, limit]);
+        return res.json({ success: true, data: result.rows });
+    } catch (error) {
+        return res.status(500).json({ success: false, message: error.message });
     }
 };
 
@@ -1596,6 +2003,16 @@ export const reverseVoucher = async (req, res) => {
             `, [line.credit_amount, line.debit_amount, line.ledger_id, companyId]);
         }
         await client.query(`UPDATE vouchers SET is_reversed = TRUE, reversed_by_voucher_id = $1 WHERE voucher_id = $2`, [reversal.voucher_id, voucherId]);
+        await recordAccountingAudit(client, {
+            companyId,
+            entityName: 'vouchers',
+            entityId: voucherId,
+            actionType: 'REVERSE',
+            preState: original,
+            postState: { reversal_voucher_id: reversal.voucher_id },
+            performedBy: req.user?.employee_id || null,
+            clientIp: req.ip
+        });
         await client.query('COMMIT');
         return res.status(201).json({ success: true, data: reversal });
     } catch (error) {
