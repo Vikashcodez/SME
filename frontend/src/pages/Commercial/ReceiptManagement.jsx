@@ -39,6 +39,7 @@ const ReceiptManagement = () => {
   const [settlementDate, setSettlementDate] = useState(new Date().toISOString().split('T')[0]);
   const [narration, setNarration] = useState('');
   const [allocations, setAllocations] = useState({}); // { [invoice_id]: allocatedAmount }
+  const [selectedInvoiceId, setSelectedInvoiceId] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
   // Fetch Customers
@@ -61,6 +62,7 @@ const ReceiptManagement = () => {
     if (!selectedCustomerId) {
       setUnpaidInvoices([]);
       setAllocations({});
+      setSelectedInvoiceId('');
       return;
     }
 
@@ -74,6 +76,7 @@ const ReceiptManagement = () => {
         const due = (res.data.data || []).filter(inv => inv.payment_status !== 'PAID');
         setUnpaidInvoices(due);
         setAllocations({});
+        setSelectedInvoiceId('');
       } catch (err) {
         console.error(err);
         toast.error('Failed to load pending bills');
@@ -89,24 +92,12 @@ const ReceiptManagement = () => {
     return customersList.find(c => String(c.customer_id) === String(selectedCustomerId));
   }, [selectedCustomerId, customersList]);
 
-  // Auto Allocate FIFO (oldest bills first)
-  const handleAutoAllocate = () => {
-    let rem = parseFloat(receiptAmount) || 0;
-    if (rem <= 0) {
-      toast.error('Please enter a Receipt Amount first');
-      return;
-    }
-
-    const newAlloc = {};
-    for (const inv of unpaidInvoices) {
-      const due = parseFloat(inv.outstanding_amount || inv.balance_due || inv.net_total_amount);
-      if (rem <= 0) break;
-      const alloc = Math.min(rem, due);
-      newAlloc[inv.sales_invoice_id] = alloc;
-      rem -= alloc;
-    }
-    setAllocations(newAlloc);
-    toast.success('Auto-allocated against pending invoices via FIFO');
+  const handleInvoiceSelect = (invoice) => {
+    const invoiceId = String(invoice.sales_invoice_id);
+    const due = parseFloat(invoice.outstanding_amount || invoice.balance_due || invoice.net_total_amount) || 0;
+    const amount = parseFloat(receiptAmount) || 0;
+    setSelectedInvoiceId(invoiceId);
+    setAllocations({ [invoiceId]: amount > 0 ? Math.min(amount, due) : '' });
   };
 
   // Total Allocated
@@ -127,12 +118,22 @@ const ReceiptManagement = () => {
       return;
     }
 
+    if (unpaidInvoices.length > 0 && !selectedInvoiceId) {
+      toast.error('Select the invoice against which this receipt should be settled');
+      return;
+    }
+
     const allocList = Object.entries(allocations)
       .filter(([_, val]) => parseFloat(val) > 0)
       .map(([invId, val]) => ({
         invoice_id: parseInt(invId),
         allocated_amount: parseFloat(val)
       }));
+
+    if (selectedInvoiceId && (allocList.length !== 1 || Math.abs(allocList[0].allocated_amount - amt) > 0.01)) {
+      toast.error('The selected invoice allocation must equal the receipt amount');
+      return;
+    }
 
     try {
       setSubmitting(true);
@@ -154,6 +155,7 @@ const ReceiptManagement = () => {
       setRefNumber('');
       setNarration('');
       setAllocations({});
+      setSelectedInvoiceId('');
       // Refresh customer invoices & data
       fetchCustomers();
       const res = await salesApi.getInvoices({ company_id: companyId, customer_id: selectedCustomerId });
@@ -233,7 +235,15 @@ const ReceiptManagement = () => {
                 required
                 placeholder="0.00"
                 value={receiptAmount}
-                onChange={(e) => setReceiptAmount(e.target.value)}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  setReceiptAmount(value);
+                  if (selectedInvoiceId) {
+                    const invoice = unpaidInvoices.find((item) => String(item.sales_invoice_id) === selectedInvoiceId);
+                    const due = parseFloat(invoice?.outstanding_amount || invoice?.balance_due || invoice?.net_total_amount) || 0;
+                    setAllocations({ [selectedInvoiceId]: Math.min(parseFloat(value) || 0, due) });
+                  }
+                }}
                 className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-base font-bold text-slate-900 focus:ring-2 focus:ring-indigo-500/20 font-mono"
               />
             </div>
@@ -326,13 +336,9 @@ const ReceiptManagement = () => {
             </div>
 
             {unpaidInvoices.length > 0 && (
-              <button
-                type="button"
-                onClick={handleAutoAllocate}
-                className="px-3.5 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-xl text-xs font-semibold transition"
-              >
-                Auto-Allocate (FIFO)
-              </button>
+              <span className="px-3 py-1.5 bg-indigo-50 text-indigo-700 rounded-xl text-xs font-semibold">
+                Select one invoice
+              </span>
             )}
           </div>
 
@@ -356,20 +362,33 @@ const ReceiptManagement = () => {
                 <table className="w-full text-xs text-left">
                   <thead className="bg-slate-50 border-b border-slate-200 text-slate-600 font-semibold">
                     <tr>
+                      <th className="p-3 w-10">Pay</th>
                       <th className="p-3">Invoice #</th>
                       <th className="p-3">Date / Due</th>
                       <th className="p-3 text-right">Invoice Total</th>
                       <th className="p-3 text-right">Outstanding Due</th>
-                      <th className="p-3 text-right w-36">Allocated (₹)</th>
+                      <th className="p-3 text-right w-36">Payment Applied (₹)</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
                     {unpaidInvoices.map((inv) => {
                       const due = parseFloat(inv.outstanding_amount || inv.balance_due || inv.net_total_amount);
-                      const currentAlloc = allocations[inv.sales_invoice_id] || '';
+                      const invoiceId = String(inv.sales_invoice_id);
+                      const isSelected = selectedInvoiceId === invoiceId;
+                      const currentAlloc = isSelected ? allocations[inv.sales_invoice_id] || '' : '';
 
                       return (
-                        <tr key={inv.sales_invoice_id} className="hover:bg-slate-50/50">
+                        <tr key={inv.sales_invoice_id} className={`hover:bg-slate-50/50 ${isSelected ? 'bg-indigo-50/60' : ''}`}>
+                          <td className="p-3">
+                            <input
+                              type="radio"
+                              name="settlement-invoice"
+                              checked={isSelected}
+                              onChange={() => handleInvoiceSelect(inv)}
+                              className="h-4 w-4 accent-indigo-600"
+                              aria-label={`Select invoice ${inv.invoice_number}`}
+                            />
+                          </td>
                           <td className="p-3">
                             <span className="font-semibold text-slate-900 font-mono">{inv.invoice_number}</span>
                             <div className="text-[10px] text-slate-400">{inv.payment_status}</div>
@@ -385,19 +404,11 @@ const ReceiptManagement = () => {
                             ₹{due.toFixed(2)}
                           </td>
                           <td className="p-3 text-right">
-                            <input
-                              type="number"
-                              min="0"
-                              max={due}
-                              step="0.01"
-                              placeholder="0.00"
-                              value={currentAlloc}
-                              onChange={(e) => {
-                                const val = parseFloat(e.target.value) || 0;
-                                setAllocations({ ...allocations, [inv.sales_invoice_id]: val });
-                              }}
-                              className="w-full px-2 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-right font-mono text-xs focus:ring-1 focus:ring-indigo-500"
-                            />
+                            {isSelected ? (
+                              <span className="font-bold text-indigo-700">₹{parseFloat(currentAlloc || 0).toFixed(2)}</span>
+                            ) : (
+                              <span className="text-slate-300">—</span>
+                            )}
                           </td>
                         </tr>
                       );

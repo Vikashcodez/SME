@@ -573,6 +573,72 @@ export const recordReceiptSettlement = async (req, res) => {
         }
         const customerLedgerId = custRes.rows[0].ledger_id;
 
+        const normalizedAllocations = allocations
+            .map((allocation) => ({
+                invoice_id: Number(allocation.invoice_id),
+                allocated_amount: Number(allocation.allocated_amount)
+            }))
+            .filter((allocation) => Number.isInteger(allocation.invoice_id) && allocation.allocated_amount > 0);
+
+        if (normalizedAllocations.length > 1) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({
+                success: false,
+                message: 'Select only one invoice for a receipt settlement.'
+            });
+        }
+
+        if (normalizedAllocations.length === 1) {
+            const allocation = normalizedAllocations[0];
+            const invoiceRes = await client.query(`
+                SELECT sales_invoice_id, outstanding_amount, payment_status
+                FROM sales_invoices
+                WHERE sales_invoice_id = $1
+                  AND customer_id = $2
+                  AND company_id = $3
+                FOR UPDATE
+            `, [allocation.invoice_id, customer_id, companyId]);
+
+            if (invoiceRes.rows.length === 0) {
+                await client.query('ROLLBACK');
+                return res.status(400).json({
+                    success: false,
+                    message: 'The selected invoice does not belong to this customer.'
+                });
+            }
+
+            const outstandingAmount = Number(invoiceRes.rows[0].outstanding_amount) || 0;
+            if (invoiceRes.rows[0].payment_status === 'PAID' || outstandingAmount <= 0) {
+                await client.query('ROLLBACK');
+                return res.status(400).json({
+                    success: false,
+                    message: 'The selected invoice is already fully settled.'
+                });
+            }
+
+            if (allocation.allocated_amount > outstandingAmount + 0.01) {
+                await client.query('ROLLBACK');
+                return res.status(400).json({
+                    success: false,
+                    message: `Payment exceeds the selected invoice outstanding amount of ₹${outstandingAmount.toFixed(2)}.`
+                });
+            }
+
+            if (Math.abs(allocation.allocated_amount - receiptAmount) > 0.01) {
+                await client.query('ROLLBACK');
+                return res.status(400).json({
+                    success: false,
+                    message: 'The invoice allocation must equal the receipt amount.'
+                });
+            }
+        } else if (allocations.length > 0) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({
+                success: false,
+                message: 'A valid invoice selection is required for this receipt.'
+            });
+        }
+
         // Fetch payment ledger (Cash or Bank)
         const paymentCode = payment_mode === 'CASH' ? 'CASH' : 'BANK_PRIMARY';
         const payLedRes = await client.query(
@@ -641,7 +707,7 @@ export const recordReceiptSettlement = async (req, res) => {
 
         // 4. Process Bill-Wise Allocations & Update Invoices
         let allocatedTotal = 0;
-        for (const alloc of allocations) {
+        for (const alloc of normalizedAllocations) {
             const allocAmt = parseFloat(alloc.allocated_amount);
             if (alloc.invoice_id && allocAmt > 0) {
                 const invCheck = await client.query(`SELECT * FROM sales_invoices WHERE sales_invoice_id = $1`, [alloc.invoice_id]);
