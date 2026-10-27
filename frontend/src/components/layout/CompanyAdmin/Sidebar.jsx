@@ -26,6 +26,7 @@ const Sidebar = ({ isCollapsed, onToggleCollapse }) => {
         { path: '/vendors', label: 'Vendor Master' },
         { path: '/raw-materials', label: 'Raw Material Master' },
         { path: '/products', label: 'Product Master' },
+        { path: '/services', label: 'Service Master' },
         { path: '/chart-of-accounts', label: 'Chart of Accounts' },
       ]
     },

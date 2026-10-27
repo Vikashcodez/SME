@@ -488,6 +488,21 @@ export const initAccountingSchema = async (dbPool) => {
                 CONSTRAINT uq_inv_item_line UNIQUE (sales_invoice_id, line_number)
             );
 
+            -- Ensure service support for invoice, quotation, and sales order items
+            ALTER TABLE sales_invoice_items ALTER COLUMN product_id DROP NOT NULL;
+            ALTER TABLE sales_invoice_items ADD COLUMN IF NOT EXISTS item_type VARCHAR(20) DEFAULT 'PRODUCT';
+            ALTER TABLE sales_invoice_items ADD COLUMN IF NOT EXISTS service_id BIGINT REFERENCES services(service_id) ON DELETE RESTRICT;
+            ALTER TABLE sales_invoice_items ADD COLUMN IF NOT EXISTS item_name VARCHAR(255);
+            ALTER TABLE sales_invoice_items ADD COLUMN IF NOT EXISTS item_code VARCHAR(100);
+
+            ALTER TABLE quotation_items ALTER COLUMN product_id DROP NOT NULL;
+            ALTER TABLE quotation_items ADD COLUMN IF NOT EXISTS item_type VARCHAR(20) DEFAULT 'PRODUCT';
+            ALTER TABLE quotation_items ADD COLUMN IF NOT EXISTS service_id BIGINT REFERENCES services(service_id) ON DELETE RESTRICT;
+
+            ALTER TABLE sales_order_items ALTER COLUMN product_id DROP NOT NULL;
+            ALTER TABLE sales_order_items ADD COLUMN IF NOT EXISTS item_type VARCHAR(20) DEFAULT 'PRODUCT';
+            ALTER TABLE sales_order_items ADD COLUMN IF NOT EXISTS service_id BIGINT REFERENCES services(service_id) ON DELETE RESTRICT;
+
             CREATE TABLE IF NOT EXISTS credit_notes (
                 credit_note_id BIGSERIAL PRIMARY KEY,
                 company_id BIGINT REFERENCES companies(company_id) ON DELETE RESTRICT,

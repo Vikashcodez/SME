@@ -3,7 +3,8 @@ import { useAuth } from '../../context/AuthContext';
 import {
   sales as salesApi,
   customers as customersApi,
-  products as productsApi
+  products as productsApi,
+  services as servicesApi
 } from '../../services/api';
 import toast from 'react-hot-toast';
 import {
@@ -22,7 +23,9 @@ import {
   Trash2,
   FileCheck,
   ShieldCheck,
-  CreditCard
+  CreditCard,
+  Package,
+  Wrench
 } from 'lucide-react';
 
 const SalesInvoiceManagement = () => {
@@ -32,6 +35,7 @@ const SalesInvoiceManagement = () => {
   const [invoices, setInvoices] = useState([]);
   const [customersList, setCustomersList] = useState([]);
   const [productsList, setProductsList] = useState([]);
+  const [servicesList, setServicesList] = useState([]);
   const [quotations, setQuotations] = useState([]);
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
@@ -50,7 +54,17 @@ const SalesInvoiceManagement = () => {
     freight_charges: 0,
     other_charges: 0,
     items: [
-      { product_id: '', quantity: 1, unit_rate: 0, discount_percentage: 0, tax_rate: 18 }
+      {
+        item_type: 'PRODUCT',
+        product_id: '',
+        service_id: '',
+        quantity: 1,
+        unit_rate: 0,
+        unit_of_measure: 'PCS',
+        discount_percentage: 0,
+        tax_rate: 18,
+        hsn_sac_code: ''
+      }
     ],
     quotation_id: '',
     quotation_edit_mode: false
@@ -74,13 +88,15 @@ const SalesInvoiceManagement = () => {
   const fetchDropdowns = async () => {
     if (!companyId) return;
     try {
-      const [cRes, pRes, qRes] = await Promise.all([
+      const [cRes, pRes, sRes, qRes] = await Promise.all([
         customersApi.getAll({ company_id: companyId, status: true }),
         productsApi.getAll({ company_id: companyId }),
+        servicesApi.getAll({ company_id: companyId, status: 'Active' }),
         salesApi.getQuotations({ company_id: companyId })
       ]);
       setCustomersList(cRes.data.data || []);
       setProductsList(pRes.data.data || pRes.data || []);
+      setServicesList(sRes.data.data || []);
       setQuotations(qRes.data.data || []);
     } catch (err) {
       console.error(err);
@@ -132,11 +148,15 @@ const SalesInvoiceManagement = () => {
       quotation_edit_mode: false,
       customer_id: String(quotation.customer_id),
       items: (quotation.items || []).map(item => ({
-        product_id: String(item.product_id),
+        item_type: item.item_type || (item.service_id ? 'SERVICE' : 'PRODUCT'),
+        product_id: item.product_id ? String(item.product_id) : '',
+        service_id: item.service_id ? String(item.service_id) : '',
         quantity: item.quantity,
         unit_rate: item.quoted_rate,
+        unit_of_measure: item.unit_of_measure || (item.service_id ? 'HRS' : 'PCS'),
         discount_percentage: item.discount_percentage || 0,
-        tax_rate: item.tax_rate
+        tax_rate: item.tax_rate,
+        hsn_sac_code: item.hsn_sac_code || ''
       })),
       freight_charges: 0,
       other_charges: 0
@@ -148,21 +168,56 @@ const SalesInvoiceManagement = () => {
     const updated = [...form.items];
     updated[index][field] = value;
 
+    if (field === 'item_type') {
+      updated[index].product_id = '';
+      updated[index].service_id = '';
+      updated[index].unit_rate = 0;
+      updated[index].unit_of_measure = value === 'SERVICE' ? 'HRS' : 'PCS';
+      updated[index].hsn_sac_code = value === 'SERVICE' ? '9983' : '9988';
+    }
+
     if (field === 'product_id') {
       const prod = productsList.find(p => String(p.product_id) === String(value));
       if (prod) {
         const masterPrice = parseFloat(prod.selling_price ?? prod.price ?? prod.cost_price ?? 0);
         updated[index].unit_rate = masterPrice;
         updated[index].tax_rate = parseFloat(prod.gst_rate ?? 18);
+        updated[index].unit_of_measure = prod.unit_of_measure || 'PCS';
+        updated[index].hsn_sac_code = prod.hsn_code || '9988';
       }
     }
+
+    if (field === 'service_id') {
+      const srv = servicesList.find(s => String(s.service_id) === String(value));
+      if (srv) {
+        const masterPrice = parseFloat(srv.service_charge ?? srv.selling_price ?? 0);
+        updated[index].unit_rate = masterPrice;
+        updated[index].tax_rate = parseFloat(srv.gst_rate ?? 18);
+        updated[index].unit_of_measure = srv.unit_of_measure || 'HRS';
+        updated[index].hsn_sac_code = srv.sac_code || srv.hsn_code || '9983';
+      }
+    }
+
     setForm({ ...form, items: updated });
   };
 
-  const addItemRow = () => {
+  const addItemRow = (type = 'PRODUCT') => {
     setForm({
       ...form,
-      items: [...form.items, { product_id: '', quantity: 1, unit_rate: 0, discount_percentage: 0, tax_rate: 18 }]
+      items: [
+        ...form.items,
+        {
+          item_type: type,
+          product_id: '',
+          service_id: '',
+          quantity: 1,
+          unit_rate: 0,
+          unit_of_measure: type === 'SERVICE' ? 'HRS' : 'PCS',
+          discount_percentage: 0,
+          tax_rate: 18,
+          hsn_sac_code: type === 'SERVICE' ? '9983' : '9988'
+        }
+      ]
     });
   };
 
@@ -236,8 +291,12 @@ const SalesInvoiceManagement = () => {
       toast.error('Please select a Customer');
       return;
     }
-    if (!form.quotation_id && form.items.some(it => !it.product_id || parseFloat(it.quantity) <= 0)) {
-      toast.error('All line items must have a Product and valid Quantity');
+    if (!form.quotation_id && form.items.some(it => {
+      const isSrv = it.item_type === 'SERVICE';
+      const missingId = isSrv ? !it.service_id : !it.product_id;
+      return missingId || parseFloat(it.quantity) <= 0;
+    })) {
+      toast.error('All line items must have a Product or Service selected, and valid Quantity');
       return;
     }
 
@@ -523,31 +582,47 @@ const SalesInvoiceManagement = () => {
                 </div>
               </div>
 
-              {/* Items Table */}
+              {/* Items Table with Product and Service Selection */}
               <div>
                 <div className="flex items-center justify-between mb-2">
-                  <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider">Line Items (Goods & Services)</h3>
-                  <button
-                    type="button"
-                    onClick={addItemRow}
-                    disabled={quotationSelected && !quotationEditMode}
-                    className="text-xs text-indigo-600 hover:text-indigo-700 font-semibold flex items-center gap-1"
-                  >
-                    <Plus className="w-3.5 h-3.5" /> Add Item
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider">Line Items (Products & Services)</h3>
+                    <span className="text-[10px] bg-slate-100 text-slate-600 font-semibold px-2 py-0.5 rounded-full border border-slate-200">
+                      {form.items.length} item{form.items.length > 1 ? 's' : ''}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => addItemRow('PRODUCT')}
+                      disabled={quotationSelected && !quotationEditMode}
+                      className="text-xs bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 px-2.5 py-1 rounded-lg font-bold flex items-center gap-1 transition-colors"
+                    >
+                      <Plus className="w-3.5 h-3.5" /> + Product
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => addItemRow('SERVICE')}
+                      disabled={quotationSelected && !quotationEditMode}
+                      className="text-xs bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 px-2.5 py-1 rounded-lg font-bold flex items-center gap-1 transition-colors"
+                    >
+                      <Plus className="w-3.5 h-3.5" /> + Service
+                    </button>
+                  </div>
                 </div>
 
-                <div className="border border-slate-200 rounded-xl overflow-hidden">
+                <div className="border border-slate-200 rounded-xl overflow-hidden shadow-xs">
                   <table className="w-full text-xs text-left">
-                    <thead className="bg-slate-50 border-b border-slate-200 text-slate-600 font-semibold">
+                    <thead className="bg-slate-50 border-b border-slate-200 text-slate-600 font-bold uppercase tracking-wider">
                       <tr>
-                        <th className="p-3 w-2/5">Product / Item</th>
-                        <th className="p-3 w-20">Qty</th>
-                        <th className="p-3 w-28">Unit Rate (₹)</th>
-                        <th className="p-3 w-20">Disc %</th>
-                        <th className="p-3 w-24">GST Rate %</th>
-                        <th className="p-3 text-right">Total (₹)</th>
-                        <th className="p-3 w-10"></th>
+                        <th className="p-2.5 w-36">Item Type</th>
+                        <th className="p-2.5">Product / Service Selection</th>
+                        <th className="p-2.5 w-24">Qty & UOM</th>
+                        <th className="p-2.5 w-28">Rate (₹)</th>
+                        <th className="p-2.5 w-16">Disc %</th>
+                        <th className="p-2.5 w-20">GST %</th>
+                        <th className="p-2.5 text-right w-28">Total (₹)</th>
+                        <th className="p-2.5 w-8"></th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
@@ -561,35 +636,102 @@ const SalesInvoiceManagement = () => {
                           ? parseFloat((selectedQuotation.items || [])[idx]?.total_amount || 0)
                           : taxable + tax;
 
+                        const isService = row.item_type === 'SERVICE';
+
                         return (
-                          <tr key={idx} className="hover:bg-slate-50/50">
+                          <tr key={idx} className={`hover:bg-slate-50/50 ${isService ? 'bg-emerald-50/15' : ''}`}>
+                            {/* Type Toggle Pill */}
                             <td className="p-2">
-                              <select
-                                required
-                                value={row.product_id}
-                                onChange={(e) => updateItemRow(idx, 'product_id', e.target.value)}
-                                disabled={quotationSelected && !quotationEditMode}
-                                className="w-full px-2 py-1.5 bg-white border border-slate-200 rounded-lg focus:ring-1 focus:ring-indigo-500"
-                              >
-                                <option value="">Select Finished Product...</option>
-                                {productsList.map(p => (
-                                  <option key={p.product_id} value={p.product_id}>
-                                    {p.product_name} ({p.sku || p.product_code || `P-${p.product_id}`}) - ₹{parseFloat(p.selling_price ?? p.price ?? 0).toFixed(2)}
-                                  </option>
-                                ))}
-                              </select>
+                              <div className="flex items-center bg-slate-100 p-0.5 rounded-lg border border-slate-200 w-fit">
+                                <button
+                                  type="button"
+                                  disabled={quotationSelected && !quotationEditMode}
+                                  onClick={() => updateItemRow(idx, 'item_type', 'PRODUCT')}
+                                  className={`px-2 py-1 rounded text-[10px] font-bold transition-all flex items-center gap-1 ${
+                                    !isService ? 'bg-indigo-600 text-white shadow-xs' : 'text-slate-600 hover:text-slate-900'
+                                  }`}
+                                >
+                                  <Package size={11} /> Product
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={quotationSelected && !quotationEditMode}
+                                  onClick={() => updateItemRow(idx, 'item_type', 'SERVICE')}
+                                  className={`px-2 py-1 rounded text-[10px] font-bold transition-all flex items-center gap-1 ${
+                                    isService ? 'bg-emerald-600 text-white shadow-xs' : 'text-slate-600 hover:text-slate-900'
+                                  }`}
+                                >
+                                  <Wrench size={11} /> Service
+                                </button>
+                              </div>
                             </td>
+
+                            {/* Item Selector */}
                             <td className="p-2">
-                              <input
-                                type="number"
-                                min="0.01"
-                                step="any"
-                                value={row.quantity}
-                                onChange={(e) => updateItemRow(idx, 'quantity', e.target.value)}
-                                readOnly={quotationSelected && !quotationEditMode}
-                                className="w-full px-2 py-1.5 bg-white border border-slate-200 rounded-lg text-right"
-                              />
+                              {isService ? (
+                                <div>
+                                  <select
+                                    required
+                                    value={row.service_id}
+                                    onChange={(e) => updateItemRow(idx, 'service_id', e.target.value)}
+                                    disabled={quotationSelected && !quotationEditMode}
+                                    className="w-full px-2.5 py-1.5 bg-emerald-50/40 border border-emerald-300 rounded-lg focus:ring-2 focus:ring-emerald-500 font-medium text-xs text-slate-800"
+                                  >
+                                    <option value="">-- Select Service --</option>
+                                    {servicesList.map(s => (
+                                      <option key={s.service_id} value={s.service_id}>
+                                        {s.service_name} ({s.service_code || `SRV-${s.service_id}`}) - ₹{parseFloat(s.service_charge ?? s.selling_price ?? 0).toFixed(2)} / {s.unit_of_measure}
+                                      </option>
+                                    ))}
+                                  </select>
+                                  {row.hsn_sac_code && (
+                                    <span className="text-[10px] text-emerald-700 font-mono font-semibold ml-1">
+                                      SAC: {row.hsn_sac_code}
+                                    </span>
+                                  )}
+                                </div>
+                              ) : (
+                                <div>
+                                  <select
+                                    required
+                                    value={row.product_id}
+                                    onChange={(e) => updateItemRow(idx, 'product_id', e.target.value)}
+                                    disabled={quotationSelected && !quotationEditMode}
+                                    className="w-full px-2.5 py-1.5 bg-indigo-50/30 border border-indigo-200 rounded-lg focus:ring-2 focus:ring-indigo-500 font-medium text-xs text-slate-800"
+                                  >
+                                    <option value="">-- Select Product --</option>
+                                    {productsList.map(p => (
+                                      <option key={p.product_id} value={p.product_id}>
+                                        {p.product_name} ({p.sku || p.product_code || `P-${p.product_id}`}) - ₹{parseFloat(p.selling_price ?? p.price ?? 0).toFixed(2)}
+                                      </option>
+                                    ))}
+                                  </select>
+                                  {row.hsn_sac_code && (
+                                    <span className="text-[10px] text-indigo-700 font-mono font-semibold ml-1">
+                                      HSN: {row.hsn_sac_code}
+                                    </span>
+                                  )}
+                                </div>
+                              )}
                             </td>
+
+                            {/* Qty & Unit */}
+                            <td className="p-2">
+                              <div className="flex items-center gap-1">
+                                <input
+                                  type="number"
+                                  min="0.01"
+                                  step="any"
+                                  value={row.quantity}
+                                  onChange={(e) => updateItemRow(idx, 'quantity', e.target.value)}
+                                  readOnly={quotationSelected && !quotationEditMode}
+                                  className="w-14 px-2 py-1.5 bg-white border border-slate-200 rounded-lg text-right font-medium"
+                                />
+                                <span className="text-[10px] font-bold text-slate-500">{row.unit_of_measure || (isService ? 'HRS' : 'PCS')}</span>
+                              </div>
+                            </td>
+
+                            {/* Unit Rate */}
                             <td className="p-2">
                               <input
                                 type="number"
@@ -598,9 +740,11 @@ const SalesInvoiceManagement = () => {
                                 value={row.unit_rate}
                                 onChange={(e) => updateItemRow(idx, 'unit_rate', e.target.value)}
                                 readOnly={quotationSelected && !quotationEditMode}
-                                className="w-full px-2 py-1.5 bg-white border border-slate-200 rounded-lg text-right font-mono"
+                                className="w-full px-2 py-1.5 bg-white border border-slate-200 rounded-lg text-right font-mono font-medium"
                               />
                             </td>
+
+                            {/* Discount */}
                             <td className="p-2">
                               <input
                                 type="number"
@@ -609,15 +753,17 @@ const SalesInvoiceManagement = () => {
                                 value={row.discount_percentage}
                                 onChange={(e) => updateItemRow(idx, 'discount_percentage', e.target.value)}
                                 readOnly={quotationSelected && !quotationEditMode}
-                                className="w-full px-2 py-1.5 bg-white border border-slate-200 rounded-lg text-right"
+                                className="w-full px-2 py-1.5 bg-white border border-slate-200 rounded-lg text-right font-medium"
                               />
                             </td>
+
+                            {/* Tax Rate */}
                             <td className="p-2">
                               <select
                                 value={row.tax_rate}
                                 onChange={(e) => updateItemRow(idx, 'tax_rate', e.target.value)}
                                 disabled={quotationSelected && !quotationEditMode}
-                                className="w-full px-2 py-1.5 bg-white border border-slate-200 rounded-lg"
+                                className="w-full px-2 py-1.5 bg-white border border-slate-200 rounded-lg font-semibold text-slate-700"
                               >
                                 <option value="0">0%</option>
                                 <option value="5">5%</option>
@@ -626,15 +772,20 @@ const SalesInvoiceManagement = () => {
                                 <option value="28">28%</option>
                               </select>
                             </td>
-                            <td className="p-2 text-right font-semibold text-slate-800">
+
+                            {/* Row Total */}
+                            <td className="p-2 text-right font-black text-slate-900">
                               ₹{rowTotal.toFixed(2)}
                             </td>
+
+                            {/* Remove button */}
                             <td className="p-2 text-center">
                               {form.items.length > 1 && (!quotationSelected || quotationEditMode) && (
                                 <button
                                   type="button"
                                   onClick={() => removeItemRow(idx)}
                                   className="text-rose-500 hover:text-rose-700 p-1"
+                                  title="Remove Item"
                                 >
                                   <Trash2 className="w-3.5 h-3.5" />
                                 </button>
@@ -784,8 +935,9 @@ const SalesInvoiceManagement = () => {
                 <thead className="bg-slate-50 border-y border-slate-200 text-slate-600 font-semibold">
                   <tr>
                     <th className="p-2.5">#</th>
+                    <th className="p-2.5">Type</th>
                     <th className="p-2.5">Item Description</th>
-                    <th className="p-2.5">HSN</th>
+                    <th className="p-2.5">HSN / SAC</th>
                     <th className="p-2.5 text-right">Qty</th>
                     <th className="p-2.5 text-right">Rate</th>
                     <th className="p-2.5 text-right">Taxable</th>
@@ -793,17 +945,29 @@ const SalesInvoiceManagement = () => {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {viewInvoice.items?.map((item, idx) => (
-                    <tr key={idx}>
-                      <td className="p-2.5 text-slate-400">{idx + 1}</td>
-                      <td className="p-2.5 font-medium text-slate-900">{item.product_name}</td>
-                      <td className="p-2.5 font-mono text-slate-500">{item.hsn_sac_code}</td>
-                      <td className="p-2.5 text-right">{parseFloat(item.quantity)}</td>
-                      <td className="p-2.5 text-right">₹{parseFloat(item.unit_rate).toFixed(2)}</td>
-                      <td className="p-2.5 text-right">₹{parseFloat(item.taxable_amount).toFixed(2)}</td>
-                      <td className="p-2.5 text-right font-semibold text-slate-900">₹{parseFloat(item.total_amount).toFixed(2)}</td>
-                    </tr>
-                  ))}
+                  {viewInvoice.items?.map((item, idx) => {
+                    const isSrv = item.item_type === 'SERVICE' || Boolean(item.service_id);
+                    return (
+                      <tr key={idx}>
+                        <td className="p-2.5 text-slate-400">{idx + 1}</td>
+                        <td className="p-2.5">
+                          <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
+                            isSrv ? 'bg-emerald-100 text-emerald-800' : 'bg-indigo-100 text-indigo-800'
+                          }`}>
+                            {isSrv ? 'SERVICE' : 'PRODUCT'}
+                          </span>
+                        </td>
+                        <td className="p-2.5 font-medium text-slate-900">
+                          {item.item_name || item.product_name}
+                        </td>
+                        <td className="p-2.5 font-mono text-slate-500">{item.hsn_sac_code || (isSrv ? '9983' : '9988')}</td>
+                        <td className="p-2.5 text-right">{parseFloat(item.quantity)} {item.unit_of_measure}</td>
+                        <td className="p-2.5 text-right">₹{parseFloat(item.unit_rate).toFixed(2)}</td>
+                        <td className="p-2.5 text-right">₹{parseFloat(item.taxable_amount).toFixed(2)}</td>
+                        <td className="p-2.5 text-right font-semibold text-slate-900">₹{parseFloat(item.total_amount).toFixed(2)}</td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
 

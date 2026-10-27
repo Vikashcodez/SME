@@ -166,6 +166,30 @@ export const products = {
   getCategories: (params) => api.get('/products/categories', { params }),
 };
 
+export const services = {
+  getAll: (params) => api.get('/services', { params }),
+  getById: (id) => api.get(`/services/${id}`),
+  create: (data) => {
+    if (data instanceof FormData) {
+      return api.post('/services', data, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+      });
+    }
+    return api.post('/services', data);
+  },
+  update: (id, data) => {
+    if (data instanceof FormData) {
+      return api.put(`/services/${id}`, data, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+      });
+    }
+    return api.put(`/services/${id}`, data);
+  },
+  delete: (id) => api.delete(`/services/${id}`),
+  restore: (id) => api.put(`/services/${id}/restore`),
+  getCategories: (params) => api.get('/services/categories', { params }),
+};
+
 export const production = {
   checkMaterials: (params) => api.get('/production/check-materials', { params }),
   recordRun: (data) => api.post('/production', data),

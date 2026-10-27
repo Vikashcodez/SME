@@ -27,6 +27,7 @@ import accountingRouter from './routes/Accounting.Routes.js';
 import salesRouter from './routes/Sales.Routes.js';
 import purchaseRouter from './routes/Purchase.Routes.js';
 import manufacturingAccountingRouter from './routes/ManufacturingAccounting.Routes.js';
+import serviceRouter from './routes/Service.Routes.js';
 import complianceRouter from './routes/Compliance.Routes.js';
 
 const app = express();
@@ -50,6 +51,7 @@ app.use('/api/raw-materials', rawMaterialRouter);
 app.use('/api/raw-material-inventory', rawMaterialInventoryRouter);
 app.use('/api/assets', assetRouter);
 app.use('/api/products', productRouter);
+app.use('/api/services', serviceRouter);
 app.use('/api/production', productionRouter);
 app.use('/api/categories', categoryRouter);
 app.use('/api/grn', grnRouter);

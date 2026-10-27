@@ -366,6 +366,39 @@ export const createTables = async () => {
             )
         `);
 
+        // Services table (Service Master)
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS services (
+                service_id BIGSERIAL PRIMARY KEY,
+                company_id BIGINT REFERENCES companies(company_id) ON DELETE CASCADE,
+                branch_id BIGINT REFERENCES branches(branch_id) ON DELETE SET NULL,
+                service_code VARCHAR(50) NOT NULL,
+                service_name VARCHAR(255) NOT NULL,
+                category VARCHAR(100) DEFAULT 'General Services',
+                billing_type VARCHAR(50) DEFAULT 'Per Service',
+                unit_of_measure VARCHAR(30) DEFAULT 'HRS',
+                service_charge DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+                selling_price DECIMAL(14,2) DEFAULT 0.00,
+                cost_estimate DECIMAL(14,2) DEFAULT 0.00,
+                cost_price DECIMAL(14,2) DEFAULT 0.00,
+                sac_code VARCHAR(20) DEFAULT '9983',
+                hsn_code VARCHAR(20) DEFAULT '9983',
+                gst_rate DECIMAL(5,2) DEFAULT 18.00,
+                service_description TEXT,
+                service_duration_hours DECIMAL(10,2) DEFAULT 1.00,
+                terms_and_conditions TEXT,
+                photo_1 VARCHAR(500),
+                photo_2 VARCHAR(500),
+                photo_3 VARCHAR(500),
+                status VARCHAR(20) DEFAULT 'Active',
+                is_active BOOLEAN DEFAULT TRUE,
+                created_by BIGINT REFERENCES employees(employee_id) ON DELETE SET NULL,
+                updated_by BIGINT REFERENCES employees(employee_id) ON DELETE SET NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        `);
+
         // Product Bill of Materials (BOM) / Raw Materials Recipe table
         await pool.query(`
             CREATE TABLE IF NOT EXISTS product_bom (
@@ -749,6 +782,8 @@ export const createTables = async () => {
         await pool.query(`CREATE INDEX IF NOT EXISTS idx_assets_company_branch ON assets(company_id, branch_id)`);
         await pool.query(`CREATE INDEX IF NOT EXISTS idx_assets_tag ON assets(asset_tag)`);
         await pool.query(`CREATE INDEX IF NOT EXISTS idx_products_company_branch ON products(company_id, branch_id)`);
+        await pool.query(`CREATE INDEX IF NOT EXISTS idx_services_company_branch ON services(company_id, branch_id)`);
+        await pool.query(`CREATE INDEX IF NOT EXISTS idx_services_code ON services(service_code)`);
         await pool.query(`CREATE INDEX IF NOT EXISTS idx_product_bom_product ON product_bom(product_id)`);
         await pool.query(`CREATE INDEX IF NOT EXISTS idx_production_company_branch ON raw_material_production(company_id, branch_id)`);
         await pool.query(`CREATE INDEX IF NOT EXISTS idx_production_product ON raw_material_production(product_id)`);

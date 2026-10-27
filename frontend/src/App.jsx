@@ -20,6 +20,7 @@ import Employees from './pages/Master Data/Employees';
 import VendorMaster from './pages/Master Data/VendorMaster';
 import RawMaterialMaster from './pages/Master Data/RawMaterialMaster';
 import ProductMaster from './pages/Master Data/ProductMaster';
+import ServiceMaster from './pages/Master Data/ServiceMaster';
 import RawMaterialsInventory from './pages/Inventory/RawMaterialsInventory';
 import AssetsInventory from './pages/Inventory/AssetsInventory';
 import ProductionInventory from './pages/Inventory/ProductionInventory';
@@ -179,6 +180,17 @@ const AppContent = () => {
           <ProtectedRoute requiredRole="company_admin">
             <CompanyAdminLayout>
               <ProductMaster />
+            </CompanyAdminLayout>
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/services"
+        element={
+          <ProtectedRoute requiredRole="company_admin">
+            <CompanyAdminLayout>
+              <ServiceMaster />
             </CompanyAdminLayout>
           </ProtectedRoute>
         }
@@ -477,6 +489,17 @@ const AppContent = () => {
           <ProtectedRoute requiredRole="branch_admin">
             <BranchAdminLayout>
               <ProductMaster />
+            </BranchAdminLayout>
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/branch/services"
+        element={
+          <ProtectedRoute requiredRole="branch_admin">
+            <BranchAdminLayout>
+              <ServiceMaster />
             </BranchAdminLayout>
           </ProtectedRoute>
         }

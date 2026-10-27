@@ -117,15 +117,50 @@ export const createSalesInvoice = async (req, res) => {
 
         for (let i = 0; i < items.length; i++) {
             const item = items[i];
-            const pRes = await client.query(`SELECT * FROM products WHERE product_id = $1`, [item.product_id]);
-            if (pRes.rows.length === 0) {
-                await client.query('ROLLBACK');
-                return res.status(400).json({ success: false, message: `Product ID ${item.product_id} not found` });
+            const isService = item.item_type === 'SERVICE' || Boolean(item.service_id) || (!item.product_id && item.service_id);
+
+            let itemName = '';
+            let itemCode = '';
+            let hsnSacCode = '';
+            let defaultRate = 0;
+            let defaultGst = 18;
+            let defaultUom = isService ? 'HRS' : 'PCS';
+            let productId = null;
+            let serviceId = null;
+
+            if (isService) {
+                const sId = item.service_id || item.product_id; // In case passed in item_id
+                const sRes = await client.query(`SELECT * FROM services WHERE service_id = $1`, [sId]);
+                if (sRes.rows.length === 0) {
+                    await client.query('ROLLBACK');
+                    return res.status(400).json({ success: false, message: `Service ID ${sId} not found` });
+                }
+                const service = sRes.rows[0];
+                serviceId = service.service_id;
+                itemName = service.service_name;
+                itemCode = service.service_code;
+                hsnSacCode = service.sac_code || service.hsn_code || '9983';
+                defaultRate = parseFloat(service.service_charge) || parseFloat(service.selling_price) || 0;
+                defaultGst = parseFloat(service.gst_rate ?? 18);
+                defaultUom = service.unit_of_measure || 'HRS';
+            } else {
+                const pRes = await client.query(`SELECT * FROM products WHERE product_id = $1`, [item.product_id]);
+                if (pRes.rows.length === 0) {
+                    await client.query('ROLLBACK');
+                    return res.status(400).json({ success: false, message: `Product ID ${item.product_id} not found` });
+                }
+                const product = pRes.rows[0];
+                productId = product.product_id;
+                itemName = product.product_name;
+                itemCode = product.product_code || product.code;
+                hsnSacCode = product.hsn_code || '9988';
+                defaultRate = parseFloat(product.selling_price) || parseFloat(product.price) || 0;
+                defaultGst = parseFloat(product.gst_rate ?? 18);
+                defaultUom = product.unit_of_measure || 'PCS';
             }
-            const product = pRes.rows[0];
 
             const qty = parseFloat(item.quantity) || 1;
-            const rate = parseFloat(item.unit_rate) || parseFloat(product.selling_price) || parseFloat(product.price) || 0;
+            const rate = item.unit_rate !== undefined && item.unit_rate !== '' ? parseFloat(item.unit_rate) : defaultRate;
             const discPct = parseFloat(item.discount_percentage) || 0;
 
             const gross = qty * rate;
@@ -134,8 +169,8 @@ export const createSalesInvoice = async (req, res) => {
                 ? parseFloat(item.taxable_amount || 0)
                 : +(gross - discAmt).toFixed(2);
 
-            // Default GST tax rate from product or 18%
-            const gstRate = parseFloat(item.tax_rate !== undefined ? item.tax_rate : (product.gst_rate || 18));
+            // Default GST tax rate
+            const gstRate = parseFloat(item.tax_rate !== undefined ? item.tax_rate : defaultGst);
             let cgstRate = 0, sgstRate = 0, igstRate = 0;
             let cgstAmt = 0, sgstAmt = 0, igstAmt = 0;
 
@@ -167,10 +202,14 @@ export const createSalesInvoice = async (req, res) => {
             totalIgst += igstAmt;
 
             calculatedItems.push({
-                product_id: product.product_id,
-                hsn_sac_code: product.hsn_code || '9988',
+                item_type: isService ? 'SERVICE' : 'PRODUCT',
+                product_id: productId,
+                service_id: serviceId,
+                item_name: itemName,
+                item_code: itemCode,
+                hsn_sac_code: item.hsn_sac_code || hsnSacCode,
                 quantity: qty,
-                unit_of_measure: item.unit_of_measure || 'PCS',
+                unit_of_measure: item.unit_of_measure || defaultUom,
                 unit_rate: rate,
                 discount_percentage: discPct,
                 discount_amount: discAmt,
@@ -254,18 +293,21 @@ export const createSalesInvoice = async (req, res) => {
             const it = calculatedItems[i];
             await client.query(`
                 INSERT INTO sales_invoice_items (
-                    sales_invoice_id, line_number, product_id, hsn_sac_code,
+                    sales_invoice_id, line_number, item_type, product_id, service_id,
+                    item_name, item_code, hsn_sac_code,
                     quantity, unit_of_measure, unit_rate, discount_percentage, discount_amount,
                     taxable_amount, tax_rate, cgst_rate, cgst_amount, sgst_rate, sgst_amount,
                     igst_rate, igst_amount, total_amount
                 ) VALUES (
-                    $1, $2, $3, $4,
-                    $5, $6, $7, $8, $9,
-                    $10, $11, $12, $13, $14, $15,
-                    $16, $17, $18
+                    $1, $2, $3, $4, $5,
+                    $6, $7, $8,
+                    $9, $10, $11, $12, $13,
+                    $14, $15, $16, $17, $18, $19,
+                    $20, $21, $22
                 )
             `, [
-                invoice.sales_invoice_id, i + 1, it.product_id, it.hsn_sac_code,
+                invoice.sales_invoice_id, i + 1, it.item_type || 'PRODUCT', it.product_id, it.service_id,
+                it.item_name, it.item_code, it.hsn_sac_code,
                 it.quantity, it.unit_of_measure, it.unit_rate, it.discount_percentage, it.discount_amount,
                 it.taxable_amount, it.tax_rate, it.cgst_rate, it.cgst_amount, it.sgst_rate, it.sgst_amount,
                 it.igst_rate, it.igst_amount, it.total_amount
@@ -506,11 +548,15 @@ export const getSalesInvoiceById = async (req, res) => {
         const itemsRes = await pool.query(`
             SELECT 
                 sii.*,
-                p.product_name,
-                COALESCE(p.product_code, p.code) AS sku,
-                COALESCE(p.product_code, p.code) AS product_code
+                COALESCE(sii.item_type, CASE WHEN sii.service_id IS NOT NULL THEN 'SERVICE' ELSE 'PRODUCT' END) AS item_type,
+                COALESCE(s.service_name, p.product_name, sii.item_name, 'Item') AS product_name,
+                COALESCE(s.service_name, p.product_name, sii.item_name, 'Item') AS item_name,
+                COALESCE(s.service_code, p.product_code, p.code, sii.item_code) AS sku,
+                COALESCE(s.service_code, p.product_code, p.code, sii.item_code) AS product_code,
+                COALESCE(s.category, p.category) AS category
             FROM sales_invoice_items sii
-            JOIN products p ON sii.product_id = p.product_id
+            LEFT JOIN products p ON sii.product_id = p.product_id
+            LEFT JOIN services s ON sii.service_id = s.service_id
             WHERE sii.sales_invoice_id = $1
             ORDER BY sii.line_number ASC
         `, [id]);
@@ -858,15 +904,18 @@ export const createQuotation = async (req, res) => {
         const quote = qRes.rows[0];
 
         for (const item of parsedItems) {
+            const isService = item.item_type === 'SERVICE' || Boolean(item.service_id);
             await client.query(`
                 INSERT INTO quotation_items (
-                    quotation_id, line_number, product_id, hsn_sac_code,
+                    quotation_id, line_number, item_type, product_id, service_id, hsn_sac_code,
                     quantity, unit_of_measure, quoted_rate, taxable_amount, tax_rate,
                     cgst_amount, sgst_amount, igst_amount, total_amount
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
             `, [
-                quote.quotation_id, item.line_number, item.product_id, item.hsn_sac_code || '9988',
-                item.quantity, item.unit_of_measure || 'PCS', item.quoted_rate, item.taxable_amount, item.tax_rate,
+                quote.quotation_id, item.line_number, isService ? 'SERVICE' : 'PRODUCT',
+                isService ? null : item.product_id, isService ? (item.service_id || item.product_id) : null,
+                item.hsn_sac_code || (isService ? '9983' : '9988'),
+                item.quantity, item.unit_of_measure || (isService ? 'HRS' : 'PCS'), item.quoted_rate, item.taxable_amount, item.tax_rate,
                 +(item.tax_amount / 2).toFixed(2), +(item.tax_amount / 2).toFixed(2), 0, item.total_amount
             ]);
         }
