@@ -190,6 +190,14 @@ export const services = {
   getCategories: (params) => api.get('/services/categories', { params }),
 };
 
+export const hsn = {
+  getAll: (params) => api.get('/hsn', { params }),
+  getByCode: (code) => api.get(`/hsn/by-code/${code}`),
+  getCategories: () => api.get('/hsn/categories'),
+  sync: () => api.post('/hsn/sync'),
+  create: (data) => api.post('/hsn', data),
+};
+
 export const production = {
   checkMaterials: (params) => api.get('/production/check-materials', { params }),
   recordRun: (data) => api.post('/production', data),

@@ -5,7 +5,8 @@ import {
   products as productsApi, 
   rawMaterials as rawMaterialsApi, 
   branches as branchesApi, 
-  companies as companiesApi 
+  companies as companiesApi,
+  hsn as hsnApi
 } from '../../services/api';
 import toast from 'react-hot-toast';
 import { 
@@ -90,11 +91,26 @@ const ProductMaster = () => {
   const [photoFiles, setPhotoFiles] = useState({ photo_1: null, photo_2: null, photo_3: null });
   const [photoPreviews, setPhotoPreviews] = useState({ photo_1: '', photo_2: '', photo_3: '' });
 
+  // HSN Master Dataset State
+  const [hsnCategories, setHsnCategories] = useState([]);
+  const [hsnList, setHsnList] = useState([]);
+  const [categoryHsnCodes, setCategoryHsnCodes] = useState([]);
+  const [categoryHsnCodesEdit, setCategoryHsnCodesEdit] = useState([]);
+  const [showHsnPickerModal, setShowHsnPickerModal] = useState(false);
+  const [hsnPickerTarget, setHsnPickerTarget] = useState('add'); // 'add' | 'edit'
+  const [hsnSearchTerm, setHsnSearchTerm] = useState('');
+  const [hsnCategoryFilter, setHsnCategoryFilter] = useState('all');
+  const [hsnModalResults, setHsnModalResults] = useState([]);
+  const [hsnModalLoading, setHsnModalLoading] = useState(false);
+  const [syncingHsn, setSyncingHsn] = useState(false);
+  const [showHsnDropdownAdd, setShowHsnDropdownAdd] = useState(false);
+  const [showHsnDropdownEdit, setShowHsnDropdownEdit] = useState(false);
+
   // Initial Form State
   const initialProductForm = {
     product_code: '',
     product_name: '',
-    category: 'Finished Goods',
+    category: '',
     unit_of_measure: 'PCS',
     selling_price: '',
     cost_price: '',
@@ -132,6 +148,199 @@ const ProductMaster = () => {
   useEffect(() => {
     fetchProducts();
   }, [selectedCompanyId, selectedBranchId]);
+
+  useEffect(() => {
+    fetchHsnCategories();
+    fetchHsnDataset();
+  }, []);
+
+  const fetchHsnCategories = async () => {
+    try {
+      const res = await hsnApi.getCategories();
+      if (res.data?.success) {
+        setHsnCategories(res.data.data || []);
+      }
+    } catch (err) {
+      console.error('Failed to load HSN categories:', err);
+    }
+  };
+
+  const fetchHsnDataset = async () => {
+    try {
+      const res = await hsnApi.getAll({ type: 'GOODS', limit: 250 });
+      setHsnList(res.data?.data || []);
+    } catch (err) {
+      console.error('Failed to load HSN dataset:', err);
+    }
+  };
+
+  // 1. When Category is chosen: set category, then load HSN codes under that category
+  const handleCategorySelect = async (selectedCat, isEdit = false) => {
+    if (isEdit) {
+      setEditFormData(prev => ({ ...prev, category: selectedCat, hsn_code: '' }));
+    } else {
+      setFormData(prev => ({ ...prev, category: selectedCat, hsn_code: '' }));
+    }
+
+    if (!selectedCat) {
+      if (isEdit) setCategoryHsnCodesEdit([]);
+      else setCategoryHsnCodes([]);
+      return;
+    }
+
+    try {
+      const res = await hsnApi.getAll({ category: selectedCat, limit: 120 });
+      if (res.data?.success) {
+        if (isEdit) {
+          setCategoryHsnCodesEdit(res.data.data || []);
+        } else {
+          setCategoryHsnCodes(res.data.data || []);
+        }
+      }
+    } catch (err) {
+      console.error('Failed to load category HSN codes:', err);
+    }
+  };
+
+  // 2. Auto-select category & GST rate when HSN code is typed or selected
+  const handleHsnChange = async (code, isEdit = false) => {
+    const clean = code.trim();
+
+    if (isEdit) {
+      setEditFormData(prev => ({ ...prev, hsn_code: code }));
+      setShowHsnDropdownEdit(true);
+    } else {
+      setFormData(prev => ({ ...prev, hsn_code: code }));
+      setShowHsnDropdownAdd(true);
+    }
+
+    if (!clean) return;
+
+    let matched = hsnList.find(h => h.hsn_code.toLowerCase() === clean.toLowerCase()) ||
+                  (isEdit ? categoryHsnCodesEdit : categoryHsnCodes).find(h => h.hsn_code.toLowerCase() === clean.toLowerCase());
+
+    if (!matched && clean.length >= 2) {
+      try {
+        const res = await hsnApi.getByCode(clean);
+        if (res.data?.success && res.data.data) {
+          matched = res.data.data;
+        }
+      } catch (err) {
+        // Still typing
+      }
+    }
+
+    if (matched) {
+      if (isEdit) {
+        setEditFormData(prev => ({
+          ...prev,
+          hsn_code: matched.hsn_code,
+          category: matched.category,
+          gst_rate: String(matched.gst_rate)
+        }));
+      } else {
+        setFormData(prev => ({
+          ...prev,
+          hsn_code: matched.hsn_code,
+          category: matched.category,
+          gst_rate: String(matched.gst_rate)
+        }));
+      }
+
+      // Preload codes for this matched category
+      try {
+        const catRes = await hsnApi.getAll({ category: matched.category, limit: 120 });
+        if (catRes.data?.success) {
+          if (isEdit) setCategoryHsnCodesEdit(catRes.data.data || []);
+          else setCategoryHsnCodes(catRes.data.data || []);
+        }
+      } catch (err) {}
+
+      toast.success(`Matched HSN ${matched.hsn_code}: Auto-selected Category "${matched.category}" (${matched.gst_rate}% GST)`, {
+        id: 'hsn-match-toast',
+        duration: 2500
+      });
+    }
+  };
+
+  const selectHsnItem = (hItem, isEdit = false) => {
+    if (isEdit) {
+      setEditFormData(prev => ({
+        ...prev,
+        hsn_code: hItem.hsn_code,
+        category: hItem.category,
+        gst_rate: String(hItem.gst_rate)
+      }));
+      setShowHsnDropdownEdit(false);
+    } else {
+      setFormData(prev => ({
+        ...prev,
+        hsn_code: hItem.hsn_code,
+        category: hItem.category,
+        gst_rate: String(hItem.gst_rate)
+      }));
+      setShowHsnDropdownAdd(false);
+    }
+    setShowHsnPickerModal(false);
+    toast.success(`Selected HSN ${hItem.hsn_code}: Category set to "${hItem.category}" (${hItem.gst_rate}% GST)`);
+  };
+
+  // Live search in HSN Directory modal
+  useEffect(() => {
+    if (!showHsnPickerModal) return;
+    const timer = setTimeout(async () => {
+      setHsnModalLoading(true);
+      try {
+        const res = await hsnApi.getAll({
+          search: hsnSearchTerm.trim() || undefined,
+          category: hsnCategoryFilter === 'all' ? undefined : hsnCategoryFilter,
+          limit: 100
+        });
+        if (res.data?.success) {
+          setHsnModalResults(res.data.data || []);
+        }
+      } catch (err) {
+        console.error('Failed to query HSN directory:', err);
+      } finally {
+        setHsnModalLoading(false);
+      }
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [showHsnPickerModal, hsnSearchTerm, hsnCategoryFilter]);
+
+  // Sync real HSN codes from official API
+  const handleSyncHsn = async () => {
+    setSyncingHsn(true);
+    try {
+      const res = await hsnApi.sync();
+      toast.success(res.data?.message || 'Synchronized real GST HSN dataset from API!');
+      await fetchHsnCategories();
+      await fetchHsnDataset();
+      const resModal = await hsnApi.getAll({
+        search: hsnSearchTerm.trim() || undefined,
+        category: hsnCategoryFilter === 'all' ? undefined : hsnCategoryFilter,
+        limit: 100
+      });
+      if (resModal.data?.success) setHsnModalResults(resModal.data.data || []);
+    } catch (err) {
+      toast.error('Sync failed: ' + (err.response?.data?.message || err.message));
+    } finally {
+      setSyncingHsn(false);
+    }
+  };
+
+  const getFilteredHsnSuggestions = (inputCode, category, isEdit = false) => {
+    const listToFilter = (isEdit ? categoryHsnCodesEdit : categoryHsnCodes).length > 0
+      ? (isEdit ? categoryHsnCodesEdit : categoryHsnCodes)
+      : hsnList;
+    if (!inputCode && (!category || category === 'all')) return listToFilter.slice(0, 10);
+    const search = (inputCode || '').toLowerCase().trim();
+    return listToFilter.filter(h => {
+      const matchCat = !category || category === 'all' || h.category === category;
+      const matchCode = !search || h.hsn_code.toLowerCase().includes(search) || h.description.toLowerCase().includes(search);
+      return matchCat && matchCode;
+    }).slice(0, 10);
+  };
 
   const fetchCompanies = async () => {
     try {
@@ -340,6 +549,13 @@ const ProductMaster = () => {
       photo_2: product.photo_2 ? `${API_BASE_URL}${product.photo_2}` : '',
       photo_3: product.photo_3 ? `${API_BASE_URL}${product.photo_3}` : ''
     });
+    if (product.category) {
+      hsnApi.getAll({ category: product.category, limit: 120 })
+        .then(res => {
+          if (res.data?.success) setCategoryHsnCodesEdit(res.data.data || []);
+        })
+        .catch(console.error);
+    }
     setShowEditModal(true);
   };
 
@@ -568,7 +784,10 @@ const ProductMaster = () => {
             className="bg-slate-50 border border-slate-200 text-slate-700 text-xs rounded-lg px-2.5 py-1.5 focus:ring-2 focus:ring-blue-500 outline-none font-medium"
           >
             <option value="all">All Categories</option>
-            {PRODUCT_CATEGORIES.map(cat => (
+            {Array.from(new Set([
+              ...productsList.map(p => p.category).filter(Boolean),
+              ...hsnCategories.map(c => c.category)
+            ])).sort().map(cat => (
               <option key={cat} value={cat}>{cat}</option>
             ))}
           </select>
@@ -914,16 +1133,53 @@ const ProductMaster = () => {
                 </div>
 
                 <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Category *</label>
+                  <label className="block font-semibold text-slate-700 mb-1 flex items-center justify-between">
+                    <span>Product Category (HSN Chapter) *</span>
+                    {formData.category && (
+                      <span className="text-[10px] text-blue-600 font-bold bg-blue-50 px-1.5 py-0.5 rounded border border-blue-200">
+                        {categoryHsnCodes.length > 0 ? `${categoryHsnCodes.length} codes in chapter` : 'Category Selected'}
+                      </span>
+                    )}
+                  </label>
                   <select
                     value={formData.category}
-                    onChange={(e) => setFormData({ ...formData, category: e.target.value })}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-slate-800 focus:bg-white focus:ring-2 focus:ring-blue-500 outline-none font-medium"
+                    onChange={(e) => handleCategorySelect(e.target.value, false)}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-slate-800 focus:bg-white focus:ring-2 focus:ring-blue-500 outline-none font-medium text-xs"
                   >
-                    {PRODUCT_CATEGORIES.map(c => (
-                      <option key={c} value={c}>{c}</option>
+                    <option value="">-- Select HSN Category / Chapter --</option>
+                    {hsnCategories.map(cat => (
+                      <option key={cat.category} value={cat.category}>
+                        {cat.chapter ? `[Ch. ${cat.chapter}] ` : ''}{cat.category} ({cat.code_count} codes)
+                      </option>
                     ))}
+                    {formData.category && !hsnCategories.some(c => c.category === formData.category) && (
+                      <option value={formData.category}>{formData.category}</option>
+                    )}
                   </select>
+
+                  {/* Quick Select HSN under selected Category */}
+                  {categoryHsnCodes.length > 0 && (
+                    <div className="mt-1.5">
+                      <label className="block text-[10px] font-bold text-slate-500 mb-1">
+                        Select HSN Code under "{formData.category}":
+                      </label>
+                      <select
+                        value={categoryHsnCodes.some(c => c.hsn_code === formData.hsn_code) ? formData.hsn_code : ''}
+                        onChange={(e) => {
+                          const item = categoryHsnCodes.find(c => c.hsn_code === e.target.value);
+                          if (item) selectHsnItem(item, false);
+                        }}
+                        className="w-full bg-blue-50/70 border border-blue-200 rounded-lg px-2.5 py-1.5 text-xs text-slate-800 font-mono font-bold focus:bg-white focus:ring-2 focus:ring-blue-500 outline-none"
+                      >
+                        <option value="">-- Select from {categoryHsnCodes.length} codes in this category --</option>
+                        {categoryHsnCodes.map(h => (
+                          <option key={h.hsn_code} value={h.hsn_code}>
+                            {h.hsn_code} - {(h.description || '').slice(0, 48)}... ({h.gst_rate}% GST)
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
                 </div>
 
                 <div>
@@ -951,15 +1207,69 @@ const ProductMaster = () => {
                   />
                 </div>
 
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">HSN Code</label>
+                <div className="relative">
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block font-semibold text-slate-700">HSN Code</label>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setHsnPickerTarget('add');
+                        setHsnSearchTerm(formData.hsn_code || '');
+                        setHsnCategoryFilter(formData.category || 'all');
+                        setShowHsnPickerModal(true);
+                      }}
+                      className="text-[11px] text-blue-600 hover:text-blue-700 font-bold flex items-center gap-1 transition-colors"
+                    >
+                      <Search size={11} /> Browse HSN Directory
+                    </button>
+                  </div>
                   <input
                     type="text"
-                    placeholder="e.g. 8479.89"
+                    placeholder="Type HSN code (e.g. 7318, 8479, 8537)..."
                     value={formData.hsn_code}
-                    onChange={(e) => setFormData({ ...formData, hsn_code: e.target.value })}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-slate-800 focus:bg-white focus:ring-2 focus:ring-blue-500 outline-none"
+                    onChange={(e) => handleHsnChange(e.target.value, false)}
+                    onFocus={() => setShowHsnDropdownAdd(true)}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-slate-800 font-mono font-bold focus:bg-white focus:ring-2 focus:ring-blue-500 outline-none"
                   />
+                  {/* Dropdown suggestions */}
+                  {showHsnDropdownAdd && (
+                    <div className="absolute left-0 right-0 top-full mt-1 bg-white border border-slate-200 rounded-xl shadow-xl z-30 max-h-56 overflow-y-auto divide-y divide-slate-100">
+                      <div className="p-2 bg-slate-50 flex items-center justify-between text-[11px] text-slate-500 font-semibold sticky top-0">
+                        <span>Select HSN (Auto-selects Category & GST)</span>
+                        <button
+                          type="button"
+                          onClick={() => setShowHsnDropdownAdd(false)}
+                          className="text-slate-400 hover:text-slate-700"
+                        >
+                          <X size={12} />
+                        </button>
+                      </div>
+                      {getFilteredHsnSuggestions(formData.hsn_code, formData.category, false).map(hItem => (
+                        <div
+                          key={hItem.hsn_code}
+                          onClick={() => selectHsnItem(hItem, false)}
+                          className="p-2.5 hover:bg-blue-50/70 cursor-pointer transition-colors"
+                        >
+                          <div className="flex items-center justify-between">
+                            <span className="font-mono font-bold text-blue-700 text-xs">{hItem.hsn_code}</span>
+                            <span className="text-[10px] bg-emerald-50 text-emerald-700 font-bold px-1.5 py-0.5 rounded border border-emerald-200">
+                              {hItem.gst_rate}% GST
+                            </span>
+                          </div>
+                          <div className="text-[11px] font-bold text-slate-800 mt-0.5">{hItem.category}</div>
+                          <div className="text-[10px] text-slate-500 line-clamp-1">{hItem.description}</div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {formData.category && (
+                    <div className="mt-1 flex items-center gap-1.5 text-[11px]">
+                      <span className="text-slate-500">Active Category:</span>
+                      <span className="font-bold text-blue-700 bg-blue-50 px-2 py-0.5 rounded border border-blue-200 truncate max-w-[200px]">
+                        {formData.category}
+                      </span>
+                    </div>
+                  )}
                 </div>
 
                 <div>
@@ -1266,16 +1576,53 @@ const ProductMaster = () => {
                 </div>
 
                 <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Category</label>
+                  <label className="block font-semibold text-slate-700 mb-1 flex items-center justify-between">
+                    <span>Product Category (HSN Chapter) *</span>
+                    {editFormData.category && (
+                      <span className="text-[10px] text-blue-600 font-bold bg-blue-50 px-1.5 py-0.5 rounded border border-blue-200">
+                        {categoryHsnCodesEdit.length > 0 ? `${categoryHsnCodesEdit.length} codes in chapter` : 'Category Selected'}
+                      </span>
+                    )}
+                  </label>
                   <select
                     value={editFormData.category}
-                    onChange={(e) => setEditFormData({ ...editFormData, category: e.target.value })}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-slate-800 focus:bg-white focus:ring-2 focus:ring-blue-500 outline-none font-medium"
+                    onChange={(e) => handleCategorySelect(e.target.value, true)}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-slate-800 focus:bg-white focus:ring-2 focus:ring-blue-500 outline-none font-medium text-xs"
                   >
-                    {PRODUCT_CATEGORIES.map(c => (
-                      <option key={c} value={c}>{c}</option>
+                    <option value="">-- Select HSN Category / Chapter --</option>
+                    {hsnCategories.map(cat => (
+                      <option key={cat.category} value={cat.category}>
+                        {cat.chapter ? `[Ch. ${cat.chapter}] ` : ''}{cat.category} ({cat.code_count} codes)
+                      </option>
                     ))}
+                    {editFormData.category && !hsnCategories.some(c => c.category === editFormData.category) && (
+                      <option value={editFormData.category}>{editFormData.category}</option>
+                    )}
                   </select>
+
+                  {/* Quick Select HSN under selected Category */}
+                  {categoryHsnCodesEdit.length > 0 && (
+                    <div className="mt-1.5">
+                      <label className="block text-[10px] font-bold text-slate-500 mb-1">
+                        Select HSN Code under "{editFormData.category}":
+                      </label>
+                      <select
+                        value={categoryHsnCodesEdit.some(c => c.hsn_code === editFormData.hsn_code) ? editFormData.hsn_code : ''}
+                        onChange={(e) => {
+                          const item = categoryHsnCodesEdit.find(c => c.hsn_code === e.target.value);
+                          if (item) selectHsnItem(item, true);
+                        }}
+                        className="w-full bg-blue-50/70 border border-blue-200 rounded-lg px-2.5 py-1.5 text-xs text-slate-800 font-mono font-bold focus:bg-white focus:ring-2 focus:ring-blue-500 outline-none"
+                      >
+                        <option value="">-- Select from {categoryHsnCodesEdit.length} codes in this category --</option>
+                        {categoryHsnCodesEdit.map(h => (
+                          <option key={h.hsn_code} value={h.hsn_code}>
+                            {h.hsn_code} - {(h.description || '').slice(0, 48)}... ({h.gst_rate}% GST)
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
                 </div>
 
                 <div>
@@ -1302,14 +1649,68 @@ const ProductMaster = () => {
                   />
                 </div>
 
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">HSN Code</label>
+                <div className="relative">
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block font-semibold text-slate-700">HSN Code</label>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setHsnPickerTarget('edit');
+                        setHsnSearchTerm(editFormData.hsn_code || '');
+                        setHsnCategoryFilter(editFormData.category || 'all');
+                        setShowHsnPickerModal(true);
+                      }}
+                      className="text-[11px] text-blue-600 hover:text-blue-700 font-bold flex items-center gap-1 transition-colors"
+                    >
+                      <Search size={11} /> Browse HSN Directory
+                    </button>
+                  </div>
                   <input
                     type="text"
+                    placeholder="Type HSN code (e.g. 7318, 8479, 8537)..."
                     value={editFormData.hsn_code || ''}
-                    onChange={(e) => setEditFormData({ ...editFormData, hsn_code: e.target.value })}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-slate-800 focus:bg-white focus:ring-2 focus:ring-blue-500 outline-none"
+                    onChange={(e) => handleHsnChange(e.target.value, true)}
+                    onFocus={() => setShowHsnDropdownEdit(true)}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-slate-800 font-mono font-bold focus:bg-white focus:ring-2 focus:ring-blue-500 outline-none"
                   />
+                  {showHsnDropdownEdit && (
+                    <div className="absolute left-0 right-0 top-full mt-1 bg-white border border-slate-200 rounded-xl shadow-xl z-30 max-h-56 overflow-y-auto divide-y divide-slate-100">
+                      <div className="p-2 bg-slate-50 flex items-center justify-between text-[11px] text-slate-500 font-semibold sticky top-0">
+                        <span>Select HSN (Auto-selects Category & GST)</span>
+                        <button
+                          type="button"
+                          onClick={() => setShowHsnDropdownEdit(false)}
+                          className="text-slate-400 hover:text-slate-700"
+                        >
+                          <X size={12} />
+                        </button>
+                      </div>
+                      {getFilteredHsnSuggestions(editFormData.hsn_code, editFormData.category, true).map(hItem => (
+                        <div
+                          key={hItem.hsn_code}
+                          onClick={() => selectHsnItem(hItem, true)}
+                          className="p-2.5 hover:bg-blue-50/70 cursor-pointer transition-colors"
+                        >
+                          <div className="flex items-center justify-between">
+                            <span className="font-mono font-bold text-blue-700 text-xs">{hItem.hsn_code}</span>
+                            <span className="text-[10px] bg-emerald-50 text-emerald-700 font-bold px-1.5 py-0.5 rounded border border-emerald-200">
+                              {hItem.gst_rate}% GST
+                            </span>
+                          </div>
+                          <div className="text-[11px] font-bold text-slate-800 mt-0.5">{hItem.category}</div>
+                          <div className="text-[10px] text-slate-500 line-clamp-1">{hItem.description}</div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {editFormData.category && (
+                    <div className="mt-1 flex items-center gap-1.5 text-[11px]">
+                      <span className="text-slate-500">Active Category:</span>
+                      <span className="font-bold text-blue-700 bg-blue-50 px-2 py-0.5 rounded border border-blue-200 truncate max-w-[200px]">
+                        {editFormData.category}
+                      </span>
+                    </div>
+                  )}
                 </div>
 
                 <div>
@@ -1664,6 +2065,153 @@ const ProductMaster = () => {
               </button>
 
               <button onClick={() => setShowDetailsModal(false)} className="px-5 py-2 bg-slate-800 text-white font-bold rounded-lg text-xs">
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* ========================================================================= */}
+      {/* HSN MASTER DATASET BROWSER MODAL */}
+      {/* ========================================================================= */}
+      {showHsnPickerModal && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl w-full max-w-4xl my-8 overflow-hidden flex flex-col max-h-[88vh]">
+            {/* Header */}
+            <div className="px-6 py-4 bg-slate-900 text-white flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 bg-blue-500/20 text-blue-400 rounded-xl">
+                  <Package size={20} />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-base font-bold">Official CBIC HSN Master Directory</h3>
+                    <span className="text-[10px] bg-emerald-500/20 text-emerald-300 font-bold px-2 py-0.5 rounded-full border border-emerald-500/30">
+                      Live CBIC Dataset
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-400">Selecting an HSN code automatically sets the product Category and statutory GST rate</p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleSyncHsn}
+                  disabled={syncingHsn}
+                  className="px-3 py-1.5 bg-white/10 hover:bg-white/20 text-white rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 border border-white/10"
+                  title="Re-extract and sync latest official CBIC HSN codes from API"
+                >
+                  <RefreshCw size={13} className={syncingHsn ? 'animate-spin' : ''} />
+                  <span>{syncingHsn ? 'Syncing...' : 'Sync with Official API'}</span>
+                </button>
+
+                <button
+                  onClick={() => setShowHsnPickerModal(false)}
+                  className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+            </div>
+
+            {/* Filter toolbar */}
+            <div className="p-4 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center gap-3">
+              <div className="relative flex-1 min-w-[220px]">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={15} />
+                <input
+                  type="text"
+                  placeholder="Search by HSN code (e.g. 7318, 8479), description, or category..."
+                  value={hsnSearchTerm}
+                  onChange={(e) => setHsnSearchTerm(e.target.value)}
+                  className="w-full pl-9 pr-3 py-2 bg-white border border-slate-200 rounded-lg text-xs focus:ring-2 focus:ring-blue-500 outline-none font-medium"
+                />
+              </div>
+
+              <select
+                value={hsnCategoryFilter}
+                onChange={(e) => setHsnCategoryFilter(e.target.value)}
+                className="bg-white border border-slate-200 text-xs rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 outline-none font-semibold text-slate-700 max-w-[300px]"
+              >
+                <option value="all">All HSN Categories ({hsnCategories.reduce((acc, c) => acc + parseInt(c.code_count || 0, 10), 0) || '4679+'})</option>
+                {hsnCategories.map(cat => (
+                  <option key={cat.category} value={cat.category}>
+                    {cat.chapter ? `[Ch. ${cat.chapter}] ` : ''}{cat.category} ({cat.code_count})
+                  </option>
+                ))}
+              </select>
+
+              <span className="text-[11px] font-bold text-slate-500">
+                {hsnModalLoading ? 'Searching...' : `${hsnModalResults.length} codes found`}
+              </span>
+            </div>
+
+            {/* HSN List Table */}
+            <div className="p-4 flex-1 overflow-y-auto">
+              {hsnModalLoading ? (
+                <div className="text-center py-16">
+                  <RefreshCw size={32} className="animate-spin mx-auto mb-2 text-blue-600" />
+                  <p className="text-xs font-semibold text-slate-500">Loading statutory HSN dataset from database...</p>
+                </div>
+              ) : hsnModalResults.length === 0 ? (
+                <div className="text-center py-16 text-slate-400">
+                  <Package size={42} className="mx-auto mb-2 text-slate-300" />
+                  <p className="text-xs font-semibold">No HSN codes found matching "{hsnSearchTerm}"</p>
+                  <p className="text-[11px] text-slate-400 mt-1">Try another keyword or select a different category</p>
+                </div>
+              ) : (
+                <div className="divide-y divide-slate-100 border border-slate-200 rounded-xl overflow-hidden shadow-xs">
+                  {hsnModalResults.map(hItem => (
+                    <div
+                      key={hItem.hsn_code}
+                      className="p-3.5 hover:bg-blue-50/60 transition-colors flex items-center justify-between gap-4 group"
+                    >
+                      <div className="flex-1">
+                        <div className="flex items-center gap-2 mb-1">
+                          <span className="font-mono font-black text-sm text-blue-700 bg-blue-50 px-2.5 py-0.5 rounded border border-blue-200 shadow-xs">
+                            {hItem.hsn_code}
+                          </span>
+                          {hItem.chapter && (
+                            <span className="text-[10px] font-bold text-slate-600 bg-slate-100 px-1.5 py-0.5 rounded">
+                              Ch. {hItem.chapter}
+                            </span>
+                          )}
+                          <span className="text-xs font-bold text-slate-900 bg-slate-100 px-2 py-0.5 rounded">
+                            {hItem.category}
+                          </span>
+                          <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
+                            {hItem.gst_rate}% GST
+                          </span>
+                        </div>
+                        <p className="text-xs text-slate-600 line-clamp-2 leading-relaxed">
+                          {hItem.description}
+                        </p>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => selectHsnItem(hItem, hsnPickerTarget === 'edit')}
+                        className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-bold shadow-xs whitespace-nowrap transition-colors flex items-center gap-1.5 shrink-0"
+                      >
+                        <Check size={14} /> Select for Product
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Footer */}
+            <div className="px-6 py-3 bg-slate-50 border-t border-slate-200 flex items-center justify-between text-xs text-slate-500">
+              <span className="flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
+                <span>Official CBIC Statutory GST Harmonized System of Nomenclature</span>
+              </span>
+              <button
+                type="button"
+                onClick={() => setShowHsnPickerModal(false)}
+                className="px-4 py-1.5 bg-slate-200 hover:bg-slate-300 text-slate-800 rounded-lg font-bold transition-colors"
+              >
                 Close
               </button>
             </div>

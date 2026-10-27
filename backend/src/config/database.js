@@ -2,6 +2,7 @@ import pkg from 'pg';
 const { Pool } = pkg;
 import dotenv from 'dotenv';
 import { initAccountingSchema } from './accounting_schema.js';
+import { initHsnSchemaAndSeed } from './hsn_dataset.js';
 
 dotenv.config();
 
@@ -802,6 +803,9 @@ export const createTables = async () => {
 
         // Initialize Production-Grade Accounting, Commercial & Billing Subsystem
         await initAccountingSchema(pool);
+
+        // Initialize Real Indian GST HSN / SAC Dataset
+        await initHsnSchemaAndSeed(pool);
 
         console.log('✅ All tables created successfully');
     } catch (error) {
