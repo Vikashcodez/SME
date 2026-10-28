@@ -4,13 +4,18 @@ import {
     getAccountGroups,
     createAccountGroup,
     getLedgers,
+    getLedgerById,
     createLedger,
+    updateLedger,
+    deleteLedger,
     getBankAccounts,
     createBankAccount,
     getLedgerStatement,
     createVoucher,
     getVouchers,
     getVoucherById,
+    updateVoucher,
+    deleteVoucher,
     getTrialBalance,
     getDayBook,
     getProfitAndLoss,
@@ -35,6 +40,9 @@ router.post('/groups', createAccountGroup);
 // Ledgers
 router.get('/ledgers', getLedgers);
 router.post('/ledgers', createLedger);
+router.get('/ledgers/:ledger_id', getLedgerById);
+router.put('/ledgers/:ledger_id', updateLedger);
+router.delete('/ledgers/:ledger_id', deleteLedger);
 router.get('/ledgers/:ledger_id/statement', getLedgerStatement);
 router.get('/bank-accounts', getBankAccounts);
 router.post('/bank-accounts', createBankAccount);
@@ -43,6 +51,8 @@ router.post('/bank-accounts', createBankAccount);
 router.get('/vouchers', getVouchers);
 router.post('/vouchers', createVoucher);
 router.get('/vouchers/:id', getVoucherById);
+router.put('/vouchers/:id', updateVoucher);
+router.delete('/vouchers/:id', deleteVoucher);
 router.post('/vouchers/:id/reverse', reverseVoucher);
 
 // Financial years and period controls

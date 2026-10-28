@@ -140,36 +140,57 @@ const TrialBalance = () => {
           </div>
         </div>
 
-        <div className="flex items-center gap-6 font-mono text-xs">
+        <div className="flex flex-wrap items-center gap-6 font-mono text-xs">
           <div>
-            <span className="opacity-75">Debit Sum:</span>{' '}
-            <span className="font-bold text-sm">₹{reportData.totals?.total_debit}</span>
+            <span className="opacity-75">Opening:</span>{' '}
+            <span className="font-bold">₹{reportData.totals?.total_opening_debit || '0.00'} Dr / ₹{reportData.totals?.total_opening_credit || '0.00'} Cr</span>
           </div>
           <div>
-            <span className="opacity-75">Credit Sum:</span>{' '}
-            <span className="font-bold text-sm">₹{reportData.totals?.total_credit}</span>
+            <span className="opacity-75">Period Debit:</span>{' '}
+            <span className="font-bold text-sm">₹{reportData.totals?.total_period_debit || reportData.totals?.total_debit}</span>
+          </div>
+          <div>
+            <span className="opacity-75">Period Credit:</span>{' '}
+            <span className="font-bold text-sm">₹{reportData.totals?.total_period_credit || reportData.totals?.total_credit}</span>
           </div>
         </div>
       </div>
 
-      {/* Nominal account split */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-        <div className="bg-rose-50 border border-rose-200 rounded-xl px-4 py-3 flex items-center justify-between">
+      {/* Financial Integration Summary: P&L and Balance Sheet */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <div className="bg-rose-50/70 border border-rose-200 rounded-xl px-4 py-3 flex items-center justify-between">
           <div>
-            <p className="text-xs font-bold uppercase tracking-wider text-rose-700">Expenses · Debit side</p>
-            <p className="text-[11px] text-rose-600 mt-1">Charged to Profit & Loss</p>
+            <p className="text-[10px] font-bold uppercase tracking-wider text-rose-700">Expenses · Debit</p>
+            <p className="text-[11px] text-rose-600 mt-0.5">Charged to P&L</p>
           </div>
           <p className="text-lg font-bold font-mono text-rose-700">
-            ₹{nominalSummary.expense.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+            ₹{Number(reportData.profit_and_loss_summary?.total_expense || nominalSummary.expense || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
           </p>
         </div>
-        <div className="bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-3 flex items-center justify-between">
+
+        <div className="bg-emerald-50/70 border border-emerald-200 rounded-xl px-4 py-3 flex items-center justify-between">
           <div>
-            <p className="text-xs font-bold uppercase tracking-wider text-emerald-700">Income · Credit side</p>
-            <p className="text-[11px] text-emerald-600 mt-1">Transferred to Profit & Loss</p>
+            <p className="text-[10px] font-bold uppercase tracking-wider text-emerald-700">Income · Credit</p>
+            <p className="text-[11px] text-emerald-600 mt-0.5">Earned & Credited</p>
           </div>
           <p className="text-lg font-bold font-mono text-emerald-700">
-            ₹{nominalSummary.income.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+            ₹{Number(reportData.profit_and_loss_summary?.total_income || nominalSummary.income || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+          </p>
+        </div>
+
+        <div className={`border rounded-xl px-4 py-3 flex items-center justify-between ${
+          (reportData.profit_and_loss_summary?.is_profit ?? (nominalSummary.income >= nominalSummary.expense))
+            ? 'bg-indigo-50/70 border-indigo-200 text-indigo-900'
+            : 'bg-amber-50/70 border-amber-200 text-amber-900'
+        }`}>
+          <div>
+            <p className="text-[10px] font-bold uppercase tracking-wider">
+              {(reportData.profit_and_loss_summary?.is_profit ?? (nominalSummary.income >= nominalSummary.expense)) ? 'Net Profit' : 'Net Loss'}
+            </p>
+            <p className="text-[11px] opacity-75 mt-0.5">Trial Balance P&L Result</p>
+          </div>
+          <p className="text-lg font-bold font-mono">
+            ₹{Number(reportData.profit_and_loss_summary?.net_profit_loss ?? Math.abs(nominalSummary.income - nominalSummary.expense)).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
           </p>
         </div>
       </div>

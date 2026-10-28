@@ -1,5 +1,57 @@
 import pool from '../config/database.js';
 
+// Helper: Recalculate and persist a ledger's current_balance and current_balance_type
+export const recalculateLedgerBalance = async (client, ledgerId, companyId) => {
+    const ledRes = await client.query(`
+        SELECT l.ledger_id, l.opening_balance, l.opening_balance_type, ag.nature
+        FROM ledgers l
+        JOIN account_groups ag ON l.group_id = ag.group_id
+        WHERE l.ledger_id = $1 AND (l.company_id = $2 OR $2 IS NULL)
+        FOR UPDATE
+    `, [ledgerId, companyId]);
+
+    if (ledRes.rows.length === 0) return null;
+    const led = ledRes.rows[0];
+
+    const transRes = await client.query(`
+        SELECT 
+            COALESCE(SUM(vl.debit_amount), 0)::NUMERIC(16,4) AS total_dr,
+            COALESCE(SUM(vl.credit_amount), 0)::NUMERIC(16,4) AS total_cr
+        FROM voucher_lines vl
+        JOIN vouchers v ON vl.voucher_id = v.voucher_id
+        WHERE vl.ledger_id = $1 AND v.is_posted = TRUE
+    `, [ledgerId]);
+
+    const opBal = parseFloat(led.opening_balance) || 0;
+    const isOpDr = (led.opening_balance_type || 'DR') === 'DR';
+    const totalDr = parseFloat(transRes.rows[0].total_dr) || 0;
+    const totalCr = parseFloat(transRes.rows[0].total_cr) || 0;
+
+    const isDebitNature = ['ASSET', 'EXPENSE'].includes(led.nature);
+    let signedBal = 0;
+
+    if (isDebitNature) {
+        // Asset / Expense: Normal balance is Debit
+        const opSigned = isOpDr ? opBal : -opBal;
+        signedBal = opSigned + (totalDr - totalCr);
+    } else {
+        // Liability / Equity / Income: Normal balance is Credit
+        const opSigned = isOpDr ? -opBal : opBal;
+        signedBal = opSigned + (totalCr - totalDr);
+    }
+
+    const newBal = Math.abs(signedBal);
+    const newBalType = signedBal >= 0 ? (isDebitNature ? 'DR' : 'CR') : (isDebitNature ? 'CR' : 'DR');
+
+    await client.query(`
+        UPDATE ledgers
+        SET current_balance = $1, current_balance_type = $2, updated_at = CURRENT_TIMESTAMP
+        WHERE ledger_id = $3
+    `, [newBal, newBalType, ledgerId]);
+
+    return { current_balance: newBal, current_balance_type: newBalType };
+};
+
 // Helper: Generate voucher number
 const generateVoucherNumber = async (client, companyId, branchId, voucherCode) => {
     const year = new Date().getFullYear();
@@ -104,7 +156,7 @@ export const createAccountGroup = async (req, res) => {
     }
 };
 
-// 4. Get Ledgers List with filters
+// 4. Get Ledgers List with filters & accurate balances
 export const getLedgers = async (req, res) => {
     try {
         const companyId = req.scopeCompanyId || req.query.company_id || req.user?.company_id;
@@ -114,7 +166,29 @@ export const getLedgers = async (req, res) => {
         const isActive = req.query.is_active;
 
         let query = `
-            SELECT l.*, ag.group_name, ag.group_code, ag.nature
+            SELECT 
+                l.*,
+                ag.group_name,
+                ag.group_code,
+                ag.nature,
+                COALESCE((
+                    SELECT COUNT(*)::INT 
+                    FROM voucher_lines vl 
+                    JOIN vouchers v ON vl.voucher_id = v.voucher_id 
+                    WHERE vl.ledger_id = l.ledger_id AND v.is_posted = TRUE
+                ), 0) AS total_transactions,
+                COALESCE((
+                    SELECT SUM(vl.debit_amount)::NUMERIC(16,2)
+                    FROM voucher_lines vl 
+                    JOIN vouchers v ON vl.voucher_id = v.voucher_id 
+                    WHERE vl.ledger_id = l.ledger_id AND v.is_posted = TRUE
+                ), 0) AS total_debit,
+                COALESCE((
+                    SELECT SUM(vl.credit_amount)::NUMERIC(16,2)
+                    FROM voucher_lines vl 
+                    JOIN vouchers v ON vl.voucher_id = v.voucher_id 
+                    WHERE vl.ledger_id = l.ledger_id AND v.is_posted = TRUE
+                ), 0) AS total_credit
             FROM ledgers l
             JOIN account_groups ag ON l.group_id = ag.group_id
             WHERE l.company_id = $1
@@ -141,9 +215,96 @@ export const getLedgers = async (req, res) => {
         query += ` ORDER BY l.ledger_name ASC`;
 
         const result = await pool.query(query, params);
-        return res.json({ success: true, count: result.rows.length, data: result.rows });
+
+        const rows = result.rows.map(l => {
+            const opBal = parseFloat(l.opening_balance) || 0;
+            const isOpDr = (l.opening_balance_type || 'DR') === 'DR';
+            const totDr = parseFloat(l.total_debit) || 0;
+            const totCr = parseFloat(l.total_credit) || 0;
+            const isDebitNature = ['ASSET', 'EXPENSE'].includes(l.nature);
+
+            let signedBal = 0;
+            if (isDebitNature) {
+                const opSigned = isOpDr ? opBal : -opBal;
+                signedBal = opSigned + (totDr - totCr);
+            } else {
+                const opSigned = isOpDr ? -opBal : opBal;
+                signedBal = opSigned + (totCr - totDr);
+            }
+
+            const curBal = Math.abs(signedBal);
+            const curType = signedBal >= 0 ? (isDebitNature ? 'DR' : 'CR') : (isDebitNature ? 'CR' : 'DR');
+
+            return {
+                ...l,
+                current_balance: curBal.toFixed(2),
+                current_balance_type: curType
+            };
+        });
+
+        return res.json({ success: true, count: rows.length, data: rows });
     } catch (error) {
         console.error('Error in getLedgers:', error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// 4a. Get Single Ledger Details
+export const getLedgerById = async (req, res) => {
+    try {
+        const { ledger_id } = req.params;
+        const companyId = req.scopeCompanyId || req.query.company_id || req.user?.company_id;
+
+        const result = await pool.query(`
+            SELECT l.*, ag.group_name, ag.group_code, ag.nature,
+                COALESCE((
+                    SELECT COUNT(*)::INT 
+                    FROM voucher_lines vl 
+                    JOIN vouchers v ON vl.voucher_id = v.voucher_id 
+                    WHERE vl.ledger_id = l.ledger_id AND v.is_posted = TRUE
+                ), 0) AS total_transactions,
+                COALESCE((
+                    SELECT SUM(vl.debit_amount)::NUMERIC(16,2)
+                    FROM voucher_lines vl 
+                    JOIN vouchers v ON vl.voucher_id = v.voucher_id 
+                    WHERE vl.ledger_id = l.ledger_id AND v.is_posted = TRUE
+                ), 0) AS total_debit,
+                COALESCE((
+                    SELECT SUM(vl.credit_amount)::NUMERIC(16,2)
+                    FROM voucher_lines vl 
+                    JOIN vouchers v ON vl.voucher_id = v.voucher_id 
+                    WHERE vl.ledger_id = l.ledger_id AND v.is_posted = TRUE
+                ), 0) AS total_credit
+            FROM ledgers l
+            JOIN account_groups ag ON l.group_id = ag.group_id
+            WHERE l.ledger_id = $1 AND l.company_id = $2
+        `, [ledger_id, companyId]);
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({ success: false, message: 'Ledger not found.' });
+        }
+
+        const l = result.rows[0];
+        const opBal = parseFloat(l.opening_balance) || 0;
+        const isOpDr = (l.opening_balance_type || 'DR') === 'DR';
+        const totDr = parseFloat(l.total_debit) || 0;
+        const totCr = parseFloat(l.total_credit) || 0;
+        const isDebitNature = ['ASSET', 'EXPENSE'].includes(l.nature);
+
+        let signedBal = isDebitNature ? ((isOpDr ? opBal : -opBal) + totDr - totCr) : ((isOpDr ? -opBal : opBal) + totCr - totDr);
+        const curBal = Math.abs(signedBal);
+        const curType = signedBal >= 0 ? (isDebitNature ? 'DR' : 'CR') : (isDebitNature ? 'CR' : 'DR');
+
+        return res.json({
+            success: true,
+            data: {
+                ...l,
+                current_balance: curBal.toFixed(2),
+                current_balance_type: curType
+            }
+        });
+    } catch (error) {
+        console.error('Error in getLedgerById:', error);
         return res.status(500).json({ success: false, message: error.message });
     }
 };
@@ -157,6 +318,8 @@ export const createLedger = async (req, res) => {
             ledger_code,
             opening_balance = 0,
             opening_balance_type = 'DR',
+            opening_balance_date,
+            notes,
             maintain_bill_by_bill = false,
             default_credit_period_days = 0,
             credit_limit = 0,
@@ -170,7 +333,7 @@ export const createLedger = async (req, res) => {
         }
 
         const groupRes = await pool.query(
-            `SELECT group_id FROM account_groups WHERE group_id = $1 AND (company_id = $2 OR company_id IS NULL)`,
+            `SELECT group_id, nature FROM account_groups WHERE group_id = $1 AND (company_id = $2 OR company_id IS NULL)`,
             [group_id, companyId]
         );
         if (groupRes.rows.length === 0) {
@@ -179,20 +342,22 @@ export const createLedger = async (req, res) => {
 
         const effectiveCode = ledger_code ? ledger_code.trim().toUpperCase() : `LED-${Date.now().toString().slice(-6)}`;
         const parsedBal = parseFloat(opening_balance) || 0;
+        const opType = opening_balance_type === 'CR' ? 'CR' : 'DR';
+        const opDate = opening_balance_date || new Date().toISOString().split('T')[0];
 
         const result = await pool.query(`
             INSERT INTO ledgers (
                 company_id, group_id, ledger_name, ledger_code, currency_code,
-                opening_balance, opening_balance_type,
+                opening_balance, opening_balance_type, opening_balance_date, notes,
                 current_balance, current_balance_type,
                 maintain_bill_by_bill, default_credit_period_days, credit_limit,
-                tax_type, is_cost_centres_applicable, is_active
+                tax_type, is_cost_centres_applicable, is_active, is_system_defined
             ) VALUES (
                 $1, $2, $3, $4, 'INR',
+                $5, $6, $7, $8,
                 $5, $6,
-                $5, $6,
-                $7, $8, $9,
-                $10, $11, TRUE
+                $9, $10, $11,
+                $12, $13, TRUE, FALSE
             ) RETURNING *
         `, [
             companyId,
@@ -200,7 +365,9 @@ export const createLedger = async (req, res) => {
             ledger_name.trim(),
             effectiveCode,
             parsedBal,
-            opening_balance_type === 'CR' ? 'CR' : 'DR',
+            opType,
+            opDate,
+            notes || null,
             Boolean(maintain_bill_by_bill),
             parseInt(default_credit_period_days) || 0,
             parseFloat(credit_limit) || 0,
@@ -211,6 +378,184 @@ export const createLedger = async (req, res) => {
         return res.status(201).json({ success: true, message: 'Ledger created successfully', data: result.rows[0] });
     } catch (error) {
         console.error('Error in createLedger:', error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// 5b. Update Ledger
+export const updateLedger = async (req, res) => {
+    const client = await pool.connect();
+    try {
+        const { ledger_id } = req.params;
+        const companyId = req.scopeCompanyId || req.body.company_id || req.user?.company_id;
+        const {
+            group_id,
+            ledger_name,
+            ledger_code,
+            opening_balance,
+            opening_balance_type,
+            opening_balance_date,
+            maintain_bill_by_bill,
+            default_credit_period_days,
+            credit_limit,
+            tax_type,
+            is_cost_centres_applicable,
+            is_active,
+            notes
+        } = req.body;
+
+        if (!companyId || !ledger_id) {
+            return res.status(400).json({ success: false, message: 'Company ID and Ledger ID are required.' });
+        }
+
+        await client.query('BEGIN');
+
+        const existingRes = await client.query(
+            `SELECT l.*, ag.nature FROM ledgers l JOIN account_groups ag ON l.group_id = ag.group_id WHERE l.ledger_id = $1 AND l.company_id = $2 FOR UPDATE`,
+            [ledger_id, companyId]
+        );
+        if (existingRes.rows.length === 0) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({ success: false, message: 'Ledger not found.' });
+        }
+        const existing = existingRes.rows[0];
+
+        const targetGroupId = group_id || existing.group_id;
+        if (group_id && group_id !== existing.group_id) {
+            const groupCheck = await client.query(
+                `SELECT group_id FROM account_groups WHERE group_id = $1 AND (company_id = $2 OR company_id IS NULL)`,
+                [group_id, companyId]
+            );
+            if (groupCheck.rows.length === 0) {
+                await client.query('ROLLBACK');
+                return res.status(400).json({ success: false, message: 'Specified account group does not exist.' });
+            }
+        }
+
+        const newName = ledger_name ? ledger_name.trim() : existing.ledger_name;
+        const newCode = ledger_code ? ledger_code.trim().toUpperCase() : existing.ledger_code;
+        const newOpBal = opening_balance !== undefined ? parseFloat(opening_balance) || 0 : parseFloat(existing.opening_balance) || 0;
+        const newOpType = opening_balance_type ? (opening_balance_type === 'CR' ? 'CR' : 'DR') : existing.opening_balance_type;
+        const newOpDate = opening_balance_date || existing.opening_balance_date || new Date().toISOString().split('T')[0];
+        const newNotes = notes !== undefined ? notes : existing.notes;
+        const newIsActive = is_active !== undefined ? Boolean(is_active) : existing.is_active;
+
+        await client.query(`
+            UPDATE ledgers SET
+                group_id = $1,
+                ledger_name = $2,
+                ledger_code = $3,
+                opening_balance = $4,
+                opening_balance_type = $5,
+                opening_balance_date = $6,
+                notes = $7,
+                maintain_bill_by_bill = $8,
+                default_credit_period_days = $9,
+                credit_limit = $10,
+                tax_type = $11,
+                is_cost_centres_applicable = $12,
+                is_active = $13,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE ledger_id = $14 AND company_id = $15
+        `, [
+            targetGroupId,
+            newName,
+            newCode,
+            newOpBal,
+            newOpType,
+            newOpDate,
+            newNotes,
+            maintain_bill_by_bill !== undefined ? Boolean(maintain_bill_by_bill) : existing.maintain_bill_by_bill,
+            default_credit_period_days !== undefined ? parseInt(default_credit_period_days) || 0 : existing.default_credit_period_days,
+            credit_limit !== undefined ? parseFloat(credit_limit) || 0 : existing.credit_limit,
+            tax_type !== undefined ? tax_type : existing.tax_type,
+            is_cost_centres_applicable !== undefined ? Boolean(is_cost_centres_applicable) : existing.is_cost_centres_applicable,
+            newIsActive,
+            ledger_id,
+            companyId
+        ]);
+
+        await recalculateLedgerBalance(client, ledger_id, companyId);
+
+        const updatedRes = await client.query(`
+            SELECT l.*, ag.group_name, ag.group_code, ag.nature
+            FROM ledgers l
+            JOIN account_groups ag ON l.group_id = ag.group_id
+            WHERE l.ledger_id = $1
+        `, [ledger_id]);
+
+        await client.query('COMMIT');
+        return res.json({ success: true, message: 'Ledger updated successfully', data: updatedRes.rows[0] });
+    } catch (error) {
+        await client.query('ROLLBACK');
+        console.error('Error in updateLedger:', error);
+        return res.status(500).json({ success: false, message: error.message });
+    } finally {
+        client.release();
+    }
+};
+
+// 5c. Delete Ledger with Accounting Rule Validations
+export const deleteLedger = async (req, res) => {
+    try {
+        const { ledger_id } = req.params;
+        const companyId = req.scopeCompanyId || req.query.company_id || req.user?.company_id;
+
+        if (!companyId || !ledger_id) {
+            return res.status(400).json({ success: false, message: 'Company ID and Ledger ID are required.' });
+        }
+
+        const ledRes = await pool.query(
+            `SELECT * FROM ledgers WHERE ledger_id = $1 AND company_id = $2`,
+            [ledger_id, companyId]
+        );
+        if (ledRes.rows.length === 0) {
+            return res.status(404).json({ success: false, message: 'Ledger not found.' });
+        }
+        const ledger = ledRes.rows[0];
+
+        const systemLedgerCodes = [
+            'LED-CASH-MAIN', 'LED-BANK-MAIN', 'LED-SALES-GEN', 'LED-PURCH-GEN',
+            'LED-TAX-OUT-CGST', 'LED-TAX-OUT-SGST', 'LED-TAX-OUT-IGST',
+            'LED-TAX-IN-CGST', 'LED-TAX-IN-SGST', 'LED-TAX-IN-IGST',
+            'LED-ROUND-OFF', 'LED-EXP-GEN'
+        ];
+        if (ledger.is_system_defined || systemLedgerCodes.includes(ledger.ledger_code)) {
+            return res.status(400).json({
+                success: false,
+                message: 'System-defined default accounts cannot be deleted. You can rename or deactivate them.'
+            });
+        }
+
+        const transCount = await pool.query(
+            `SELECT COUNT(*)::INT AS cnt FROM voucher_lines WHERE ledger_id = $1`,
+            [ledger_id]
+        );
+        if (transCount.rows[0].cnt > 0) {
+            return res.status(400).json({
+                success: false,
+                message: `Cannot delete ledger "${ledger.ledger_name}" because it has ${transCount.rows[0].cnt} recorded accounting transaction(s). You can deactivate it instead.`
+            });
+        }
+
+        const bankCheck = await pool.query(`SELECT bank_account_id FROM bank_accounts WHERE ledger_id = $1`, [ledger_id]);
+        if (bankCheck.rows.length > 0) {
+            return res.status(400).json({ success: false, message: 'Cannot delete ledger because it is linked to a Bank Account.' });
+        }
+        const custCheck = await pool.query(`SELECT customer_id FROM customer_profiles WHERE ledger_id = $1`, [ledger_id]);
+        if (custCheck.rows.length > 0) {
+            return res.status(400).json({ success: false, message: 'Cannot delete ledger because it is linked to a Customer Profile.' });
+        }
+        const vendCheck = await pool.query(`SELECT vendor_profile_id FROM vendor_profiles WHERE ledger_id = $1`, [ledger_id]);
+        if (vendCheck.rows.length > 0) {
+            return res.status(400).json({ success: false, message: 'Cannot delete ledger because it is linked to a Vendor Profile.' });
+        }
+
+        await pool.query(`DELETE FROM ledgers WHERE ledger_id = $1 AND company_id = $2`, [ledger_id, companyId]);
+
+        return res.json({ success: true, message: `Ledger "${ledger.ledger_name}" deleted successfully.` });
+    } catch (error) {
+        console.error('Error in deleteLedger:', error);
         return res.status(500).json({ success: false, message: error.message });
     }
 };
@@ -331,7 +676,7 @@ export const createBankAccount = async (req, res) => {
 export const getLedgerStatement = async (req, res) => {
     try {
         const { ledger_id } = req.params;
-        const { from_date, to_date } = req.query;
+        const { from_date, to_date, voucher_type, financial_year_id } = req.query;
         const companyId = req.scopeCompanyId || req.user?.company_id;
 
         // Fetch ledger basic info
@@ -346,8 +691,59 @@ export const getLedgerStatement = async (req, res) => {
             return res.status(404).json({ success: false, message: 'Ledger not found' });
         }
         const ledger = ledgerRes.rows[0];
+        const isDebitNature = ['ASSET', 'EXPENSE'].includes(ledger.nature);
 
-        // Fetch all voucher lines for this ledger
+        // Date range determination
+        let effectiveFromDate = from_date;
+        let effectiveToDate = to_date;
+
+        if (financial_year_id) {
+            const fyRes = await pool.query(
+                `SELECT start_date, end_date FROM financial_years WHERE financial_year_id = $1 AND company_id = $2`,
+                [financial_year_id, companyId]
+            );
+            if (fyRes.rows.length > 0) {
+                if (!effectiveFromDate) effectiveFromDate = fyRes.rows[0].start_date;
+                if (!effectiveToDate) effectiveToDate = fyRes.rows[0].end_date;
+            }
+        }
+
+        // 1. Calculate Period Opening Balance (Base opening balance + all transactions before effectiveFromDate)
+        const baseOpBal = parseFloat(ledger.opening_balance) || 0;
+        const isBaseOpDr = (ledger.opening_balance_type || 'DR') === 'DR';
+        let periodOpeningSigned = 0;
+
+        if (isDebitNature) {
+            periodOpeningSigned = isBaseOpDr ? baseOpBal : -baseOpBal;
+        } else {
+            periodOpeningSigned = isBaseOpDr ? -baseOpBal : baseOpBal;
+        }
+
+        if (effectiveFromDate) {
+            const priorRes = await pool.query(`
+                SELECT 
+                    COALESCE(SUM(vl.debit_amount), 0)::NUMERIC(16,2) AS prior_dr,
+                    COALESCE(SUM(vl.credit_amount), 0)::NUMERIC(16,2) AS prior_cr
+                FROM voucher_lines vl
+                JOIN vouchers v ON vl.voucher_id = v.voucher_id
+                WHERE vl.ledger_id = $1 AND v.company_id = $2 AND v.is_posted = TRUE
+                  AND v.voucher_date < $3
+            `, [ledger_id, companyId, effectiveFromDate]);
+
+            const priorDr = parseFloat(priorRes.rows[0].prior_dr) || 0;
+            const priorCr = parseFloat(priorRes.rows[0].prior_cr) || 0;
+
+            if (isDebitNature) {
+                periodOpeningSigned += (priorDr - priorCr);
+            } else {
+                periodOpeningSigned += (priorCr - priorDr);
+            }
+        }
+
+        const periodOpeningBalance = Math.abs(periodOpeningSigned);
+        const periodOpeningBalanceType = periodOpeningSigned >= 0 ? (isDebitNature ? 'DR' : 'CR') : (isDebitNature ? 'CR' : 'DR');
+
+        // 2. Fetch voucher lines for this ledger within the range
         let query = `
             SELECT 
                 vl.line_id,
@@ -360,61 +756,90 @@ export const getLedgerStatement = async (req, res) => {
                 vl.debit_amount,
                 vl.credit_amount,
                 vl.narration AS line_narration,
-                v.narration AS voucher_narration
+                v.narration AS voucher_narration,
+                (
+                    SELECT STRING_AGG(DISTINCT l2.ledger_name, ', ')
+                    FROM voucher_lines vl2
+                    JOIN ledgers l2 ON vl2.ledger_id = l2.ledger_id
+                    WHERE vl2.voucher_id = v.voucher_id AND vl2.ledger_id != $1
+                ) AS contra_ledgers
             FROM voucher_lines vl
             JOIN vouchers v ON vl.voucher_id = v.voucher_id
             JOIN voucher_types vt ON v.voucher_type_id = vt.voucher_type_id
-            WHERE vl.ledger_id = $1 AND v.is_posted = TRUE
+            WHERE vl.ledger_id = $1 AND v.company_id = $2 AND v.is_posted = TRUE
         `;
         const params = [ledger_id, companyId];
-        query = query.replace('WHERE vl.ledger_id = $1', 'WHERE vl.ledger_id = $1 AND v.company_id = $2');
 
-        if (from_date) {
-            params.push(from_date);
+        if (effectiveFromDate) {
+            params.push(effectiveFromDate);
             query += ` AND v.voucher_date >= $${params.length}`;
         }
-        if (to_date) {
-            params.push(to_date);
+        if (effectiveToDate) {
+            params.push(effectiveToDate);
             query += ` AND v.voucher_date <= $${params.length}`;
         }
+        if (voucher_type) {
+            const cleanVT = voucher_type.trim().toUpperCase();
+            const vtNoPrefix = cleanVT.replace(/^VCH-/, '');
+            const vtWithPrefix = `VCH-${vtNoPrefix}`;
+            params.push(cleanVT, vtWithPrefix, vtNoPrefix);
+            query += ` AND (
+                UPPER(vt.voucher_type_code) = $${params.length - 2}
+                OR UPPER(vt.voucher_type_code) = $${params.length - 1}
+                OR UPPER(vt.base_category) = $${params.length}
+            )`;
+        }
 
-        query += ` ORDER BY v.voucher_date ASC, v.voucher_id ASC`;
+        query += ` ORDER BY v.voucher_date ASC, v.voucher_id ASC, vl.line_number ASC`;
 
         const linesRes = await pool.query(query, params);
 
-        // Compute running balance
-        let runningBalance = parseFloat(ledger.opening_balance) || 0;
-        let isDebitNature = ['ASSET', 'EXPENSE'].includes(ledger.nature);
-        if (ledger.opening_balance_type === 'CR' && isDebitNature) {
-            runningBalance = -runningBalance;
-        } else if (ledger.opening_balance_type === 'DR' && !isDebitNature) {
-            runningBalance = -runningBalance;
-        }
+        let runningSigned = periodOpeningSigned;
+        let totalDebit = 0;
+        let totalCredit = 0;
 
         const transactions = linesRes.rows.map(line => {
             const dr = parseFloat(line.debit_amount) || 0;
             const cr = parseFloat(line.credit_amount) || 0;
+            totalDebit += dr;
+            totalCredit += cr;
 
             if (isDebitNature) {
-                runningBalance += (dr - cr);
+                runningSigned += (dr - cr);
             } else {
-                runningBalance += (cr - dr);
+                runningSigned += (cr - dr);
             }
+
+            const particulars = line.contra_ledgers || line.line_narration || line.voucher_narration || line.voucher_type_name;
 
             return {
                 ...line,
-                running_balance: Math.abs(runningBalance).toFixed(2),
-                running_balance_type: runningBalance >= 0 ? (isDebitNature ? 'DR' : 'CR') : (isDebitNature ? 'CR' : 'DR')
+                particulars,
+                running_balance: Math.abs(runningSigned).toFixed(2),
+                running_balance_type: runningSigned >= 0 ? (isDebitNature ? 'DR' : 'CR') : (isDebitNature ? 'CR' : 'DR')
             };
         });
+
+        const closingBalance = Math.abs(runningSigned);
+        const closingBalanceType = runningSigned >= 0 ? (isDebitNature ? 'DR' : 'CR') : (isDebitNature ? 'CR' : 'DR');
 
         return res.json({
             success: true,
             data: {
                 ledger,
-                opening_balance: ledger.opening_balance,
-                opening_balance_type: ledger.opening_balance_type,
-                transactions
+                base_opening_balance: ledger.opening_balance,
+                base_opening_balance_type: ledger.opening_balance_type,
+                period_opening_balance: periodOpeningBalance.toFixed(2),
+                period_opening_balance_type: periodOpeningBalanceType,
+                from_date: effectiveFromDate || null,
+                to_date: effectiveToDate || null,
+                transactions,
+                totals: {
+                    total_debit: totalDebit.toFixed(2),
+                    total_credit: totalCredit.toFixed(2),
+                    closing_balance: closingBalance.toFixed(2),
+                    closing_balance_type: closingBalanceType
+                }
             }
         });
 
@@ -529,17 +954,17 @@ export const createVoucher = async (req, res) => {
         ]);
         const voucher = voucherRes.rows[0];
 
-        // Insert Voucher Lines and Update Ledger Balances
+        // Insert Voucher Lines and track affected ledgers
+        const affectedLedgerIds = new Set();
         for (let i = 0; i < lines.length; i++) {
             const line = lines[i];
             const dr = parseFloat(line.debit_amount) || 0;
             const cr = parseFloat(line.credit_amount) || 0;
 
-            const vlRes = await client.query(`
+            await client.query(`
                 INSERT INTO voucher_lines (
                     voucher_id, line_number, ledger_id, debit_amount, credit_amount, narration
                 ) VALUES ($1, $2, $3, $4, $5, $6)
-                RETURNING line_id
             `, [
                 voucher.voucher_id,
                 i + 1,
@@ -548,46 +973,13 @@ export const createVoucher = async (req, res) => {
                 cr,
                 line.narration || narration || null
             ]);
-            const lineId = vlRes.rows[0].line_id;
 
-            // Update Ledger Current Balance
-            const ledgerRes = await client.query(
-                `SELECT l.*, ag.nature FROM ledgers l
-                 JOIN account_groups ag ON l.group_id = ag.group_id
-                 WHERE l.ledger_id = $1 AND l.company_id = $2
-                 FOR UPDATE`,
-                [line.ledger_id, companyId]
-            );
-            if (ledgerRes.rows.length === 0) {
-                await client.query('ROLLBACK');
-                return res.status(400).json({ success: false, message: `Ledger ${line.ledger_id} does not belong to this company.` });
-            }
-            if (ledgerRes.rows.length > 0) {
-                const led = ledgerRes.rows[0];
-                let currentBal = parseFloat(led.current_balance) || 0;
-                let isDr = led.current_balance_type === 'DR';
+            affectedLedgerIds.add(line.ledger_id);
+        }
 
-                // Net signed change from ledger perspective
-                // Asset / Expense: Debit increases balance, Credit decreases
-                // Liability / Equity / Income: Credit increases balance, Debit decreases
-                const isDebitNature = ['ASSET', 'EXPENSE'].includes(led.nature);
-                let signedBal = isDebitNature ? (isDr ? currentBal : -currentBal) : (isDr ? -currentBal : currentBal);
-
-                if (isDebitNature) {
-                    signedBal += (dr - cr);
-                } else {
-                    signedBal += (cr - dr);
-                }
-
-                const newBal = Math.abs(signedBal);
-                const newBalType = signedBal >= 0 ? (isDebitNature ? 'DR' : 'CR') : (isDebitNature ? 'CR' : 'DR');
-
-                await client.query(`
-                    UPDATE ledgers 
-                    SET current_balance = $1, current_balance_type = $2, updated_at = CURRENT_TIMESTAMP
-                    WHERE ledger_id = $3
-                `, [newBal, newBalType, line.ledger_id]);
-            }
+        // Recalculate each affected ledger's balance strictly using opening balance + posted voucher lines
+        for (const ledgerId of affectedLedgerIds) {
+            await recalculateLedgerBalance(client, ledgerId, companyId);
         }
 
         // Bill Allocations if any
@@ -735,13 +1127,207 @@ export const getVoucherById = async (req, res) => {
     }
 };
 
-// 10. Trial Balance Report
+// 9a. Update Voucher (Double-entry validation, balance recalculation)
+export const updateVoucher = async (req, res) => {
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        const { id } = req.params;
+        const companyId = req.scopeCompanyId || req.body.company_id || req.user?.company_id;
+        const {
+            voucher_date,
+            reference_number,
+            reference_date,
+            narration,
+            lines = []
+        } = req.body;
+
+        if (!companyId) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({ success: false, message: 'Company ID is required' });
+        }
+
+        // Fetch existing voucher
+        const vRes = await client.query(
+            `SELECT * FROM vouchers WHERE voucher_id = $1 AND company_id = $2 FOR UPDATE`,
+            [id, companyId]
+        );
+        if (vRes.rows.length === 0) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({ success: false, message: 'Voucher not found' });
+        }
+        const existingVoucher = vRes.rows[0];
+
+        if (existingVoucher.source_module === 'SALES_INVOICE' || existingVoucher.source_module === 'PURCHASE_BILL') {
+            await client.query('ROLLBACK');
+            return res.status(400).json({
+                success: false,
+                message: `This voucher was automatically generated by ${existingVoucher.source_module}. Please edit it via that module.`
+            });
+        }
+
+        if (!Array.isArray(lines) || lines.length < 2) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({ success: false, message: 'A valid voucher requires at least 2 lines.' });
+        }
+
+        let totalDebit = 0;
+        let totalCredit = 0;
+        for (const line of lines) {
+            const dr = parseFloat(line.debit_amount) || 0;
+            const cr = parseFloat(line.credit_amount) || 0;
+            if (dr < 0 || cr < 0 || (dr > 0 && cr > 0)) {
+                await client.query('ROLLBACK');
+                return res.status(400).json({ success: false, message: 'Each line must have either a Debit or Credit amount, not both.' });
+            }
+            if (dr === 0 && cr === 0) {
+                await client.query('ROLLBACK');
+                return res.status(400).json({ success: false, message: 'Each line must have a non-zero Debit or Credit amount.' });
+            }
+            totalDebit += dr;
+            totalCredit += cr;
+        }
+
+        if (Math.abs(totalDebit - totalCredit) > 0.01) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({
+                success: false,
+                message: `Double entry mismatch! Total Debit (₹${totalDebit.toFixed(2)}) must equal Total Credit (₹${totalCredit.toFixed(2)}).`
+            });
+        }
+
+        // Collect existing ledger IDs to recalculate later
+        const oldLinesRes = await client.query(
+            `SELECT DISTINCT ledger_id FROM voucher_lines WHERE voucher_id = $1`,
+            [id]
+        );
+        const affectedLedgerIds = new Set(oldLinesRes.rows.map(r => r.ledger_id));
+
+        // Update voucher header
+        await client.query(`
+            UPDATE vouchers
+            SET voucher_date = COALESCE($1, voucher_date),
+                reference_number = COALESCE($2, reference_number),
+                reference_date = $3,
+                narration = COALESCE($4, narration),
+                updated_at = CURRENT_TIMESTAMP
+            WHERE voucher_id = $5
+        `, [voucher_date || null, reference_number || null, reference_date || null, narration || null, id]);
+
+        // Unpost voucher temporarily so line updates/deletion do not trigger premature balance checks
+        await client.query(`UPDATE vouchers SET is_posted = FALSE WHERE voucher_id = $1`, [id]);
+
+        // Delete old bill_allocations and voucher_lines
+        await client.query(
+            `DELETE FROM bill_allocations WHERE voucher_line_id IN (SELECT line_id FROM voucher_lines WHERE voucher_id = $1)`,
+            [id]
+        );
+        await client.query(`DELETE FROM voucher_lines WHERE voucher_id = $1`, [id]);
+
+        // Insert new lines
+        for (let i = 0; i < lines.length; i++) {
+            const line = lines[i];
+            affectedLedgerIds.add(line.ledger_id);
+            await client.query(`
+                INSERT INTO voucher_lines (
+                    voucher_id, line_number, ledger_id, debit_amount, credit_amount, narration
+                ) VALUES ($1, $2, $3, $4, $5, $6)
+            `, [
+                id,
+                i + 1,
+                line.ledger_id,
+                parseFloat(line.debit_amount) || 0,
+                parseFloat(line.credit_amount) || 0,
+                line.narration || narration || null
+            ]);
+        }
+
+        // Re-post voucher to enforce balanced validation trigger
+        await client.query(`UPDATE vouchers SET is_posted = TRUE WHERE voucher_id = $1`, [id]);
+
+        // Recalculate balances for all affected ledgers (old and new)
+        for (const ledgerId of affectedLedgerIds) {
+            await recalculateLedgerBalance(client, ledgerId, companyId);
+        }
+
+        await client.query('COMMIT');
+        return res.json({ success: true, message: 'Voucher updated successfully' });
+    } catch (error) {
+        await client.query('ROLLBACK');
+        console.error('Error in updateVoucher:', error);
+        return res.status(500).json({ success: false, message: error.message });
+    } finally {
+        client.release();
+    }
+};
+
+// 9b. Delete Voucher (Safely delete manual vouchers and recalculate balances)
+export const deleteVoucher = async (req, res) => {
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        const { id } = req.params;
+        const companyId = req.scopeCompanyId || req.user?.company_id;
+
+        const vRes = await client.query(
+            `SELECT * FROM vouchers WHERE voucher_id = $1 AND company_id = $2 FOR UPDATE`,
+            [id, companyId]
+        );
+        if (vRes.rows.length === 0) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({ success: false, message: 'Voucher not found' });
+        }
+        const voucher = vRes.rows[0];
+
+        if (voucher.source_module === 'SALES_INVOICE' || voucher.source_module === 'PURCHASE_BILL') {
+            await client.query('ROLLBACK');
+            return res.status(400).json({
+                success: false,
+                message: `This voucher was automatically generated by ${voucher.source_module} and cannot be deleted here.`
+            });
+        }
+
+        // Collect affected ledger IDs
+        const oldLinesRes = await client.query(
+            `SELECT DISTINCT ledger_id FROM voucher_lines WHERE voucher_id = $1`,
+            [id]
+        );
+        const affectedLedgerIds = oldLinesRes.rows.map(r => r.ledger_id);
+
+        // Unpost voucher temporarily to satisfy trigger
+        await client.query(`UPDATE vouchers SET is_posted = FALSE WHERE voucher_id = $1`, [id]);
+
+        // Delete bill_allocations and voucher_lines
+        await client.query(
+            `DELETE FROM bill_allocations WHERE voucher_line_id IN (SELECT line_id FROM voucher_lines WHERE voucher_id = $1)`,
+            [id]
+        );
+        await client.query(`DELETE FROM voucher_lines WHERE voucher_id = $1`, [id]);
+        await client.query(`DELETE FROM vouchers WHERE voucher_id = $1`, [id]);
+
+        // Recalculate balances for all affected ledgers
+        for (const ledgerId of affectedLedgerIds) {
+            await recalculateLedgerBalance(client, ledgerId, companyId);
+        }
+
+        await client.query('COMMIT');
+        return res.json({ success: true, message: `Voucher ${voucher.voucher_number} deleted successfully` });
+    } catch (error) {
+        await client.query('ROLLBACK');
+        console.error('Error in deleteVoucher:', error);
+        return res.status(500).json({ success: false, message: error.message });
+    } finally {
+        client.release();
+    }
+};
+
+// 10. Trial Balance Report (Fully integrated with Opening Balances, Vouchers, and P&L)
 export const getTrialBalance = async (req, res) => {
     try {
         const companyId = req.scopeCompanyId || req.query.company_id || req.user?.company_id;
         const asOnDate = req.query.as_on_date || new Date().toISOString().split('T')[0];
 
-        // Aggregate all posted voucher lines up to asOnDate
+        // Query all ledgers with opening balance and aggregate posted voucher lines up to asOnDate
         const result = await pool.query(`
             SELECT 
                 l.ledger_id,
@@ -749,41 +1335,97 @@ export const getTrialBalance = async (req, res) => {
                 l.ledger_code,
                 ag.group_name,
                 ag.nature,
-                l.opening_balance,
-                l.opening_balance_type,
+                ag.affects_gross_profit,
+                COALESCE(l.opening_balance, 0)::NUMERIC(16,2) AS opening_balance,
+                COALESCE(l.opening_balance_type, 'DR') AS opening_balance_type,
                 COALESCE(SUM(CASE WHEN v.voucher_id IS NOT NULL THEN vl.debit_amount ELSE 0 END), 0)::NUMERIC(16,2) AS period_debit,
-                COALESCE(SUM(CASE WHEN v.voucher_id IS NOT NULL THEN vl.credit_amount ELSE 0 END), 0)::NUMERIC(16,2) AS period_credit,
-                l.current_balance,
-                l.current_balance_type
+                COALESCE(SUM(CASE WHEN v.voucher_id IS NOT NULL THEN vl.credit_amount ELSE 0 END), 0)::NUMERIC(16,2) AS period_credit
             FROM ledgers l
             JOIN account_groups ag ON l.group_id = ag.group_id
             LEFT JOIN voucher_lines vl ON l.ledger_id = vl.ledger_id
             LEFT JOIN vouchers v ON vl.voucher_id = v.voucher_id AND v.is_posted = TRUE AND v.voucher_date <= $2
             WHERE l.company_id = $1
-            GROUP BY l.ledger_id, l.ledger_name, l.ledger_code, ag.group_name, ag.nature, l.opening_balance, l.opening_balance_type, l.current_balance, l.current_balance_type
+            GROUP BY l.ledger_id, l.ledger_name, l.ledger_code, ag.group_name, ag.nature, ag.affects_gross_profit, l.opening_balance, l.opening_balance_type
             ORDER BY ag.nature, l.ledger_name ASC
         `, [companyId, asOnDate]);
 
-        let totalDebits = 0;
-        let totalCredits = 0;
+        let totalOpeningDebit = 0;
+        let totalOpeningCredit = 0;
+        let totalPeriodDebit = 0;
+        let totalPeriodCredit = 0;
+        let totalClosingDebit = 0;
+        let totalClosingCredit = 0;
+
+        let totalIncome = 0;
+        let totalExpense = 0;
+        let totalAssets = 0;
+        let totalLiabilities = 0;
+        let totalEquity = 0;
 
         const rows = result.rows.map(r => {
-            const opening = parseFloat(r.opening_balance) || 0;
-            const openingSigned = r.opening_balance_type === 'CR' ? -opening : opening;
-            const closingSigned = openingSigned + (parseFloat(r.period_debit) || 0) - (parseFloat(r.period_credit) || 0);
-            const curBal = Math.abs(closingSigned);
-            const isDr = closingSigned >= 0;
-            const closingDebit = isDr ? curBal : 0;
-            const closingCredit = !isDr ? curBal : 0;
-            totalDebits += closingDebit;
-            totalCredits += closingCredit;
+            const opBal = parseFloat(r.opening_balance) || 0;
+            const opDr = r.opening_balance_type === 'DR' ? opBal : 0;
+            const opCr = r.opening_balance_type === 'CR' ? opBal : 0;
+
+            const pDr = parseFloat(r.period_debit) || 0;
+            const pCr = parseFloat(r.period_credit) || 0;
+
+            totalOpeningDebit += opDr;
+            totalOpeningCredit += opCr;
+            totalPeriodDebit += pDr;
+            totalPeriodCredit += pCr;
+
+            // Cumulative double-entry balance:
+            // For any account: Total Debit = opDr + pDr; Total Credit = opCr + pCr; Net = Total Debit - Total Credit
+            const cumulativeDr = opDr + pDr;
+            const cumulativeCr = opCr + pCr;
+            const net = cumulativeDr - cumulativeCr;
+
+            let closingDebit = 0;
+            let closingCredit = 0;
+            let closingBalance = 0;
+            let closingBalanceType = 'DR';
+
+            if (net > 0) {
+                closingDebit = net;
+                closingBalance = net;
+                closingBalanceType = 'DR';
+            } else if (net < 0) {
+                closingCredit = Math.abs(net);
+                closingBalance = Math.abs(net);
+                closingBalanceType = 'CR';
+            }
+
+            totalClosingDebit += closingDebit;
+            totalClosingCredit += closingCredit;
+
+            // Classification flows
+            if (r.nature === 'INCOME') {
+                totalIncome += (closingCredit - closingDebit);
+            } else if (r.nature === 'EXPENSE') {
+                totalExpense += (closingDebit - closingCredit);
+            } else if (r.nature === 'ASSET') {
+                totalAssets += (closingDebit - closingCredit);
+            } else if (r.nature === 'LIABILITY') {
+                totalLiabilities += (closingCredit - closingDebit);
+            } else if (r.nature === 'EQUITY') {
+                totalEquity += (closingCredit - closingDebit);
+            }
 
             return {
                 ...r,
+                opening_debit: opDr.toFixed(2),
+                opening_credit: opCr.toFixed(2),
+                period_debit: pDr.toFixed(2),
+                period_credit: pCr.toFixed(2),
                 closing_debit: closingDebit.toFixed(2),
-                closing_credit: closingCredit.toFixed(2)
+                closing_credit: closingCredit.toFixed(2),
+                closing_balance: closingBalance.toFixed(2),
+                closing_balance_type: closingBalanceType
             };
         });
+
+        const netProfitLoss = +(totalIncome - totalExpense).toFixed(2);
 
         return res.json({
             success: true,
@@ -791,10 +1433,27 @@ export const getTrialBalance = async (req, res) => {
                 as_on_date: asOnDate,
                 rows,
                 totals: {
-                    total_debit: totalDebits.toFixed(2),
-                    total_credit: totalCredits.toFixed(2),
-                    difference: Math.abs(totalDebits - totalCredits).toFixed(2),
-                    is_balanced: Math.abs(totalDebits - totalCredits) < 0.05
+                    total_opening_debit: totalOpeningDebit.toFixed(2),
+                    total_opening_credit: totalOpeningCredit.toFixed(2),
+                    opening_difference: Math.abs(totalOpeningDebit - totalOpeningCredit).toFixed(2),
+                    total_period_debit: totalPeriodDebit.toFixed(2),
+                    total_period_credit: totalPeriodCredit.toFixed(2),
+                    total_debit: totalClosingDebit.toFixed(2),
+                    total_credit: totalClosingCredit.toFixed(2),
+                    closing_difference: Math.abs(totalClosingDebit - totalClosingCredit).toFixed(2),
+                    difference: Math.abs(totalClosingDebit - totalClosingCredit).toFixed(2),
+                    is_balanced: Math.abs(totalClosingDebit - totalClosingCredit) < 0.05
+                },
+                profit_and_loss_summary: {
+                    total_income: totalIncome.toFixed(2),
+                    total_expense: totalExpense.toFixed(2),
+                    net_profit_loss: Math.abs(netProfitLoss).toFixed(2),
+                    is_profit: netProfitLoss >= 0
+                },
+                balance_sheet_summary: {
+                    total_assets: totalAssets.toFixed(2),
+                    total_liabilities: totalLiabilities.toFixed(2),
+                    total_equity: totalEquity.toFixed(2)
                 }
             }
         });
@@ -1059,16 +1718,17 @@ export const getProfitAndLoss = async (req, res) => {
                 ag.group_code,
                 ag.nature,
                 ag.affects_gross_profit,
-                COALESCE(SUM(vl.debit_amount), 0)::NUMERIC(16,2) AS debit_sum,
-                COALESCE(SUM(vl.credit_amount), 0)::NUMERIC(16,2) AS credit_sum
+                COALESCE(l.opening_balance, 0)::NUMERIC(16,2) AS opening_balance,
+                COALESCE(l.opening_balance_type, 'DR') AS opening_balance_type,
+                COALESCE(SUM(CASE WHEN v.voucher_id IS NOT NULL THEN vl.debit_amount ELSE 0 END), 0)::NUMERIC(16,2) AS debit_sum,
+                COALESCE(SUM(CASE WHEN v.voucher_id IS NOT NULL THEN vl.credit_amount ELSE 0 END), 0)::NUMERIC(16,2) AS credit_sum
             FROM ledgers l
             JOIN account_groups ag ON l.group_id = ag.group_id
-            JOIN voucher_lines vl ON l.ledger_id = vl.ledger_id
-            JOIN vouchers v ON vl.voucher_id = v.voucher_id AND v.is_posted = TRUE
-            WHERE l.company_id = $1 AND v.voucher_date >= $2 AND v.voucher_date <= $3
+            LEFT JOIN voucher_lines vl ON l.ledger_id = vl.ledger_id
+            LEFT JOIN vouchers v ON vl.voucher_id = v.voucher_id AND v.is_posted = TRUE AND v.voucher_date >= $2 AND v.voucher_date <= $3
               AND v.source_module IS DISTINCT FROM 'PURCHASE_INVOICE'
-              AND ag.nature IN ('INCOME', 'EXPENSE')
-            GROUP BY l.ledger_id, l.ledger_name, l.ledger_code, ag.group_name, ag.group_code, ag.nature, ag.affects_gross_profit
+            WHERE l.company_id = $1 AND ag.nature IN ('INCOME', 'EXPENSE')
+            GROUP BY l.ledger_id, l.ledger_name, l.ledger_code, ag.group_name, ag.group_code, ag.nature, ag.affects_gross_profit, l.opening_balance, l.opening_balance_type
             ORDER BY ag.nature, l.ledger_name ASC
         `, [companyId, fromDate, toDate]);
 
@@ -1086,9 +1746,12 @@ export const getProfitAndLoss = async (req, res) => {
         for (const row of ledgerFlows.rows) {
             const deb = parseFloat(row.debit_sum) || 0;
             const cred = parseFloat(row.credit_sum) || 0;
+            const opBal = parseFloat(row.opening_balance) || 0;
 
             if (row.nature === 'INCOME') {
-                const netIncome = cred - deb;
+                const opSigned = row.opening_balance_type === 'CR' ? opBal : -opBal;
+                const netIncome = opSigned + cred - deb;
+                if (netIncome === 0) continue;
                 if (row.affects_gross_profit || row.group_code === 'GRP-SALES' || row.group_code === 'GRP-DIR-INC') {
                     totalSales += netIncome;
                     salesLedgers.push({ ...row, amount: netIncome.toFixed(2) });
@@ -1097,7 +1760,9 @@ export const getProfitAndLoss = async (req, res) => {
                     indirectIncomeLedgers.push({ ...row, amount: netIncome.toFixed(2) });
                 }
             } else if (row.nature === 'EXPENSE') {
-                const netExpense = deb - cred;
+                const opSigned = row.opening_balance_type === 'DR' ? opBal : -opBal;
+                const netExpense = opSigned + deb - cred;
+                if (netExpense === 0) continue;
                 if (row.group_code === 'GRP-PURCHASE' || row.group_code === 'PURCHASE_ACCOUNTS') {
                     totalPurchases += netExpense;
                     purchaseLedgers.push({ ...row, amount: netExpense.toFixed(2) });
@@ -1184,29 +1849,35 @@ export const getBalanceSheet = async (req, res) => {
         const companyId = req.query.company_id || req.user?.company_id;
         const asOnDate = req.query.as_on_date || new Date().toISOString().split('T')[0];
 
-        // 1. Calculate Net Profit up to asOnDate for Equity inclusion
+        // 1. Calculate Net Profit up to asOnDate for Equity inclusion (including opening balances of Income & Expense)
         const incExpRes = await pool.query(`
             SELECT 
                 ag.nature,
-                COALESCE(SUM(vl.debit_amount), 0)::NUMERIC(16,2) AS total_dr,
-                COALESCE(SUM(vl.credit_amount), 0)::NUMERIC(16,2) AS total_cr
+                l.opening_balance,
+                l.opening_balance_type,
+                COALESCE(SUM(CASE WHEN v.voucher_id IS NOT NULL THEN vl.debit_amount ELSE 0 END), 0)::NUMERIC(16,2) AS total_dr,
+                COALESCE(SUM(CASE WHEN v.voucher_id IS NOT NULL THEN vl.credit_amount ELSE 0 END), 0)::NUMERIC(16,2) AS total_cr
             FROM ledgers l
             JOIN account_groups ag ON l.group_id = ag.group_id
-            JOIN voucher_lines vl ON l.ledger_id = vl.ledger_id
-            JOIN vouchers v ON vl.voucher_id = v.voucher_id AND v.is_posted = TRUE
-            WHERE l.company_id = $1 AND v.voucher_date <= $2
+            LEFT JOIN voucher_lines vl ON l.ledger_id = vl.ledger_id
+            LEFT JOIN vouchers v ON vl.voucher_id = v.voucher_id AND v.is_posted = TRUE AND v.voucher_date <= $2
               AND v.source_module IS DISTINCT FROM 'PURCHASE_INVOICE'
-              AND ag.nature IN ('INCOME', 'EXPENSE')
-            GROUP BY ag.nature
+            WHERE l.company_id = $1 AND ag.nature IN ('INCOME', 'EXPENSE')
+            GROUP BY l.ledger_id, ag.nature, l.opening_balance, l.opening_balance_type
         `, [companyId, asOnDate]);
 
         let netIncomeFromOps = 0;
         let netExpenseFromOps = 0;
         for (const row of incExpRes.rows) {
+            const opBal = parseFloat(row.opening_balance) || 0;
+            const dr = parseFloat(row.total_dr) || 0;
+            const cr = parseFloat(row.total_cr) || 0;
             if (row.nature === 'INCOME') {
-                netIncomeFromOps = (parseFloat(row.total_cr) || 0) - (parseFloat(row.total_dr) || 0);
+                const opSigned = row.opening_balance_type === 'CR' ? opBal : -opBal;
+                netIncomeFromOps += (opSigned + cr - dr);
             } else if (row.nature === 'EXPENSE') {
-                netExpenseFromOps = (parseFloat(row.total_dr) || 0) - (parseFloat(row.total_cr) || 0);
+                const opSigned = row.opening_balance_type === 'DR' ? opBal : -opBal;
+                netExpenseFromOps += (opSigned + dr - cr);
             }
         }
         // Purchases are posted to expense ledgers while stock is maintained in
@@ -1605,25 +2276,16 @@ export const reverseVoucher = async (req, res) => {
             req.user?.employee_id || null]);
         const reversal = reversalRes.rows[0];
 
+        const affectedLedgerIds = new Set();
         for (const line of linesRes.rows) {
             await client.query(`
                 INSERT INTO voucher_lines (voucher_id, line_number, ledger_id, debit_amount, credit_amount, narration)
                 VALUES ($1, $2, $3, $4, $5, $6)
             `, [reversal.voucher_id, line.line_number, line.ledger_id, line.credit_amount, line.debit_amount, 'Reversal entry']);
-            await client.query(`
-                UPDATE ledgers l
-                SET current_balance = CASE WHEN signed_balance >= 0 THEN signed_balance ELSE -signed_balance END,
-                    current_balance_type = CASE WHEN signed_balance >= 0 THEN CASE WHEN ag.nature IN ('ASSET','EXPENSE') THEN 'DR' ELSE 'CR' END ELSE CASE WHEN ag.nature IN ('ASSET','EXPENSE') THEN 'CR' ELSE 'DR' END END,
-                    updated_at = CURRENT_TIMESTAMP
-                FROM account_groups ag,
-                     (SELECT l2.ledger_id,
-                             CASE WHEN ag2.nature IN ('ASSET','EXPENSE')
-                                  THEN (CASE WHEN l2.current_balance_type = 'DR' THEN l2.current_balance ELSE -l2.current_balance END) + $1 - $2
-                                  ELSE (CASE WHEN l2.current_balance_type = 'CR' THEN l2.current_balance ELSE -l2.current_balance END) + $2 - $1 END AS signed_balance
-                      FROM ledgers l2 JOIN account_groups ag2 ON ag2.group_id = l2.group_id
-                      WHERE l2.ledger_id = $3 AND l2.company_id = $4) balance
-                WHERE l.ledger_id = balance.ledger_id AND ag.group_id = l.group_id
-            `, [line.credit_amount, line.debit_amount, line.ledger_id, companyId]);
+            affectedLedgerIds.add(line.ledger_id);
+        }
+        for (const ledgerId of affectedLedgerIds) {
+            await recalculateLedgerBalance(client, ledgerId, companyId);
         }
         await client.query(`UPDATE vouchers SET is_reversed = TRUE, reversed_by_voucher_id = $1 WHERE voucher_id = $2`, [reversal.voucher_id, voucherId]);
         await client.query('COMMIT');

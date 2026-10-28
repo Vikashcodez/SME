@@ -64,6 +64,9 @@ export const initAccountingSchema = async (dbPool) => {
             );
             CREATE INDEX IF NOT EXISTS idx_ledgers_group ON ledgers(group_id);
             CREATE INDEX IF NOT EXISTS idx_ledgers_company_active ON ledgers(company_id, is_active);
+            ALTER TABLE ledgers ADD COLUMN IF NOT EXISTS opening_balance_date DATE DEFAULT CURRENT_DATE;
+            ALTER TABLE ledgers ADD COLUMN IF NOT EXISTS notes TEXT;
+            ALTER TABLE ledgers ADD COLUMN IF NOT EXISTS is_system_defined BOOLEAN DEFAULT FALSE;
         `);
 
         // =========================================================================
