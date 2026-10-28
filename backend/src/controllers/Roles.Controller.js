@@ -186,16 +186,9 @@ export const getRolesByBranch = async (req, res) => {
 
         const result = await pool.query(query, values);
 
-        if (result.rows.length === 0) {
-            return res.status(404).json({
-                success: false,
-                message: 'No roles found for this branch'
-            });
-        }
-
-        res.status(200).json({
+        return res.status(200).json({
             success: true,
-            message: 'Roles retrieved successfully',
+            message: result.rows.length === 0 ? 'No roles found for this branch' : 'Roles retrieved successfully',
             count: result.rows.length,
             data: result.rows
         });

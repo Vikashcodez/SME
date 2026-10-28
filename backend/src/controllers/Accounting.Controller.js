@@ -484,21 +484,32 @@ export const createVoucher = async (req, res) => {
             });
         }
 
-        // Fetch voucher type
+        // Fetch voucher type (support codes like 'CONTRA', 'VCH-CONTRA', or base category)
+        const cleanCode = voucher_type_code.trim().toUpperCase();
+        const codeWithoutPrefix = cleanCode.replace(/^VCH-/, '');
+        const codeWithPrefix = `VCH-${codeWithoutPrefix}`;
+
         const vtRes = await client.query(
-            `SELECT voucher_type_id FROM voucher_types
-             WHERE (company_id = $1 OR company_id IS NULL) AND voucher_type_code = $2
+            `SELECT voucher_type_id, voucher_type_code FROM voucher_types
+             WHERE (company_id = $1 OR company_id IS NULL)
+               AND (
+                 UPPER(voucher_type_code) = $2
+                 OR UPPER(voucher_type_code) = $3
+                 OR UPPER(base_category) = $4
+               )
              ORDER BY company_id NULLS LAST LIMIT 1`,
-            [companyId, voucher_type_code.toUpperCase()]
+            [companyId, cleanCode, codeWithPrefix, codeWithoutPrefix]
         );
         if (vtRes.rows.length === 0) {
             await client.query('ROLLBACK');
             return res.status(400).json({ success: false, message: `Invalid voucher type: ${voucher_type_code}` });
         }
-        const voucherTypeId = vtRes.rows[0].voucher_type_id;
+        const matchedVoucherType = vtRes.rows[0];
+        const voucherTypeId = matchedVoucherType.voucher_type_id;
 
-        // Generate voucher number
-        const voucherNumber = await generateVoucherNumber(client, companyId, branchId, voucher_type_code.toUpperCase());
+        // Generate voucher number using the canonical voucher type code
+        const voucherCodeForNumber = matchedVoucherType.voucher_type_code || codeWithPrefix;
+        const voucherNumber = await generateVoucherNumber(client, companyId, branchId, voucherCodeForNumber);
 
         // Insert Voucher Header
         const voucherRes = await client.query(`
@@ -644,8 +655,15 @@ export const getVouchers = async (req, res) => {
         const params = [companyId];
 
         if (voucherType) {
-            params.push(voucherType.toUpperCase());
-            query += ` AND vt.voucher_type_code = $${params.length}`;
+            const cleanVT = voucherType.trim().toUpperCase();
+            const vtNoPrefix = cleanVT.replace(/^VCH-/, '');
+            const vtWithPrefix = `VCH-${vtNoPrefix}`;
+            params.push(cleanVT, vtWithPrefix, vtNoPrefix);
+            query += ` AND (
+                UPPER(vt.voucher_type_code) = $${params.length - 2}
+                OR UPPER(vt.voucher_type_code) = $${params.length - 1}
+                OR UPPER(vt.base_category) = $${params.length}
+            )`;
         }
         if (fromDate) {
             params.push(fromDate);
@@ -824,20 +842,25 @@ export const getDayBook = async (req, res) => {
             WHERE v.company_id = $1
               AND v.voucher_date >= $2
               AND v.voucher_date <= $3
+              AND v.source_module IS DISTINCT FROM 'SALES_INVOICE'
               AND NOT (
-                  v.source_module = 'SALES_INVOICE'
-                  OR (
-                      v.source_module IS NULL
-                      AND vt.base_category = 'SALES'
-                      AND v.narration LIKE 'Sales Invoice %'
-                  )
+                  COALESCE(v.source_module, '') = ''
+                  AND vt.base_category = 'SALES'
+                  AND COALESCE(v.narration, '') LIKE 'Sales Invoice %'
               )
         `;
         const params = [companyId, fromDate, toDate];
 
         if (voucherType) {
-            params.push(voucherType.toUpperCase());
-            query += ` AND vt.voucher_type_code = $${params.length}`;
+            const cleanVT = voucherType.trim().toUpperCase();
+            const vtNoPrefix = cleanVT.replace(/^VCH-/, '');
+            const vtWithPrefix = `VCH-${vtNoPrefix}`;
+            params.push(cleanVT, vtWithPrefix, vtNoPrefix);
+            query += ` AND (
+                UPPER(vt.voucher_type_code) = $${params.length - 2}
+                OR UPPER(vt.voucher_type_code) = $${params.length - 1}
+                OR UPPER(vt.base_category) = $${params.length}
+            )`;
         }
 
         query += ` GROUP BY v.voucher_id, vt.voucher_type_name, vt.voucher_type_code, vt.base_category, e.first_name, e.last_name ORDER BY v.voucher_date DESC, v.voucher_id DESC`;
@@ -872,11 +895,18 @@ export const getDayBook = async (req, res) => {
               AND ag.group_code IN ('GRP-CASH', 'GRP-BANK')
         `;
         if (voucherType) {
-            cashMovementParams.push(voucherType.toUpperCase());
+            const cleanVT = voucherType.trim().toUpperCase();
+            const vtNoPrefix = cleanVT.replace(/^VCH-/, '');
+            const vtWithPrefix = `VCH-${vtNoPrefix}`;
+            cashMovementParams.push(cleanVT, vtWithPrefix, vtNoPrefix);
             cashMovementQuery += ` AND v.voucher_type_id IN (
                 SELECT voucher_type_id
                 FROM voucher_types
-                WHERE voucher_type_code = $${cashMovementParams.length}
+                WHERE (
+                    UPPER(voucher_type_code) = $${cashMovementParams.length - 2}
+                    OR UPPER(voucher_type_code) = $${cashMovementParams.length - 1}
+                    OR UPPER(base_category) = $${cashMovementParams.length}
+                )
                   AND (company_id = $1 OR company_id IS NULL)
             )`;
         }

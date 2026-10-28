@@ -180,7 +180,18 @@ const DayBook = () => {
 
       toast.success('Voucher created and posted successfully!');
       setIsNewVoucherOpen(false);
+      setNewVoucherForm({
+        voucher_type_code: 'JOURNAL',
+        voucher_date: new Date().toISOString().split('T')[0],
+        narration: '',
+        reference_number: '',
+        lines: [
+          { ledger_id: '', debit_amount: '', credit_amount: '', narration: '' },
+          { ledger_id: '', debit_amount: '', credit_amount: '', narration: '' }
+        ]
+      });
       fetchDayBook();
+      fetchChartData();
     } catch (err) {
       console.error(err);
       toast.error(err.response?.data?.message || 'Failed to create voucher');
