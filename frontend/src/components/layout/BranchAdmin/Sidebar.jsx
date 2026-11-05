@@ -19,6 +19,7 @@ const Sidebar = ({ isCollapsed, onToggleCollapse }) => {
     {
       label: 'Finance & Accounting',
       items: [
+        { path: '/branch/ledger-management', label: 'Ledger & Banking' },
         { path: '/branch/chart-of-accounts', label: 'Chart of Accounts' },
         { path: '/branch/purchase-invoices', label: 'Purchase Invoices & Bills' },
         { path: '/branch/sales-invoices', label: 'Sales Invoices & Billing' },
