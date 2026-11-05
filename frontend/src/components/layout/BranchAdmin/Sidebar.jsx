@@ -1,10 +1,12 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { NavLink } from 'react-router-dom';
 import { useAuth } from '../../../context/AuthContext';
 import Logo from '../../../assets/logo.png';
+import { ChevronDown, ChevronRight } from 'lucide-react';
 
 const Sidebar = ({ isCollapsed, onToggleCollapse }) => {
   const [searchQuery, setSearchQuery] = useState('');
+  const [expandedSections, setExpandedSections] = useState({});
   const { user } = useAuth();
 
   const menuSections = [
@@ -15,26 +17,12 @@ const Sidebar = ({ isCollapsed, onToggleCollapse }) => {
       ]
     },
     {
-      label: 'Master Data',
+      label: 'Finance & Accounting',
       items: [
         { path: '/branch/ledger-management', label: 'Ledger & Banking' },
-        { path: '/branch/roles', label: 'Roles Master' },
-        { path: '/branch/departments', label: 'Departments' },
-        { path: '/branch/employees', label: 'Employees' },
-        { path: '/branch/customers', label: 'Customer Master' },
-        { path: '/branch/vendors', label: 'Vendor Master' },
-        { path: '/branch/raw-materials', label: 'Raw Material Master' },
-        { path: '/branch/products', label: 'Product Master' },
-        { path: '/branch/services', label: 'Service Master' },
         { path: '/branch/chart-of-accounts', label: 'Chart of Accounts' },
-      ]
-    },
-    {
-      label: 'Commercial & Billing',
-      items: [
         { path: '/branch/purchase-invoices', label: 'Purchase Invoices & Bills' },
         { path: '/branch/sales-invoices', label: 'Sales Invoices & Billing' },
-        { path: '/branch/quotations-orders', label: 'Quotations' },
         { path: '/branch/receipts-settlement', label: 'Receipts & Settlements' },
         { path: '/branch/day-book', label: 'Day Book & Vouchers' },
         { path: '/branch/trial-balance', label: 'Trial Balance & Audit' },
@@ -44,32 +32,71 @@ const Sidebar = ({ isCollapsed, onToggleCollapse }) => {
       ]
     },
     {
-      label: 'Inventory & Production',
+      label: 'Inventory Management',
       items: [
+        { path: '/branch/raw-materials', label: 'Raw Material Master' },
+        { path: '/branch/products', label: 'Product Master' },
         { path: '/branch/grn', label: 'Goods Receipt (GRN)' },
         { path: '/branch/raw-material-inventory', label: 'Raw Materials Stock' },
-        { path: '/branch/production', label: 'Production & Manufacturing' },
         { path: '/branch/manufacturing-journal', label: 'Stock & Mfg Journal' },
-        { path: '/branch/quality-checks', label: 'Quality Check (QC)' },
-        { path: '/branch/rework-management', label: 'Rework & Rejections' },
         { path: '/branch/product-inventory', label: 'Finished Goods Stock' },
         { path: '/branch/assets-inventory', label: 'Assets Inventory' },
       ]
     },
     {
-      label: 'Insights',
+      label: 'Procurement & Suppliers',
+      items: [
+        { path: '/branch/vendors', label: 'Vendor Master' },
+        { path: '/branch-dashboard#purchase-tracking', label: 'Purchase Tracking' },
+      ]
+    },
+    {
+      label: 'Production & Manufacturing',
+      items: [
+        { path: '/branch/production', label: 'Production & Manufacturing' },
+        { path: '/branch/quality-checks', label: 'Quality Check (QC)' },
+        { path: '/branch/rework-management', label: 'Rework & Rejections' },
+      ]
+    },
+    {
+      label: 'Sales & Customers',
+      items: [
+        { path: '/branch/customers', label: 'Customer Master' },
+        { path: '/branch/quotations-orders', label: 'Quotations' },
+        { path: '/branch/services', label: 'Service Master' },
+      ]
+    },
+    {
+      label: 'HR & Administration',
+      items: [
+        { path: '/branch/roles', label: 'Roles Master' },
+        { path: '/branch/departments', label: 'Departments' },
+        { path: '/branch/employees', label: 'Employees' },
+        { path: '/branch-dashboard#settings', label: 'Branch Settings' },
+      ]
+    },
+    {
+      label: 'Business Intelligence',
       items: [
         { path: '/branch-dashboard#analytics', label: 'Branch Analytics' },
         { path: '/branch-dashboard#reports', label: 'Daily Reports' },
       ]
-    },
-    {
-      label: 'Branch Profile',
-      items: [
-        { path: '/branch-dashboard#settings', label: 'Branch Settings' },
-      ]
     }
   ];
+
+  const filteredSections = menuSections.map(section => ({
+    ...section,
+    items: section.items.filter(item =>
+      !searchQuery || item.label.toLowerCase().includes(searchQuery.toLowerCase())
+    )
+  })).filter(section => section.items.length > 0);
+
+  const toggleSection = (label) => {
+    setExpandedSections(current => ({
+      ...current,
+      [label]: !current[label]
+    }));
+  };
 
   const sidebarWidth = isCollapsed ? 62 : 236;
 
@@ -351,19 +378,35 @@ const Sidebar = ({ isCollapsed, onToggleCollapse }) => {
             padding: '2px 0 20px 0'
           }}
         >
-          {menuSections.map((section, sIdx) => (
+          {filteredSections.map((section, sIdx) => (
             <div key={section.label}>
               {!isCollapsed ? (
-                <div style={{
-                  padding: sIdx === 0 ? '6px 18px 5px' : '14px 18px 5px',
-                  fontSize: '9px',
-                  fontWeight: 600,
-                  color: '#9ca3af',
-                  letterSpacing: '0.09em',
-                  textTransform: 'uppercase'
-                }}>
-                  {section.label}
-                </div>
+                <button
+                  type="button"
+                  onClick={() => toggleSection(section.label)}
+                  aria-expanded={Boolean(searchQuery || expandedSections[section.label])}
+                  style={{
+                    width: '100%',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    padding: sIdx === 0 ? '6px 14px 5px 18px' : '14px 14px 5px 18px',
+                    border: 0,
+                    background: 'transparent',
+                    cursor: 'pointer',
+                    fontSize: '9px',
+                    fontWeight: 600,
+                    color: '#9ca3af',
+                    letterSpacing: '0.09em',
+                    textTransform: 'uppercase',
+                    textAlign: 'left'
+                  }}
+                >
+                  <span>{section.label}</span>
+                  {searchQuery || expandedSections[section.label]
+                    ? <ChevronDown size={13} />
+                    : <ChevronRight size={13} />}
+                </button>
               ) : (
                 <>
                   {sIdx > 0 && (
@@ -372,7 +415,7 @@ const Sidebar = ({ isCollapsed, onToggleCollapse }) => {
                 </>
               )}
 
-              <ul style={{
+              {(isCollapsed || searchQuery || expandedSections[section.label]) && <ul style={{
                 listStyle: 'none',
                 margin: 0,
                 padding: isCollapsed ? '0 10px' : '0 8px',
@@ -429,7 +472,7 @@ const Sidebar = ({ isCollapsed, onToggleCollapse }) => {
                     )}
                   </li>
                 ))}
-              </ul>
+              </ul>}
             </div>
           ))}
         </nav>

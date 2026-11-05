@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { NavLink } from 'react-router-dom';
 import { useAuth } from '../../../context/AuthContext';
 import Logo from '../../../assets/logo.png';
@@ -11,17 +11,14 @@ import {
   User,
   HelpCircle,
   FileText,
-  Clock,
-  Sparkles,
   ChevronLeft,
   ChevronRight,
-  ShieldCheck,
-  Building,
-  Briefcase
+  ChevronDown
 } from 'lucide-react';
 
 const Sidebar = ({ isCollapsed, onToggleCollapse }) => {
   const [searchQuery, setSearchQuery] = useState('');
+  const [expandedSections, setExpandedSections] = useState({});
   const { user } = useAuth();
 
   const menuSections = [
@@ -58,6 +55,13 @@ const Sidebar = ({ isCollapsed, onToggleCollapse }) => {
       !searchQuery || item.label.toLowerCase().includes(searchQuery.toLowerCase())
     )
   })).filter(section => section.items.length > 0);
+
+  const toggleSection = (label) => {
+    setExpandedSections(current => ({
+      ...current,
+      [label]: !current[label]
+    }));
+  };
 
   return (
     <>
@@ -385,23 +389,39 @@ const Sidebar = ({ isCollapsed, onToggleCollapse }) => {
           {filteredSections.map((section, sIdx) => (
             <div key={section.label} style={{ marginBottom: '8px' }}>
               {!isCollapsed ? (
-                <div style={{
-                  padding: '6px 16px 4px',
-                  fontSize: '10px',
-                  fontWeight: 700,
-                  color: '#94a3b8',
-                  letterSpacing: '0.08em',
-                  textTransform: 'uppercase'
-                }}>
-                  {section.label}
-                </div>
+                <button
+                  type="button"
+                  onClick={() => toggleSection(section.label)}
+                  aria-expanded={Boolean(searchQuery || expandedSections[section.label])}
+                  style={{
+                    width: '100%',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    padding: '6px 14px 4px 16px',
+                    border: 0,
+                    background: 'transparent',
+                    cursor: 'pointer',
+                    fontSize: '10px',
+                    fontWeight: 700,
+                    color: '#94a3b8',
+                    letterSpacing: '0.08em',
+                    textTransform: 'uppercase',
+                    textAlign: 'left'
+                  }}
+                >
+                  <span>{section.label}</span>
+                  {searchQuery || expandedSections[section.label]
+                    ? <ChevronDown size={14} />
+                    : <ChevronRight size={14} />}
+                </button>
               ) : (
                 sIdx > 0 && (
                   <div style={{ margin: '6px 12px', height: '1px', background: '#f1f5f9' }} />
                 )
               )}
 
-              <ul style={{
+              {(isCollapsed || searchQuery || expandedSections[section.label]) && <ul style={{
                 listStyle: 'none',
                 margin: 0,
                 padding: isCollapsed ? '0 10px' : '0 10px',
@@ -461,7 +481,7 @@ const Sidebar = ({ isCollapsed, onToggleCollapse }) => {
                     </li>
                   );
                 })}
-              </ul>
+              </ul>}
             </div>
           ))}
         </nav>
