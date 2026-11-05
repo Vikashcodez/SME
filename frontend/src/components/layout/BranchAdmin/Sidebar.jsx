@@ -19,7 +19,6 @@ const Sidebar = ({ isCollapsed, onToggleCollapse }) => {
     {
       label: 'Finance & Accounting',
       items: [
-        { path: '/branch/ledger-management', label: 'Ledger & Banking' },
         { path: '/branch/chart-of-accounts', label: 'Chart of Accounts' },
         { path: '/branch/purchase-invoices', label: 'Purchase Invoices & Bills' },
         { path: '/branch/sales-invoices', label: 'Sales Invoices & Billing' },
@@ -28,7 +27,6 @@ const Sidebar = ({ isCollapsed, onToggleCollapse }) => {
         { path: '/branch/trial-balance', label: 'Trial Balance & Audit' },
         { path: '/branch/profit-and-loss', label: 'Profit & Loss Account' },
         { path: '/branch/balance-sheet', label: 'Balance Sheet' },
-        { path: '/branch/compliance', label: 'Compliance & Payroll' },
       ]
     },
     {
@@ -46,7 +44,7 @@ const Sidebar = ({ isCollapsed, onToggleCollapse }) => {
     {
       label: 'Procurement & Suppliers',
       items: [
-        { path: '/branch/vendors', label: 'Vendor Master' },
+        { path: '/branch/vendors', label: 'Supplier / Vendor Records' },
         { path: '/branch-dashboard#purchase-tracking', label: 'Purchase Tracking' },
       ]
     },
@@ -72,14 +70,33 @@ const Sidebar = ({ isCollapsed, onToggleCollapse }) => {
         { path: '/branch/roles', label: 'Roles Master' },
         { path: '/branch/departments', label: 'Departments' },
         { path: '/branch/employees', label: 'Employees' },
+        { path: '/branch/compliance', label: 'Compliance & Payroll' },
         { path: '/branch-dashboard#settings', label: 'Branch Settings' },
       ]
     },
     {
-      label: 'Business Intelligence',
+      label: 'Compliance & Statutory Management',
+      items: [
+        { path: '/branch/compliance', label: 'GST Compliance' },
+        { path: '/branch/compliance#tds', label: 'TDS' },
+        { path: '/branch/compliance#pf-esi', label: 'PF & ESI' },
+        { path: '/branch/compliance#professional-tax', label: 'Professional Tax' },
+        { path: '/branch/compliance#payroll', label: 'Payroll Compliance' },
+        { path: '/branch/compliance#statutory-reports', label: 'Statutory Reports' },
+        { path: '/branch/compliance#due-date-alerts', label: 'Compliance Due-Date Alerts' },
+      ]
+    },
+    {
+      label: 'Business Intelligence & Reports',
       items: [
         { path: '/branch-dashboard#analytics', label: 'Branch Analytics' },
         { path: '/branch-dashboard#reports', label: 'Daily Reports' },
+        { path: '/branch-dashboard#financial-analytics', label: 'Financial Analytics' },
+        { path: '/branch-dashboard#inventory-analytics', label: 'Inventory Analytics' },
+        { path: '/branch-dashboard#procurement-analytics', label: 'Procurement Analytics' },
+        { path: '/branch-dashboard#production-analytics', label: 'Production Analytics' },
+        { path: '/branch-dashboard#sales-analytics', label: 'Sales Analytics' },
+        { path: '/branch-dashboard#performance', label: 'Business Performance Dashboard' },
       ]
     }
   ];
@@ -138,11 +155,11 @@ const Sidebar = ({ isCollapsed, onToggleCollapse }) => {
           padding: 0 14px;
           height: 33px;
           border-radius: 6px;
-          color: #6b7280;
+          color: #334155;
           text-decoration: none;
           transition: color 0.12s, background 0.12s;
           font-size: 12.5px;
-          font-weight: 450;
+          font-weight: 500;
           letter-spacing: 0.01em;
           position: relative;
           cursor: pointer;
@@ -395,8 +412,8 @@ const Sidebar = ({ isCollapsed, onToggleCollapse }) => {
                     background: 'transparent',
                     cursor: 'pointer',
                     fontSize: '9px',
-                    fontWeight: 600,
-                    color: '#9ca3af',
+                    fontWeight: 700,
+                    color: '#1f2937',
                     letterSpacing: '0.09em',
                     textTransform: 'uppercase',
                     textAlign: 'left'
