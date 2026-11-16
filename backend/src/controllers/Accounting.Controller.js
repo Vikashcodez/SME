@@ -1333,6 +1333,7 @@ export const getTrialBalance = async (req, res) => {
                 l.ledger_id,
                 l.ledger_name,
                 l.ledger_code,
+                l.group_id,
                 ag.group_name,
                 ag.nature,
                 ag.affects_gross_profit,
@@ -1345,7 +1346,7 @@ export const getTrialBalance = async (req, res) => {
             LEFT JOIN voucher_lines vl ON l.ledger_id = vl.ledger_id
             LEFT JOIN vouchers v ON vl.voucher_id = v.voucher_id AND v.is_posted = TRUE AND v.voucher_date <= $2
             WHERE l.company_id = $1
-            GROUP BY l.ledger_id, l.ledger_name, l.ledger_code, ag.group_name, ag.nature, ag.affects_gross_profit, l.opening_balance, l.opening_balance_type
+            GROUP BY l.ledger_id, l.ledger_name, l.ledger_code, l.group_id, ag.group_name, ag.nature, ag.affects_gross_profit, l.opening_balance, l.opening_balance_type
             ORDER BY ag.nature, l.ledger_name ASC
         `, [companyId, asOnDate]);
 
@@ -1425,7 +1426,52 @@ export const getTrialBalance = async (req, res) => {
             };
         });
 
+        // Tally-style Diff. in Opening Balances calculation:
+        // If total opening debit != total opening credit, Tally introduces "Diff. in Opening Balances"
+        // as a balancing figure under Equity so the Trial Balance strictly matches.
+        const rawOpeningDiff = +(totalOpeningDebit - totalOpeningCredit).toFixed(2);
+        const hasOpeningDiff = Math.abs(rawOpeningDiff) > 0.001;
+        let openingDiffAmount = 0;
+        let openingDiffSide = 'CR';
+
+        if (hasOpeningDiff) {
+            openingDiffAmount = Math.abs(rawOpeningDiff);
+            const isExcessDebit = rawOpeningDiff > 0;
+            openingDiffSide = isExcessDebit ? 'CR' : 'DR';
+
+            const diffRow = {
+                ledger_id: 'tally-diff-opening',
+                ledger_name: 'Diff. in Opening Balances',
+                ledger_code: 'DIFF-OP-BAL',
+                group_name: 'Opening Balance Equity / Suspense',
+                nature: 'EQUITY',
+                is_system_defined: true,
+                is_balancing_account: true,
+                opening_balance: openingDiffAmount.toFixed(2),
+                opening_balance_type: openingDiffSide,
+                opening_debit: isExcessDebit ? '0.00' : openingDiffAmount.toFixed(2),
+                opening_credit: isExcessDebit ? openingDiffAmount.toFixed(2) : '0.00',
+                period_debit: '0.00',
+                period_credit: '0.00',
+                closing_debit: isExcessDebit ? '0.00' : openingDiffAmount.toFixed(2),
+                closing_credit: isExcessDebit ? openingDiffAmount.toFixed(2) : '0.00',
+                closing_balance: openingDiffAmount.toFixed(2),
+                closing_balance_type: openingDiffSide
+            };
+
+            if (isExcessDebit) {
+                totalClosingCredit += openingDiffAmount;
+                totalEquity += openingDiffAmount;
+            } else {
+                totalClosingDebit += openingDiffAmount;
+                totalEquity -= openingDiffAmount;
+            }
+
+            rows.push(diffRow);
+        }
+
         const netProfitLoss = +(totalIncome - totalExpense).toFixed(2);
+        const closingDiff = Math.abs(totalClosingDebit - totalClosingCredit);
 
         return res.json({
             success: true,
@@ -1435,14 +1481,16 @@ export const getTrialBalance = async (req, res) => {
                 totals: {
                     total_opening_debit: totalOpeningDebit.toFixed(2),
                     total_opening_credit: totalOpeningCredit.toFixed(2),
-                    opening_difference: Math.abs(totalOpeningDebit - totalOpeningCredit).toFixed(2),
+                    opening_difference: Math.abs(rawOpeningDiff).toFixed(2),
+                    has_opening_difference: hasOpeningDiff,
+                    opening_difference_side: openingDiffSide,
                     total_period_debit: totalPeriodDebit.toFixed(2),
                     total_period_credit: totalPeriodCredit.toFixed(2),
                     total_debit: totalClosingDebit.toFixed(2),
                     total_credit: totalClosingCredit.toFixed(2),
-                    closing_difference: Math.abs(totalClosingDebit - totalClosingCredit).toFixed(2),
-                    difference: Math.abs(totalClosingDebit - totalClosingCredit).toFixed(2),
-                    is_balanced: Math.abs(totalClosingDebit - totalClosingCredit) < 0.05
+                    closing_difference: closingDiff.toFixed(2),
+                    difference: closingDiff.toFixed(2),
+                    is_balanced: closingDiff < 0.05
                 },
                 profit_and_loss_summary: {
                     total_income: totalIncome.toFixed(2),

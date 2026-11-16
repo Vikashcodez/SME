@@ -15,7 +15,8 @@ import {
   CheckCircle2,
   X,
   BarChart3,
-  MousePointer2
+  MousePointer2,
+  Edit2
 } from 'lucide-react';
 
 const VOUCHER_TYPE_COLORS = {
@@ -59,6 +60,11 @@ const DayBook = () => {
   const [chartDailyBalances, setChartDailyBalances] = useState([]);
   const [selectedVoucher, setSelectedVoucher] = useState(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
+
+  // Edit voucher modal state
+  const [editingVoucher, setEditingVoucher] = useState(null);
+  const [editVoucherForm, setEditVoucherForm] = useState(null);
+  const [savingEditVoucher, setSavingEditVoucher] = useState(false);
 
   // New manual voucher modal state
   const [isNewVoucherOpen, setIsNewVoucherOpen] = useState(false);
@@ -197,6 +203,93 @@ const DayBook = () => {
       toast.error(err.response?.data?.message || 'Failed to create voucher');
     }
   };
+
+  const handleOpenEditVoucherModal = async (v) => {
+    try {
+      setLoading(true);
+      const res = await accountingApi.getVoucherById(v.voucher_id);
+      const voucherData = res.data.data;
+      if (voucherData.source_module === 'SALES_INVOICE' || voucherData.source_module === 'PURCHASE_BILL') {
+        toast.error(`This voucher was automatically posted by ${voucherData.source_module}. Please edit it via that module.`);
+        return;
+      }
+      setEditingVoucher(voucherData);
+      setEditVoucherForm({
+        voucher_date: voucherData.voucher_date ? voucherData.voucher_date.split('T')[0] : '',
+        narration: voucherData.narration || '',
+        reference_number: voucherData.reference_number || '',
+        lines: (voucherData.lines || []).map(l => ({
+          line_id: l.line_id,
+          ledger_id: String(l.ledger_id),
+          debit_amount: parseFloat(l.debit_amount) > 0 ? String(l.debit_amount) : '',
+          credit_amount: parseFloat(l.credit_amount) > 0 ? String(l.credit_amount) : '',
+          narration: l.narration || ''
+        }))
+      });
+      if (isModalOpen) setIsModalOpen(false);
+    } catch (err) {
+      console.error(err);
+      toast.error('Failed to load voucher details for editing');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleUpdateVoucher = async (e) => {
+    e.preventDefault();
+    if (!editVoucherForm || !editingVoucher) return;
+    try {
+      const parsedLines = editVoucherForm.lines
+        .filter(l => l.ledger_id && (parseFloat(l.debit_amount) > 0 || parseFloat(l.credit_amount) > 0))
+        .map(l => ({
+          ledger_id: parseInt(l.ledger_id),
+          debit_amount: parseFloat(l.debit_amount) || 0,
+          credit_amount: parseFloat(l.credit_amount) || 0,
+          narration: l.narration
+        }));
+
+      if (parsedLines.length < 2) {
+        toast.error('A valid voucher requires at least 2 double-entry lines.');
+        return;
+      }
+
+      const totalDr = parsedLines.reduce((s, l) => s + l.debit_amount, 0);
+      const totalCr = parsedLines.reduce((s, l) => s + l.credit_amount, 0);
+
+      if (Math.abs(totalDr - totalCr) > 0.01) {
+        toast.error(`Voucher is not balanced! Total Debit (₹${totalDr.toFixed(2)}) must equal Total Credit (₹${totalCr.toFixed(2)})`);
+        return;
+      }
+
+      setSavingEditVoucher(true);
+      await accountingApi.updateVoucher(editingVoucher.voucher_id, {
+        company_id: companyId,
+        voucher_date: editVoucherForm.voucher_date,
+        reference_number: editVoucherForm.reference_number,
+        narration: editVoucherForm.narration,
+        lines: parsedLines
+      });
+
+      toast.success('Voucher & ledger entries updated successfully!');
+      setEditingVoucher(null);
+      setEditVoucherForm(null);
+      fetchDayBook();
+      fetchChartData();
+    } catch (err) {
+      console.error(err);
+      toast.error(err.response?.data?.message || 'Failed to update voucher');
+    } finally {
+      setSavingEditVoucher(false);
+    }
+  };
+
+  const editVoucherTotals = useMemo(() => {
+    if (!editVoucherForm?.lines) return { dr: 0, cr: 0, diff: 0, balanced: true };
+    const dr = editVoucherForm.lines.reduce((s, l) => s + (parseFloat(l.debit_amount) || 0), 0);
+    const cr = editVoucherForm.lines.reduce((s, l) => s + (parseFloat(l.credit_amount) || 0), 0);
+    const diff = Math.abs(dr - cr);
+    return { dr, cr, diff, balanced: diff <= 0.01 && dr > 0 };
+  }, [editVoucherForm?.lines]);
 
   const dailySummaries = useMemo(() => {
     const summaries = new Map();
@@ -456,13 +549,22 @@ const DayBook = () => {
                       {v.narration || '-'}
                     </td>
                     <td className="py-3.5 px-4 text-center">
-                      <button
-                        onClick={() => handleOpenVoucherModal(v)}
-                        className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition"
-                        title="View Full Double-Entry Lines"
-                      >
-                        <Eye className="w-4 h-4" />
-                      </button>
+                      <div className="flex items-center justify-center gap-1">
+                        <button
+                          onClick={() => handleOpenVoucherModal(v)}
+                          className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition"
+                          title="View Full Double-Entry Lines"
+                        >
+                          <Eye className="w-4 h-4" />
+                        </button>
+                        <button
+                          onClick={() => handleOpenEditVoucherModal(v)}
+                          className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition"
+                          title="Edit Voucher & Ledger Lines"
+                        >
+                          <Edit2 className="w-4 h-4" />
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))
@@ -683,12 +785,27 @@ const DayBook = () => {
 
             <div className="px-6 py-4 border-t border-slate-200 bg-slate-50 flex justify-between items-center">
               <p className="text-xs text-slate-500">Debit and credit totals must balance for a posted voucher.</p>
-              <button
-                onClick={() => setIsModalOpen(false)}
-                className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-sm font-semibold transition"
-              >
-                Close View
-              </button>
+              <div className="flex items-center gap-2">
+                {selectedVoucher.source_module !== 'SALES_INVOICE' && selectedVoucher.source_module !== 'PURCHASE_BILL' && (
+                  <button
+                    onClick={() => {
+                      const v = selectedVoucher;
+                      setIsModalOpen(false);
+                      handleOpenEditVoucherModal(v);
+                    }}
+                    className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-semibold flex items-center gap-1.5 transition"
+                  >
+                    <Edit2 className="w-4 h-4" />
+                    Edit Voucher
+                  </button>
+                )}
+                <button
+                  onClick={() => setIsModalOpen(false)}
+                  className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-sm font-semibold transition"
+                >
+                  Close View
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -853,6 +970,206 @@ const DayBook = () => {
                   className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-semibold shadow-sm transition"
                 >
                   Post Voucher
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+      {/* Edit Voucher Modal */}
+      {editingVoucher && editVoucherForm && (
+        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white w-full max-w-3xl rounded-2xl shadow-xl border border-slate-200 overflow-hidden animate-in fade-in zoom-in-95">
+            <div className="flex items-center justify-between p-6 border-b border-slate-100 bg-slate-50/50">
+              <div>
+                <span className="text-xs font-bold text-indigo-600 uppercase tracking-wider">
+                  Edit Voucher · {editingVoucher.voucher_type_name || editingVoucher.voucher_type_code}
+                </span>
+                <h2 className="text-xl font-bold text-slate-900 mt-0.5">
+                  Voucher #{editingVoucher.voucher_number}
+                </h2>
+              </div>
+              <button
+                onClick={() => {
+                  setEditingVoucher(null);
+                  setEditVoucherForm(null);
+                }}
+                className="p-2 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-100"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleUpdateVoucher} className="p-6 space-y-4 max-h-[80vh] overflow-y-auto">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1">Voucher Date *</label>
+                  <input
+                    type="date"
+                    required
+                    value={editVoucherForm.voucher_date}
+                    onChange={(e) => setEditVoucherForm({ ...editVoucherForm, voucher_date: e.target.value })}
+                    className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1">Reference No</label>
+                  <input
+                    type="text"
+                    placeholder="Ref / Chq / Voucher No"
+                    value={editVoucherForm.reference_number}
+                    onChange={(e) => setEditVoucherForm({ ...editVoucherForm, reference_number: e.target.value })}
+                    className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <label className="block text-xs font-semibold text-slate-600">
+                    Double-Entry Ledger Lines (Debits must equal Credits)
+                  </label>
+                  <div className="text-xs">
+                    <span className="text-slate-500 mr-2">
+                      Dr: <strong className="text-rose-600 font-mono">₹{editVoucherTotals.dr.toFixed(2)}</strong>
+                    </span>
+                    <span className="text-slate-500 mr-2">
+                      Cr: <strong className="text-emerald-600 font-mono">₹{editVoucherTotals.cr.toFixed(2)}</strong>
+                    </span>
+                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                      editVoucherTotals.balanced
+                        ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                        : 'bg-rose-50 text-rose-700 border border-rose-200'
+                    }`}>
+                      {editVoucherTotals.balanced ? 'Balanced' : `Diff: ₹${editVoucherTotals.diff.toFixed(2)}`}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  {editVoucherForm.lines.map((l, idx) => (
+                    <div key={idx} className="grid grid-cols-12 gap-2 items-center bg-slate-50 p-2.5 rounded-xl border border-slate-200/60">
+                      <div className="col-span-5">
+                        <select
+                          value={l.ledger_id}
+                          onChange={(e) => {
+                            const updated = [...editVoucherForm.lines];
+                            updated[idx].ledger_id = e.target.value;
+                            setEditVoucherForm({ ...editVoucherForm, lines: updated });
+                          }}
+                          className="w-full px-2.5 py-1.5 border border-slate-200 rounded-lg text-xs bg-white focus:ring-2 focus:ring-indigo-500/20"
+                          required
+                        >
+                          <option value="">Select Ledger Account...</option>
+                          {ledgersList.map(led => (
+                            <option key={led.ledger_id} value={led.ledger_id}>
+                              {led.ledger_name} ({led.group_name})
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div className="col-span-3">
+                        <input
+                          type="number"
+                          step="0.01"
+                          placeholder="Debit (₹)"
+                          value={l.debit_amount}
+                          onChange={(e) => {
+                            const updated = [...editVoucherForm.lines];
+                            updated[idx].debit_amount = e.target.value;
+                            if (parseFloat(e.target.value) > 0) updated[idx].credit_amount = '';
+                            setEditVoucherForm({ ...editVoucherForm, lines: updated });
+                          }}
+                          className="w-full px-2.5 py-1.5 border border-slate-200 rounded-lg text-xs font-mono bg-white focus:ring-2 focus:ring-indigo-500/20"
+                        />
+                      </div>
+                      <div className="col-span-3">
+                        <input
+                          type="number"
+                          step="0.01"
+                          placeholder="Credit (₹)"
+                          value={l.credit_amount}
+                          onChange={(e) => {
+                            const updated = [...editVoucherForm.lines];
+                            updated[idx].credit_amount = e.target.value;
+                            if (parseFloat(e.target.value) > 0) updated[idx].debit_amount = '';
+                            setEditVoucherForm({ ...editVoucherForm, lines: updated });
+                          }}
+                          className="w-full px-2.5 py-1.5 border border-slate-200 rounded-lg text-xs font-mono bg-white focus:ring-2 focus:ring-indigo-500/20"
+                        />
+                      </div>
+                      <div className="col-span-1 text-center">
+                        {editVoucherForm.lines.length > 2 && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const updated = editVoucherForm.lines.filter((_, i) => i !== idx);
+                              setEditVoucherForm({ ...editVoucherForm, lines: updated });
+                            }}
+                            className="text-rose-500 hover:text-rose-700 text-xs font-bold"
+                            title="Remove Line"
+                          >
+                            ✕
+                          </button>
+                        )}
+                      </div>
+                      <div className="col-span-12">
+                        <input
+                          type="text"
+                          placeholder="Line Narration (optional)"
+                          value={l.narration || ''}
+                          onChange={(e) => {
+                            const updated = [...editVoucherForm.lines];
+                            updated[idx].narration = e.target.value;
+                            setEditVoucherForm({ ...editVoucherForm, lines: updated });
+                          }}
+                          className="w-full px-2.5 py-1 text-[11px] border border-slate-200 rounded-lg bg-white/70 focus:bg-white text-slate-600"
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setEditVoucherForm({
+                    ...editVoucherForm,
+                    lines: [...editVoucherForm.lines, { ledger_id: '', debit_amount: '', credit_amount: '', narration: '' }]
+                  })}
+                  className="mt-2 text-xs font-semibold text-indigo-600 hover:text-indigo-800 flex items-center gap-1"
+                >
+                  <Plus className="w-3.5 h-3.5" /> Add Another Line
+                </button>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 mb-1">Narration</label>
+                <textarea
+                  rows="2"
+                  placeholder="Enter detailed narration / business remarks..."
+                  value={editVoucherForm.narration}
+                  onChange={(e) => setEditVoucherForm({ ...editVoucherForm, narration: e.target.value })}
+                  className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+                ></textarea>
+              </div>
+
+              <div className="p-4 border-t border-slate-100 flex justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEditingVoucher(null);
+                    setEditVoucherForm(null);
+                  }}
+                  className="px-4 py-2 border border-slate-200 rounded-xl text-sm font-semibold hover:bg-slate-50 transition"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={savingEditVoucher || !editVoucherTotals.balanced}
+                  className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-semibold shadow-sm transition disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {savingEditVoucher ? 'Updating...' : 'Update Voucher & Ledger'}
                 </button>
               </div>
             </form>

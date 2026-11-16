@@ -260,6 +260,14 @@ const LedgerManagement = () => {
       setLedgerForm(emptyLedger);
       await loadData();
       if (statementLedger && statementLedger.ledger_id === editingLedger.ledger_id) {
+        setStatementLedger(prev => ({
+          ...prev,
+          ledger_name: ledgerForm.ledger_name,
+          ledger_code: ledgerForm.ledger_code,
+          opening_balance: ledgerForm.opening_balance,
+          opening_balance_type: ledgerForm.opening_balance_type,
+          group_id: ledgerForm.group_id
+        }));
         loadStatement(editingLedger.ledger_id);
       }
     } catch (error) {
@@ -596,12 +604,22 @@ const LedgerManagement = () => {
                   Parent Group: {statementLedger.group_name} · Real-time ledger statement & running balance
                 </p>
               </div>
-              <button
-                onClick={closeStatement}
-                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition"
-              >
-                <X className="w-5 h-5" />
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => openEditLedger(statementLedger)}
+                  className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 transition shadow-sm"
+                  title="Edit this Ledger"
+                >
+                  <Edit2 className="w-3.5 h-3.5" />
+                  Edit Ledger
+                </button>
+                <button
+                  onClick={closeStatement}
+                  className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
             </div>
 
             {/* Filter Toolbar */}

@@ -17,7 +17,8 @@ import {
   ChevronDown,
   X,
   FileText,
-  Calendar
+  Calendar,
+  Edit2
 } from 'lucide-react';
 
 const NATURE_COLORS = {
@@ -54,6 +55,19 @@ const ChartOfAccounts = () => {
     maintain_bill_by_bill: false
   });
   const [savingLedger, setSavingLedger] = useState(false);
+
+  // Edit Ledger Modal
+  const [editingLedger, setEditingLedger] = useState(null);
+  const [editLedgerForm, setEditLedgerForm] = useState({
+    group_id: '',
+    ledger_name: '',
+    ledger_code: '',
+    opening_balance: 0,
+    opening_balance_type: 'DR',
+    maintain_bill_by_bill: false,
+    notes: ''
+  });
+  const [savingEditLedger, setSavingEditLedger] = useState(false);
 
   const fetchCoA = async () => {
     if (!companyId) return;
@@ -113,6 +127,57 @@ const ChartOfAccounts = () => {
       toast.error(err.response?.data?.message || 'Error creating ledger');
     } finally {
       setSavingLedger(false);
+    }
+  };
+
+  const openEditModal = (ledger) => {
+    setEditingLedger(ledger);
+    setEditLedgerForm({
+      group_id: ledger.group_id || '',
+      ledger_name: ledger.ledger_name || '',
+      ledger_code: ledger.ledger_code || '',
+      opening_balance: ledger.opening_balance ?? 0,
+      opening_balance_type: ledger.opening_balance_type || 'DR',
+      maintain_bill_by_bill: Boolean(ledger.maintain_bill_by_bill),
+      notes: ledger.notes || ''
+    });
+  };
+
+  const handleUpdateLedger = async (e) => {
+    e.preventDefault();
+    if (!editLedgerForm.group_id || !editLedgerForm.ledger_name?.trim()) {
+      toast.error('Group and Ledger Name are required');
+      return;
+    }
+    try {
+      setSavingEditLedger(true);
+      await accountingApi.updateLedger(editingLedger.ledger_id, {
+        company_id: companyId,
+        group_id: editLedgerForm.group_id,
+        ledger_name: editLedgerForm.ledger_name.trim(),
+        ledger_code: editLedgerForm.ledger_code ? editLedgerForm.ledger_code.trim().toUpperCase() : '',
+        opening_balance: parseFloat(editLedgerForm.opening_balance) || 0,
+        opening_balance_type: editLedgerForm.opening_balance_type,
+        maintain_bill_by_bill: editLedgerForm.maintain_bill_by_bill,
+        notes: editLedgerForm.notes
+      });
+      toast.success(`Ledger "${editLedgerForm.ledger_name}" updated successfully!`);
+      const updatedLedgerId = editingLedger.ledger_id;
+      setEditingLedger(null);
+      await fetchCoA();
+      if (statementModal && statementModal.ledger_id === updatedLedgerId) {
+        setStatementModal(prev => ({
+          ...prev,
+          ...editLedgerForm,
+          ledger_name: editLedgerForm.ledger_name.trim(),
+          ledger_code: editLedgerForm.ledger_code ? editLedgerForm.ledger_code.trim().toUpperCase() : ''
+        }));
+      }
+    } catch (err) {
+      console.error(err);
+      toast.error(err.response?.data?.message || 'Error updating ledger');
+    } finally {
+      setSavingEditLedger(false);
     }
   };
 
@@ -275,7 +340,7 @@ const ChartOfAccounts = () => {
                             </div>
                           </div>
 
-                          <div className="flex items-center gap-6">
+                          <div className="flex items-center gap-4">
                             <div className="text-right">
                               <div className="text-sm font-semibold text-slate-900">
                                 ₹{parseFloat(l.current_balance || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })} {l.current_balance_type}
@@ -285,13 +350,23 @@ const ChartOfAccounts = () => {
                               </div>
                             </div>
 
-                            <button
-                              onClick={() => openStatement(l)}
-                              className="px-3 py-1.5 bg-slate-100 hover:bg-indigo-50 text-slate-700 hover:text-indigo-600 rounded-lg text-xs font-medium transition flex items-center gap-1.5"
-                            >
-                              <FileText className="w-3.5 h-3.5" />
-                              Statement
-                            </button>
+                            <div className="flex items-center gap-1.5">
+                              <button
+                                onClick={() => openEditModal(l)}
+                                className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold transition flex items-center gap-1"
+                                title="Edit Ledger"
+                              >
+                                <Edit2 className="w-3.5 h-3.5 text-slate-600" />
+                                Edit
+                              </button>
+                              <button
+                                onClick={() => openStatement(l)}
+                                className="px-3 py-1.5 bg-slate-100 hover:bg-indigo-50 text-slate-700 hover:text-indigo-600 rounded-lg text-xs font-medium transition flex items-center gap-1.5"
+                              >
+                                <FileText className="w-3.5 h-3.5" />
+                                Statement
+                              </button>
+                            </div>
                           </div>
                         </div>
                       ))}
@@ -319,9 +394,18 @@ const ChartOfAccounts = () => {
                 <h3 className="text-lg font-bold text-slate-900">{statementModal.ledger_name} - Ledger Book</h3>
                 <p className="text-xs text-slate-500 font-mono">Code: {statementModal.ledger_code} | Nature: {statementModal.nature}</p>
               </div>
-              <button onClick={() => setStatementModal(null)} className="p-1 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-100">
-                <X className="w-5 h-5" />
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => openEditModal(statementModal)}
+                  className="px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 border border-indigo-200"
+                >
+                  <Edit2 className="w-3.5 h-3.5" />
+                  Edit Ledger
+                </button>
+                <button onClick={() => setStatementModal(null)} className="p-1 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-100">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
             </div>
 
             <div className="p-6 space-y-4 max-h-[75vh] overflow-y-auto">
@@ -481,6 +565,131 @@ const ChartOfAccounts = () => {
                   className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-medium text-sm rounded-xl transition shadow-sm disabled:opacity-50"
                 >
                   {savingLedger ? 'Saving...' : 'Create Ledger'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+      {/* Edit Ledger Modal */}
+      {editingLedger && (
+        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white w-full max-w-lg rounded-2xl shadow-xl border border-slate-200 overflow-hidden animate-in fade-in zoom-in-95">
+            <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
+              <div>
+                <p className="text-[10px] uppercase tracking-wider text-indigo-600 font-bold">Edit Account</p>
+                <h3 className="text-lg font-bold text-slate-900">Edit Ledger: {editingLedger.ledger_name}</h3>
+              </div>
+              <button onClick={() => setEditingLedger(null)} className="p-1 text-slate-400 hover:text-slate-600 rounded-lg">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleUpdateLedger} className="p-6 space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">Parent Account Group *</label>
+                <select
+                  required
+                  value={editLedgerForm.group_id}
+                  onChange={(e) => setEditLedgerForm({ ...editLedgerForm, group_id: e.target.value })}
+                  className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+                >
+                  <option value="">Select Parent Group</option>
+                  {data.groups.map(g => (
+                    <option key={g.group_id} value={g.group_id}>
+                      {g.group_name} ({g.nature})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">Ledger Name *</label>
+                <input
+                  required
+                  type="text"
+                  placeholder="e.g. Sales Account, HDFC Bank, Office Rent"
+                  value={editLedgerForm.ledger_name}
+                  onChange={(e) => setEditLedgerForm({ ...editLedgerForm, ledger_name: e.target.value })}
+                  className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">Ledger Code</label>
+                <input
+                  type="text"
+                  placeholder="e.g. LED-SALES-01 (Auto-generated if blank)"
+                  value={editLedgerForm.ledger_code}
+                  onChange={(e) => setEditLedgerForm({ ...editLedgerForm, ledger_code: e.target.value.toUpperCase() })}
+                  className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Opening Balance</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    placeholder="0.00"
+                    value={editLedgerForm.opening_balance}
+                    onChange={(e) => setEditLedgerForm({ ...editLedgerForm, opening_balance: e.target.value })}
+                    className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Balance Type</label>
+                  <select
+                    value={editLedgerForm.opening_balance_type}
+                    onChange={(e) => setEditLedgerForm({ ...editLedgerForm, opening_balance_type: e.target.value })}
+                    className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+                  >
+                    <option value="DR">DR (Debit)</option>
+                    <option value="CR">CR (Credit)</option>
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">Notes / Description</label>
+                <textarea
+                  rows="2"
+                  placeholder="Optional notes or details..."
+                  value={editLedgerForm.notes}
+                  onChange={(e) => setEditLedgerForm({ ...editLedgerForm, notes: e.target.value })}
+                  className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+                />
+              </div>
+
+              <div className="flex items-center gap-2 pt-1">
+                <input
+                  type="checkbox"
+                  id="edit_maintain_bill"
+                  checked={editLedgerForm.maintain_bill_by_bill}
+                  onChange={(e) => setEditLedgerForm({ ...editLedgerForm, maintain_bill_by_bill: e.target.checked })}
+                  className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                />
+                <label htmlFor="edit_maintain_bill" className="text-xs text-slate-600 select-none">
+                  Maintain balances bill-by-bill (for Debtors / Creditors)
+                </label>
+              </div>
+
+              <div className="flex justify-end gap-3 pt-3 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setEditingLedger(null)}
+                  className="px-4 py-2 border border-slate-200 text-slate-600 rounded-xl text-sm hover:bg-slate-50 transition"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={savingEditLedger}
+                  className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-semibold transition disabled:opacity-50"
+                >
+                  {savingEditLedger ? 'Saving...' : 'Update Ledger'}
                 </button>
               </div>
             </form>
