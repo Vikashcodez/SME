@@ -90,6 +90,7 @@ const ProductionInventory = () => {
     product_id: '',
     production_quantity: '1',
     workforce_count: 1,
+    workforce_cost: '',
     production_date: new Date().toISOString().split('T')[0],
     production_period_type: 'Daily',
     batch_number: '',
@@ -245,6 +246,7 @@ const ProductionInventory = () => {
       product_id: selectedId,
       batch_number: defaultBatch,
       workforce_count: chosenProduct?.workforce_required || 1,
+      workforce_cost: '',
       production_date: new Date().toISOString().split('T')[0],
       production_period_type: 'Daily'
     });
@@ -292,6 +294,7 @@ const ProductionInventory = () => {
         ...formData,
         total_production_time_minutes: bomSimulation.total_production_time_minutes || 0,
         workforce_count: parseInt(formData.workforce_count || bomSimulation.workforce_required || 1, 10),
+        workforce_cost: parseFloat(formData.workforce_cost) || 0,
         company_id: effectiveCompany,
         branch_id: effectiveBranch
       };
@@ -556,7 +559,9 @@ const ProductionInventory = () => {
                 <th className="py-3 px-4">Batch Number</th>
                 <th className="py-3 px-4">Manufactured Product</th>
                 <th className="py-3 px-4 text-right">Units Produced</th>
-                <th className="py-3 px-4 text-right">Material Cost Deducted</th>
+                <th className="py-3 px-4 text-right">Material Cost</th>
+                <th className="py-3 px-4 text-right">Workforce Expense</th>
+                <th className="py-3 px-4 text-right">Total Production Cost</th>
                 <th className="py-3 px-4 text-center">Prod. Time</th>
                 <th className="py-3 px-4 text-center">Workforce</th>
                 <th className="py-3 px-4">Storage Location</th>
@@ -567,7 +572,7 @@ const ProductionInventory = () => {
             <tbody className="divide-y divide-slate-100">
               {filteredProductionRuns.length === 0 ? (
                 <tr>
-                  <td colSpan={11} className="py-8 text-center text-slate-400 italic">
+                  <td colSpan={13} className="py-8 text-center text-slate-400 italic">
                     No production runs recorded yet. Click "+ Log Production Batch" to start manufacturing.
                   </td>
                 </tr>
@@ -605,8 +610,21 @@ const ProductionInventory = () => {
                     {parseFloat(run.production_quantity).toLocaleString()} {run.product_uom || 'Units'}
                   </td>
 
-                  <td className="py-3 px-4 text-right font-bold text-emerald-700">
+                  <td className="py-3 px-4 text-right font-semibold text-slate-700">
                     ₹ {parseFloat(run.total_material_cost || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                  </td>
+
+                  <td className="py-3 px-4 text-right font-semibold text-purple-700">
+                    ₹ {parseFloat(run.workforce_cost || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                  </td>
+
+                  <td className="py-3 px-4 text-right">
+                    <span className="font-bold text-emerald-800 block text-sm">
+                      ₹ {parseFloat(run.total_production_cost || (parseFloat(run.total_material_cost || 0) + parseFloat(run.workforce_cost || 0))).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                    </span>
+                    <span className="text-[10px] text-slate-500 font-mono block">
+                      @ ₹{parseFloat(run.unit_production_cost || (run.production_quantity > 0 ? ((parseFloat(run.total_production_cost || 0) || (parseFloat(run.total_material_cost || 0) + parseFloat(run.workforce_cost || 0))) / run.production_quantity) : 0)).toFixed(2)}/u
+                    </span>
                   </td>
 
                   <td className="py-3 px-4 text-center">
@@ -793,6 +811,28 @@ const ProductionInventory = () => {
                 </div>
 
                 <div>
+                  <label className="block font-semibold text-slate-700 mb-1 flex items-center justify-between">
+                    <span>💼 Workforce / Labor Cost (₹)</span>
+                    <span className="text-[10px] text-indigo-600 font-semibold bg-indigo-50 px-1.5 py-0.5 rounded">Direct Expense</span>
+                  </label>
+                  <div className="relative">
+                    <span className="absolute left-3 top-2 text-slate-400 font-bold text-xs">₹</span>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      placeholder="e.g. 1500.00"
+                      value={formData.workforce_cost}
+                      onChange={(e) => setFormData({ ...formData, workforce_cost: e.target.value })}
+                      className="w-full bg-white border border-indigo-200 rounded-lg pl-7 pr-3 py-2 text-slate-900 font-bold text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                    />
+                  </div>
+                  <span className="text-[10px] text-slate-500 block mt-0.5">
+                    Added to Accounts as Direct Wages & capitalized into WIP
+                  </span>
+                </div>
+
+                <div>
                   <label className="block font-semibold text-slate-700 mb-1">Production Date</label>
                   <input
                     type="date"
@@ -858,52 +898,100 @@ const ProductionInventory = () => {
                   </div>
                 ) : (
                   <div className="space-y-3.5">
-                    {/* KPI CARDS: ESTIMATED TIME, WORKFORCE, MATERIAL COST */}
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                      <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl shadow-2xs">
-                        <div className="flex items-center gap-1.5 text-amber-800 font-bold mb-1 text-xs">
-                          <Factory size={15} className="text-amber-600" />
-                          <span>Estimated Production Time</span>
-                        </div>
-                        <div className="text-base font-extrabold text-slate-900">
-                          ⚡ {bomSimulation.total_production_time_minutes || 0} Minutes
-                          {parseFloat(bomSimulation.total_production_time_minutes || 0) >= 60 && (
-                            <span className="text-xs text-amber-900 font-semibold ml-1.5">
-                              ({((bomSimulation.total_production_time_minutes || 0) / 60).toFixed(1)} hrs)
-                            </span>
-                          )}
-                        </div>
-                        <span className="text-[10.5px] text-slate-500 block mt-0.5">
-                          Rate: {bomSimulation.production_time_per_unit_minutes || 0} mins / unit × {formData.production_quantity || 1} units
-                        </span>
-                      </div>
+                    {/* KPI CARDS: TIME, WORKFORCE, MATERIAL COST, WORKFORCE EXPENSE, TOTAL PRODUCTION COST */}
+                    {(() => {
+                      const matCost = parseFloat(bomSimulation.total_material_cost || 0);
+                      const wfCost = parseFloat(formData.workforce_cost || 0);
+                      const totalProdCost = matCost + wfCost;
+                      const units = parseFloat(formData.production_quantity) || 1;
+                      const unitProdCost = units > 0 ? (totalProdCost / units) : 0;
 
-                      <div className="p-3 bg-blue-50 border border-blue-200 rounded-xl shadow-2xs">
-                        <div className="flex items-center gap-1.5 text-blue-800 font-bold mb-1 text-xs">
-                          <Boxes size={15} className="text-blue-600" />
-                          <span>Workforce Assigned</span>
-                        </div>
-                        <div className="text-base font-extrabold text-slate-900">
-                          👥 {formData.workforce_count || bomSimulation.workforce_required || 1} Operators / Workers
-                        </div>
-                        <span className="text-[10.5px] text-slate-500 block mt-0.5">
-                          Standard requirement: {bomSimulation.workforce_required || 1} operators
-                        </span>
-                      </div>
+                      return (
+                        <>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                            <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl shadow-2xs">
+                              <div className="flex items-center gap-1.5 text-amber-800 font-bold mb-1 text-xs">
+                                <Factory size={15} className="text-amber-600" />
+                                <span>Production Time</span>
+                              </div>
+                              <div className="text-base font-extrabold text-slate-900">
+                                ⚡ {bomSimulation.total_production_time_minutes || 0} m
+                                {parseFloat(bomSimulation.total_production_time_minutes || 0) >= 60 && (
+                                  <span className="text-xs text-amber-900 font-semibold ml-1">
+                                    ({((bomSimulation.total_production_time_minutes || 0) / 60).toFixed(1)} h)
+                                  </span>
+                                )}
+                              </div>
+                              <span className="text-[10px] text-slate-500 block mt-0.5">
+                                {formData.workforce_count || bomSimulation.workforce_required || 1} operators assigned
+                              </span>
+                            </div>
 
-                      <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl shadow-2xs">
-                        <div className="flex items-center gap-1.5 text-emerald-800 font-bold mb-1 text-xs">
-                          <DollarSign size={15} className="text-emerald-600" />
-                          <span>Total Material Cost</span>
-                        </div>
-                        <div className="text-base font-extrabold text-emerald-800">
-                          ₹ {parseFloat(bomSimulation.total_material_cost || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                        </div>
-                        <span className="text-[10.5px] text-slate-500 block mt-0.5">
-                          Deducted from live inventory stock batches
-                        </span>
-                      </div>
-                    </div>
+                            <div className="p-3 bg-blue-50 border border-blue-200 rounded-xl shadow-2xs">
+                              <div className="flex items-center gap-1.5 text-blue-800 font-bold mb-1 text-xs">
+                                <Boxes size={15} className="text-blue-600" />
+                                <span>Raw Material Cost</span>
+                              </div>
+                              <div className="text-base font-extrabold text-blue-900">
+                                ₹ {matCost.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                              </div>
+                              <span className="text-[10px] text-slate-500 block mt-0.5">
+                                Stock deduction value
+                              </span>
+                            </div>
+
+                            <div className="p-3 bg-purple-50 border border-purple-200 rounded-xl shadow-2xs">
+                              <div className="flex items-center gap-1.5 text-purple-800 font-bold mb-1 text-xs">
+                                <DollarSign size={15} className="text-purple-600" />
+                                <span>Workforce Expense</span>
+                              </div>
+                              <div className="text-base font-extrabold text-purple-900">
+                                ₹ {wfCost.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                              </div>
+                              <span className="text-[10px] text-purple-700 block mt-0.5 font-medium">
+                                Direct Wages Expense
+                              </span>
+                            </div>
+
+                            <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl shadow-2xs">
+                              <div className="flex items-center gap-1.5 text-emerald-800 font-bold mb-1 text-xs">
+                                <Check size={15} className="text-emerald-600" />
+                                <span>Total Production Cost</span>
+                              </div>
+                              <div className="text-base font-extrabold text-emerald-900">
+                                ₹ {totalProdCost.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                              </div>
+                              <span className="text-[10px] text-emerald-700 block mt-0.5 font-bold">
+                                ₹ {unitProdCost.toFixed(2)} / unit
+                              </span>
+                            </div>
+                          </div>
+
+                          {/* Detailed Accounts Posting Banner */}
+                          <div className="p-3 bg-gradient-to-r from-blue-50 via-indigo-50 to-slate-50 border border-indigo-200 rounded-xl text-indigo-950 text-xs">
+                            <div className="flex items-start gap-2">
+                              <Info size={16} className="text-indigo-600 shrink-0 mt-0.5" />
+                              <div className="space-y-1 w-full">
+                                <span className="font-bold block">Accounts Subsystem Posting & Cost Absorption:</span>
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px] opacity-90 mt-1">
+                                  <div className="bg-white/90 p-2 rounded-lg border border-indigo-100">
+                                    <strong className="text-slate-800 block mb-0.5">Debit Lines (Assets & Expenses):</strong>
+                                    <div>• <strong>Work in Progress (LED-MFG-WIP):</strong> ₹{totalProdCost.toFixed(2)}</div>
+                                    {wfCost > 0 && <div>• <strong>Direct Wages & Workforce (LED-EXP-WAGES):</strong> ₹{wfCost.toFixed(2)}</div>}
+                                  </div>
+                                  <div className="bg-white/90 p-2 rounded-lg border border-indigo-100">
+                                    <strong className="text-slate-800 block mb-0.5">Credit Lines (Inventory & Payables):</strong>
+                                    <div>• <strong>Raw Material Stock (LED-STOCK-RAW):</strong> ₹{matCost.toFixed(2)}</div>
+                                    {wfCost > 0 && <div>• <strong>Wages Payable (LED-WAGES-PAYABLE):</strong> ₹{wfCost.toFixed(2)}</div>}
+                                    {wfCost > 0 && <div>• <strong>Labor Absorbed (LED-MFG-LABOR-ABSORBED):</strong> ₹{wfCost.toFixed(2)}</div>}
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        </>
+                      );
+                    })()}
 
                     {/* Raw Materials Deductions Table */}
                     <div className="overflow-x-auto">
@@ -1031,7 +1119,7 @@ const ProductionInventory = () => {
             </div>
 
             <div className="p-6 space-y-4 max-h-[70vh] overflow-y-auto text-xs">
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 bg-slate-50 p-3.5 rounded-xl border border-slate-200">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-slate-50 p-3.5 rounded-xl border border-slate-200">
                 <div>
                   <span className="text-slate-400 text-[11px] block">Manufactured Item</span>
                   <strong className="text-slate-900 font-bold block">{activeRun.product_name}</strong>
@@ -1046,35 +1134,46 @@ const ProductionInventory = () => {
                 </div>
 
                 <div>
-                  <span className="text-slate-400 text-[11px] block">Total Material Cost</span>
-                  <strong className="text-emerald-700 font-bold text-sm">
-                    ₹ {parseFloat(activeRun.total_material_cost || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                  </strong>
-                </div>
-
-                <div>
-                  <span className="text-slate-400 text-[11px] block">Total Production Time</span>
-                  <strong className="text-amber-700 font-bold text-sm">
-                    ⚡ {activeRun.total_production_time_minutes || 0} Minutes
-                    {parseFloat(activeRun.total_production_time_minutes || 0) >= 60 && (
-                      <span className="text-xs text-amber-900 font-normal ml-1">
-                        ({((activeRun.total_production_time_minutes || 0) / 60).toFixed(1)} hrs)
-                      </span>
-                    )}
-                  </strong>
-                </div>
-
-                <div>
-                  <span className="text-slate-400 text-[11px] block">Workforce Logged</span>
-                  <strong className="text-blue-700 font-bold text-sm">
-                    👥 {activeRun.workforce_count || 1} Operators
-                  </strong>
-                </div>
-
-                <div>
                   <span className="text-slate-400 text-[11px] block">Period & Date</span>
                   <strong className="text-slate-900 block">{activeRun.production_period_type}</strong>
                   <span className="text-slate-500 font-mono">{new Date(activeRun.production_date).toLocaleDateString()}</span>
+                </div>
+
+                <div>
+                  <span className="text-slate-400 text-[11px] block">Production Time & Crew</span>
+                  <strong className="text-amber-700 font-bold text-sm block">
+                    ⚡ {activeRun.total_production_time_minutes || 0} Minutes
+                  </strong>
+                  <span className="text-[10px] text-slate-500">👥 {activeRun.workforce_count || 1} Operators</span>
+                </div>
+              </div>
+
+              {/* Cost Accounting Breakdown Cards */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="p-3 bg-blue-50 border border-blue-200 rounded-xl">
+                  <span className="text-blue-600 text-[11px] font-semibold block">1. Raw Material Cost</span>
+                  <strong className="text-blue-900 font-extrabold text-base block mt-0.5">
+                    ₹ {parseFloat(activeRun.total_material_cost || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                  </strong>
+                  <span className="text-[10px] text-slate-500">Deducted from raw material stock</span>
+                </div>
+
+                <div className="p-3 bg-purple-50 border border-purple-200 rounded-xl">
+                  <span className="text-purple-600 text-[11px] font-semibold block">2. Workforce Cost (Direct Expense)</span>
+                  <strong className="text-purple-900 font-extrabold text-base block mt-0.5">
+                    ₹ {parseFloat(activeRun.workforce_cost || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                  </strong>
+                  <span className="text-[10px] text-purple-700 font-medium">Charged to Direct Wages & Workforce</span>
+                </div>
+
+                <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl">
+                  <span className="text-emerald-700 text-[11px] font-semibold block">3. Total Production Cost</span>
+                  <strong className="text-emerald-900 font-extrabold text-base block mt-0.5">
+                    ₹ {parseFloat(activeRun.total_production_cost || (parseFloat(activeRun.total_material_cost || 0) + parseFloat(activeRun.workforce_cost || 0))).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                  </strong>
+                  <span className="text-[10px] text-emerald-800 font-bold">
+                    Unit Cost: ₹{parseFloat(activeRun.unit_production_cost || (activeRun.production_quantity > 0 ? ((parseFloat(activeRun.total_production_cost || 0) || (parseFloat(activeRun.total_material_cost || 0) + parseFloat(activeRun.workforce_cost || 0))) / activeRun.production_quantity) : 0)).toFixed(2)}
+                  </span>
                 </div>
               </div>
 

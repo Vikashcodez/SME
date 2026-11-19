@@ -574,6 +574,9 @@ export const createTables = async () => {
 
             ALTER TABLE raw_material_production ADD COLUMN IF NOT EXISTS total_production_time_minutes DECIMAL(10,2) DEFAULT 0.00;
             ALTER TABLE raw_material_production ADD COLUMN IF NOT EXISTS workforce_count INTEGER DEFAULT 1;
+            ALTER TABLE raw_material_production ADD COLUMN IF NOT EXISTS workforce_cost DECIMAL(14,2) DEFAULT 0.00;
+            ALTER TABLE raw_material_production ADD COLUMN IF NOT EXISTS total_production_cost DECIMAL(14,2) DEFAULT 0.00;
+            ALTER TABLE raw_material_production ADD COLUMN IF NOT EXISTS unit_production_cost DECIMAL(14,4) DEFAULT 0.00;
 
         `);
 
@@ -744,6 +747,12 @@ export const createTables = async () => {
         await pool.query(`
             ALTER TABLE production_batches ADD COLUMN IF NOT EXISTS production_id BIGINT REFERENCES raw_material_production(production_id) ON DELETE CASCADE;
             ALTER TABLE production_batches ADD COLUMN IF NOT EXISTS product_id BIGINT REFERENCES products(product_id) ON DELETE CASCADE;
+            ALTER TABLE production_batches ADD COLUMN IF NOT EXISTS material_cost DECIMAL(14,2) DEFAULT 0.00;
+            ALTER TABLE production_batches ADD COLUMN IF NOT EXISTS workforce_cost DECIMAL(14,2) DEFAULT 0.00;
+            ALTER TABLE production_batches ADD COLUMN IF NOT EXISTS total_production_cost DECIMAL(14,2) DEFAULT 0.00;
+            ALTER TABLE production_batches ADD COLUMN IF NOT EXISTS unit_cost DECIMAL(14,4) DEFAULT 0.00;
+            ALTER TABLE production_orders ADD COLUMN IF NOT EXISTS workforce_cost DECIMAL(14,2) DEFAULT 0.00;
+            ALTER TABLE production_orders ADD COLUMN IF NOT EXISTS total_production_cost DECIMAL(14,2) DEFAULT 0.00;
             ALTER TABLE quality_checks ADD COLUMN IF NOT EXISTS production_id BIGINT REFERENCES raw_material_production(production_id) ON DELETE CASCADE;
             ALTER TABLE quality_checks ADD COLUMN IF NOT EXISTS product_id BIGINT REFERENCES products(product_id) ON DELETE CASCADE;
             ALTER TABLE production_rework ADD COLUMN IF NOT EXISTS production_id BIGINT REFERENCES raw_material_production(production_id) ON DELETE CASCADE;

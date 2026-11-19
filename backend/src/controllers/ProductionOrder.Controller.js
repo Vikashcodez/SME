@@ -469,21 +469,38 @@ export const startProductionOrder = async (req, res) => {
 export const completeProductionBatch = async (req, res) => {
     try {
         const { batchId } = req.params;
-        const { produced_quantity, actual_time_minutes, actual_expense } = req.body;
+        const { produced_quantity, actual_time_minutes, actual_expense, workforce_cost } = req.body;
 
         const producedQty = parseFloat(produced_quantity);
         if (isNaN(producedQty) || producedQty < 0) {
             return res.status(400).json({ success: false, message: 'Valid produced quantity is required.' });
         }
 
+        const wfCost = Math.max(0, parseFloat(workforce_cost !== undefined ? workforce_cost : actual_expense) || 0);
+
+        // Fetch material consumptions for this order
+        const consRes = await pool.query(
+            `SELECT COALESCE(SUM(total_cost), 0) as mat_cost 
+             FROM production_material_consumptions 
+             WHERE production_order_id = (SELECT production_order_id FROM production_batches WHERE id = $1)`,
+            [batchId]
+        );
+        const matCost = parseFloat(consRes.rows[0]?.mat_cost || 0);
+        const totalProdCost = +(matCost + wfCost).toFixed(2);
+        const unitCost = producedQty > 0 ? +(totalProdCost / producedQty).toFixed(4) : 0;
+
         const batchRes = await pool.query(`
             UPDATE production_batches
             SET produced_quantity = $1,
+                material_cost = $2,
+                workforce_cost = $3,
+                total_production_cost = $4,
+                unit_cost = $5,
                 status = 'PENDING_QC',
                 updated_at = CURRENT_TIMESTAMP
-            WHERE id = $2
+            WHERE id = $6
             RETURNING *
-        `, [producedQty, batchId]);
+        `, [producedQty, matCost, wfCost, totalProdCost, unitCost, batchId]);
 
         if (batchRes.rows.length === 0) {
             return res.status(404).json({ success: false, message: 'Production Batch not found.' });

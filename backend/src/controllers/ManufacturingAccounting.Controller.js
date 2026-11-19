@@ -1,18 +1,9 @@
 import pool from '../config/database.js';
+import { applyLedgerBalance, resolveLedger } from '../services/AccountingPosting.js';
 
 // Helper: Find or create standard ledger
 const ensureLedger = async (client, companyId, code, name, groupCode, drCr = 'DR') => {
-    let res = await client.query(`SELECT ledger_id FROM ledgers WHERE company_id = $1 AND ledger_code = $2`, [companyId, code]);
-    if (res.rows.length === 0) {
-        const grp = await client.query(`SELECT group_id FROM account_groups WHERE (company_id = $1 OR company_id IS NULL) AND (group_code = $2 OR group_name ILIKE $3) LIMIT 1`, [companyId, groupCode, `%${groupCode}%`]);
-        const gid = grp.rows[0]?.group_id;
-        const newL = await client.query(`
-            INSERT INTO ledgers (company_id, group_id, ledger_name, ledger_code, opening_balance_type, current_balance_type)
-            VALUES ($1, $2, $3, $4, $5, $5) RETURNING ledger_id
-        `, [companyId, gid, name, code, drCr]);
-        return newL.rows[0].ledger_id;
-    }
-    return res.rows[0].ledger_id;
+    return resolveLedger(client, companyId, code, name, groupCode, drCr);
 };
 
 // 1. RECORD STOCK JOURNAL / MANUFACTURING VOUCHER (Tally Manufacturing Journal)
@@ -90,6 +81,7 @@ export const recordStockJournal = async (req, res) => {
         const voucher = voucherRes.rows[0];
 
         let lineNo = 1;
+        const additionalCosts = parseFloat(additional_costs) || 0;
 
         // Entry A: Consumption
         if (totalConsumptionCost > 0) {
@@ -98,27 +90,66 @@ export const recordStockJournal = async (req, res) => {
                 INSERT INTO voucher_lines (voucher_id, line_number, ledger_id, debit_amount, credit_amount, narration)
                 VALUES ($1, $2, $3, $4, 0.00, 'Raw Material Consumption')
             `, [voucher.voucher_id, lineNo++, mfgConsumptionLedgerId, totalConsumptionCost]);
+            await applyLedgerBalance(client, companyId, mfgConsumptionLedgerId, totalConsumptionCost, 0);
 
             // Credit: Raw Material Stock
             await client.query(`
                 INSERT INTO voucher_lines (voucher_id, line_number, ledger_id, debit_amount, credit_amount, narration)
                 VALUES ($1, $2, $3, 0.00, $4, 'Raw Material Inventory Issued')
             `, [voucher.voucher_id, lineNo++, rawStockLedgerId, totalConsumptionCost]);
+            await applyLedgerBalance(client, companyId, rawStockLedgerId, 0, totalConsumptionCost);
         }
 
-        // Entry B: Finished Goods Output
+        // Entry B: Additional workforce / labor / machine overheads
+        if (additionalCosts > 0) {
+            const wagesExpLedgerId = await ensureLedger(client, companyId, 'LED-EXP-WAGES', 'Direct Wages & Workforce Cost', 'GRP-DIR-EXP', 'DR');
+            const wagesPayableLedgerId = await ensureLedger(client, companyId, 'LED-WAGES-PAYABLE', 'Wages & Workforce Payable', 'GRP-CL', 'CR');
+            const laborAbsorbedLedgerId = await ensureLedger(client, companyId, 'LED-MFG-LABOR-ABSORBED', 'Workforce Cost Absorbed in Production', 'GRP-DIR-EXP', 'CR');
+
+            // Debit: Direct Wages & Workforce Cost
+            await client.query(`
+                INSERT INTO voucher_lines (voucher_id, line_number, ledger_id, debit_amount, credit_amount, narration)
+                VALUES ($1, $2, $3, $4, 0.00, 'Direct Workforce / Manufacturing Overhead')
+            `, [voucher.voucher_id, lineNo++, wagesExpLedgerId, additionalCosts]);
+            await applyLedgerBalance(client, companyId, wagesExpLedgerId, additionalCosts, 0);
+
+            // Credit: Wages & Workforce Payable
+            await client.query(`
+                INSERT INTO voucher_lines (voucher_id, line_number, ledger_id, debit_amount, credit_amount, narration)
+                VALUES ($1, $2, $3, 0.00, $4, 'Wages & Workforce Payable')
+            `, [voucher.voucher_id, lineNo++, wagesPayableLedgerId, additionalCosts]);
+            await applyLedgerBalance(client, companyId, wagesPayableLedgerId, 0, additionalCosts);
+
+            // Debit: WIP absorbs labor
+            await client.query(`
+                INSERT INTO voucher_lines (voucher_id, line_number, ledger_id, debit_amount, credit_amount, narration)
+                VALUES ($1, $2, $3, $4, 0.00, 'Workforce Absorbed into WIP')
+            `, [voucher.voucher_id, lineNo++, mfgWipLedgerId, additionalCosts]);
+            await applyLedgerBalance(client, companyId, mfgWipLedgerId, additionalCosts, 0);
+
+            // Credit: Labor Absorbed Clearing
+            await client.query(`
+                INSERT INTO voucher_lines (voucher_id, line_number, ledger_id, debit_amount, credit_amount, narration)
+                VALUES ($1, $2, $3, 0.00, $4, 'Labor Absorbed Clearing')
+            `, [voucher.voucher_id, lineNo++, laborAbsorbedLedgerId, additionalCosts]);
+            await applyLedgerBalance(client, companyId, laborAbsorbedLedgerId, 0, additionalCosts);
+        }
+
+        // Entry C: Finished Goods Output
         if (totalProducedCost > 0) {
             // Debit: Finished Goods Stock
             await client.query(`
                 INSERT INTO voucher_lines (voucher_id, line_number, ledger_id, debit_amount, credit_amount, narration)
                 VALUES ($1, $2, $3, $4, 0.00, 'Finished Goods Produced Inward')
             `, [voucher.voucher_id, lineNo++, fgStockLedgerId, totalProducedCost]);
+            await applyLedgerBalance(client, companyId, fgStockLedgerId, totalProducedCost, 0);
 
             // Credit: Work in Progress / Manufacturing Clearing
             await client.query(`
                 INSERT INTO voucher_lines (voucher_id, line_number, ledger_id, debit_amount, credit_amount, narration)
                 VALUES ($1, $2, $3, 0.00, $4, 'Manufacturing Completion Clearing')
             `, [voucher.voucher_id, lineNo++, mfgWipLedgerId, totalProducedCost]);
+            await applyLedgerBalance(client, companyId, mfgWipLedgerId, 0, totalProducedCost);
         }
 
         await client.query('COMMIT');

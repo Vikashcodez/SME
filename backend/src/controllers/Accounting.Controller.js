@@ -1687,7 +1687,9 @@ export const getDayBook = async (req, res) => {
             const debitLines = lines.filter(l => parseFloat(l.debit_amount) > 0);
             const creditLines = lines.filter(l => parseFloat(l.credit_amount) > 0);
             let particulars = '';
-            if (v.base_category === 'SALES' || v.base_category === 'RECEIPT') {
+            if (v.source_module === 'MANUFACTURING') {
+                particulars = 'Manufacturing / Production Journal';
+            } else if (v.base_category === 'SALES' || v.base_category === 'RECEIPT') {
                 particulars = debitLines[0]?.ledger_name || creditLines[0]?.ledger_name || 'Voucher Entry';
             } else {
                 particulars = creditLines[0]?.ledger_name || debitLines[0]?.ledger_name || 'Voucher Entry';

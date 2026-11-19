@@ -295,20 +295,27 @@ export const recordProductionRun = async (req, res) => {
             ? parseInt(workforce_count, 10)
             : (parseInt(product.workforce_required || 1, 10));
 
+        const workforceCost = Math.max(0, parseFloat(req.body.workforce_cost) || 0);
+        const totalMaterialCost = +(totalProductionMaterialCost.toFixed(2));
+        const totalProductionCost = +(totalMaterialCost + workforceCost).toFixed(2);
+        const unitProductionCost = +(totalProductionCost / qty).toFixed(4);
+
         // 5. Create Raw Material Production Record
         const prodInsertQuery = `
             INSERT INTO raw_material_production (
                 company_id, branch_id, production_code, batch_number,
                 production_date, production_period_type, product_id,
-                production_quantity, total_material_cost,
+                production_quantity, total_material_cost, workforce_cost,
+                total_production_cost, unit_production_cost,
                 total_production_time_minutes, workforce_count,
                 production_status, warehouse_location, notes, created_by
             ) VALUES (
                 $1, $2, $3, $4,
                 $5, $6, $7,
-                $8, $9,
-                $10, $11,
-                'Pending Quality Check', $12, $13, $14
+                $8, $9, $10,
+                $11, $12,
+                $13, $14,
+                'Pending Quality Check', $15, $16, $17
             ) RETURNING *
         `;
 
@@ -321,7 +328,10 @@ export const recordProductionRun = async (req, res) => {
             production_period_type || 'Daily',
             product_id,
             qty,
-            totalProductionMaterialCost,
+            totalMaterialCost,
+            workforceCost,
+            totalProductionCost,
+            unitProductionCost,
             totalTime,
             workforce,
             warehouse_location || 'Main Store',
@@ -336,8 +346,9 @@ export const recordProductionRun = async (req, res) => {
             INSERT INTO production_batches (
                 company_id, branch_id, production_id, product_id,
                 batch_number, planned_quantity, produced_quantity,
-                production_date, status
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'PENDING_QC')
+                production_date, status, material_cost, workforce_cost,
+                total_production_cost, unit_cost
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'PENDING_QC', $9, $10, $11, $12)
             RETURNING *
         `;
         const batchRes = await client.query(batchInsertQuery, [
@@ -348,7 +359,11 @@ export const recordProductionRun = async (req, res) => {
             autoBatch,
             qty,
             qty,
-            production_date || new Date().toISOString().split('T')[0]
+            production_date || new Date().toISOString().split('T')[0],
+            totalMaterialCost,
+            workforceCost,
+            totalProductionCost,
+            unitProductionCost
         ]);
         const batchRecord = batchRes.rows[0];
 
@@ -425,16 +440,73 @@ export const recordProductionRun = async (req, res) => {
 
         const rawStockLedgerId = await resolveLedger(client, effectiveCompanyId, 'LED-STOCK-RAW', 'Raw Material Stock', 'GRP-STOCK', 'DR');
         const wipLedgerId = await resolveLedger(client, effectiveCompanyId, 'LED-MFG-WIP', 'Work In Progress Stock', 'GRP-STOCK', 'DR');
+
+        const accountingLines = [];
+
+        // 1. Debit WIP for full Total Production Cost (Material Cost + Workforce Cost)
+        accountingLines.push({
+            ledgerId: wipLedgerId,
+            debit: totalProductionCost,
+            credit: 0,
+            narration: `Production WIP: ${qty} ${product.unit_of_measure} of "${product.product_name}" (Batch: ${autoBatch}) @ ₹${unitProductionCost.toFixed(2)}/unit`
+        });
+
+        // 2. Itemized Raw Material Stock credit lines
+        const deductionSum = deductions.reduce((s, d) => s + parseFloat(d.total_cost.toFixed(2)), 0);
+        const roundDiff = +(totalMaterialCost - deductionSum).toFixed(2);
+        if (Math.abs(roundDiff) > 0 && deductions.length > 0) {
+            deductions[0].total_cost = +(deductions[0].total_cost + roundDiff).toFixed(2);
+        }
+
+        for (const item of deductions) {
+            accountingLines.push({
+                ledgerId: rawStockLedgerId,
+                debit: 0,
+                credit: parseFloat(item.total_cost.toFixed(2)),
+                narration: `Raw material consumed: ${item.material_name} (${item.total_quantity_deducted} ${item.unit_of_measure} @ ₹${item.unit_cost.toFixed(2)})`
+            });
+        }
+
+        // 3. Workforce / Direct Labor Expense entries if workforce cost was entered
+        if (workforceCost > 0) {
+            const wagesExpLedgerId = await resolveLedger(client, effectiveCompanyId, 'LED-EXP-WAGES', 'Direct Wages & Workforce Cost', 'GRP-DIR-EXP', 'DR');
+            const wagesPayableLedgerId = await resolveLedger(client, effectiveCompanyId, 'LED-WAGES-PAYABLE', 'Wages & Workforce Payable', 'GRP-CL', 'CR');
+            const laborAbsorbedLedgerId = await resolveLedger(client, effectiveCompanyId, 'LED-MFG-LABOR-ABSORBED', 'Workforce Cost Absorbed in Production', 'GRP-DIR-EXP', 'CR');
+
+            // Debit Direct Wages Expense (Trading / P&L gross profit direct expense)
+            accountingLines.push({
+                ledgerId: wagesExpLedgerId,
+                debit: workforceCost,
+                credit: 0,
+                narration: `Direct workforce expense for ${workforce} operators on batch ${autoBatch}`
+            });
+
+            // Credit Wages & Workforce Payable (liability)
+            accountingLines.push({
+                ledgerId: wagesPayableLedgerId,
+                debit: 0,
+                credit: workforceCost,
+                narration: `Workforce labor payable for batch ${autoBatch}`
+            });
+
+            // Credit Labor Absorbed (clearing direct expense absorbed into WIP asset)
+            accountingLines.push({
+                ledgerId: laborAbsorbedLedgerId,
+                debit: 0,
+                credit: workforceCost,
+                narration: `Workforce labor capitalized into WIP asset (Batch: ${autoBatch})`
+            });
+        }
+
         await postAccountingVoucher(client, {
             companyId: effectiveCompanyId,
             branchId: effectiveBranchId,
             voucherDate: production_date,
             sourceDocumentId: productionRecord.production_id,
-            narration: `Raw material consumption for production ${prodCode}`,
-            lines: [
-                { ledgerId: wipLedgerId, debit: totalProductionMaterialCost, narration: 'Production WIP created' },
-                { ledgerId: rawStockLedgerId, credit: totalProductionMaterialCost, narration: 'Raw materials consumed' }
-            ]
+            sourceModule: 'MANUFACTURING',
+            referenceNumber: prodCode,
+            narration: `Production of ${qty} ${product.unit_of_measure} of "${product.product_name}" (Batch: ${autoBatch}). Material: ₹${totalMaterialCost.toFixed(2)}, Workforce Expense: ₹${workforceCost.toFixed(2)}, Total Cost: ₹${totalProductionCost.toFixed(2)}`,
+            lines: accountingLines
         });
 
         await client.query('COMMIT');
@@ -643,7 +715,9 @@ export const getProductionStats = async (req, res) => {
             SELECT 
                 COUNT(*) as total_batches,
                 COALESCE(SUM(production_quantity), 0) as total_units_produced,
-                COALESCE(SUM(total_material_cost), 0) as total_production_cost,
+                COALESCE(SUM(COALESCE(total_production_cost, total_material_cost + COALESCE(workforce_cost, 0))), 0) as total_production_cost,
+                COALESCE(SUM(total_material_cost), 0) as total_material_cost,
+                COALESCE(SUM(COALESCE(workforce_cost, 0)), 0) as total_workforce_cost,
                 COUNT(DISTINCT product_id) as distinct_products_manufactured,
                 COALESCE(SUM(CASE WHEN production_period_type = 'Daily' THEN production_quantity ELSE 0 END), 0) as daily_units_produced,
                 COALESCE(SUM(CASE WHEN production_period_type = 'Monthly' THEN production_quantity ELSE 0 END), 0) as monthly_units_produced

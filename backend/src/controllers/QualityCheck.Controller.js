@@ -115,7 +115,10 @@ export const recordQualityCheck = async (req, res) => {
                    COALESCE(pb.company_id, po.company_id, rmp.company_id) as company_id,
                    COALESCE(pb.branch_id, po.branch_id, rmp.branch_id) as branch_id,
                    COALESCE(pb.product_id, po.product_id, rmp.product_id) as product_id,
-                   COALESCE(po.planned_expense, rmp.total_material_cost, 0) as total_mat_cost,
+                   COALESCE(pb.total_production_cost, rmp.total_production_cost, po.actual_expense, po.planned_expense, rmp.total_material_cost, 0) as total_prod_cost,
+                   COALESCE(pb.material_cost, rmp.total_material_cost, 0) as total_mat_cost,
+                   COALESCE(pb.workforce_cost, rmp.workforce_cost, 0) as total_workforce_cost,
+                   COALESCE(pb.unit_cost, rmp.unit_production_cost, 0) as default_unit_cost,
                    COALESCE(pb.produced_quantity, pb.planned_quantity, rmp.production_quantity) as default_prod_qty,
                    p.product_code, p.product_name, p.selling_price
             FROM production_batches pb
@@ -133,19 +136,24 @@ export const recordQualityCheck = async (req, res) => {
 
         const batch = batchRes.rows[0];
 
-        // Material cost calculation
-        let totalMatCost = parseFloat(batch.total_mat_cost || 0);
-        if (batch.production_order_id) {
+        // Total Production cost calculation (Raw Materials + Workforce Cost)
+        let totalProdCost = parseFloat(batch.total_prod_cost || 0);
+        if (batch.production_order_id && totalProdCost === 0) {
             const consRes = await client.query(`
                 SELECT COALESCE(SUM(total_cost), 0) as total_mat_cost
                 FROM production_material_consumptions
                 WHERE production_order_id = $1
             `, [batch.production_order_id]);
-            totalMatCost = parseFloat(consRes.rows[0].total_mat_cost || totalMatCost);
+            const matCost = parseFloat(consRes.rows[0].total_mat_cost || 0);
+            const wfCost = parseFloat(batch.total_workforce_cost || 0);
+            totalProdCost = matCost + wfCost;
         }
 
-        const prodQty = parseFloat(batch.produced_quantity || inspQty) || 1;
-        const unitProductionCost = totalMatCost / prodQty;
+        const prodQty = parseFloat(batch.produced_quantity || batch.default_prod_qty || inspQty) || 1;
+        let unitProductionCost = parseFloat(batch.default_unit_cost || 0);
+        if (unitProductionCost <= 0 && totalProdCost > 0) {
+            unitProductionCost = +(totalProdCost / prodQty).toFixed(4);
+        }
 
         // Determine quality status
         let qualityStatus = 'PASSED';

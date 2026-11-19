@@ -221,7 +221,7 @@ export const initAccountingSchema = async (dbPool) => {
                 narration TEXT,
                 reference_number VARCHAR(100),
                 reference_date DATE,
-                source_module VARCHAR(30) CHECK (source_module IN ('MANUAL', 'SALES_INVOICE', 'PURCHASE_INVOICE', 'RECEIPT', 'PAYMENT', 'CREDIT_NOTE', 'DEBIT_NOTE', 'INVENTORY_CLEARING', 'PAYROLL', 'FIXED_ASSETS')),
+                source_module VARCHAR(30) CHECK (source_module IN ('MANUAL', 'SALES_INVOICE', 'PURCHASE_INVOICE', 'RECEIPT', 'PAYMENT', 'CREDIT_NOTE', 'DEBIT_NOTE', 'INVENTORY_CLEARING', 'PAYROLL', 'FIXED_ASSETS', 'MANUFACTURING')),
                 source_document_id BIGINT,
                 is_posted BOOLEAN NOT NULL DEFAULT FALSE,
                 is_reversed BOOLEAN NOT NULL DEFAULT FALSE,

@@ -1,3 +1,14 @@
+const STANDARD_ACCOUNT_GROUPS = {
+    'GRP-DIR-EXP': { name: 'Direct Expenses', nature: 'EXPENSE', affects_gp: true },
+    'GRP-INDIR-EXP': { name: 'Indirect Expenses', nature: 'EXPENSE', affects_gp: false },
+    'GRP-STOCK': { name: 'Stock-in-Hand', nature: 'ASSET', affects_gp: false },
+    'GRP-CL': { name: 'Current Liabilities', nature: 'LIABILITY', affects_gp: false },
+    'GRP-CA': { name: 'Current Assets', nature: 'ASSET', affects_gp: false },
+    'GRP-SALES': { name: 'Sales Accounts', nature: 'INCOME', affects_gp: true },
+    'GRP-PURCHASE': { name: 'Purchase Accounts', nature: 'EXPENSE', affects_gp: true },
+    'GRP-TAXES': { name: 'Duties & Taxes (GST/TDS)', nature: 'LIABILITY', affects_gp: false }
+};
+
 const resolveLedger = async (client, companyId, code, name, groupCode, normalSide = 'DR') => {
     const existing = await client.query(
         `SELECT ledger_id FROM ledgers WHERE company_id = $1 AND ledger_code = $2`,
@@ -5,11 +16,28 @@ const resolveLedger = async (client, companyId, code, name, groupCode, normalSid
     );
     if (existing.rows.length > 0) return existing.rows[0].ledger_id;
 
-    const group = await client.query(
-        `SELECT group_id FROM account_groups WHERE company_id = $1 AND group_code = $2`,
-        [companyId, groupCode]
+    let group = await client.query(
+        `SELECT group_id FROM account_groups 
+         WHERE (company_id = $1 OR company_id IS NULL) 
+           AND (group_code = $2 OR group_name ILIKE $3)
+         ORDER BY (company_id = $1) DESC NULLS LAST
+         LIMIT 1`,
+        [companyId, groupCode, `%${groupCode}%`]
     );
-    if (group.rows.length === 0) throw new Error(`Accounting group ${groupCode} is not configured.`);
+
+    let groupId = group.rows[0]?.group_id;
+
+    if (!groupId) {
+        // Auto-provision standard group if missing
+        const std = STANDARD_ACCOUNT_GROUPS[groupCode] || { name: groupCode, nature: 'EXPENSE', affects_gp: false };
+        const newGroup = await client.query(`
+            INSERT INTO account_groups (company_id, group_name, group_code, nature, affects_gross_profit, is_system_group)
+            VALUES ($1, $2, $3, $4, $5, TRUE)
+            ON CONFLICT (company_id, group_code) DO UPDATE SET group_name = EXCLUDED.group_name
+            RETURNING group_id
+        `, [companyId, std.name, groupCode, std.nature, std.affects_gp]);
+        groupId = newGroup.rows[0].group_id;
+    }
 
     const created = await client.query(`
         INSERT INTO ledgers (
@@ -18,7 +46,7 @@ const resolveLedger = async (client, companyId, code, name, groupCode, normalSid
         ) VALUES ($1, $2, $3, $4, $5, $5, TRUE)
         ON CONFLICT (company_id, ledger_code) DO UPDATE SET ledger_name = EXCLUDED.ledger_name
         RETURNING ledger_id
-    `, [companyId, group.rows[0].group_id, name, code, normalSide]);
+    `, [companyId, groupId, name, code, normalSide]);
     return created.rows[0].ledger_id;
 };
 
@@ -51,6 +79,9 @@ export const postAccountingVoucher = async (client, {
     branchId,
     voucherDate,
     sourceDocumentId,
+    sourceModule = 'MANUFACTURING',
+    referenceNumber = null,
+    voucherTypeCode = 'VCH-JOURNAL',
     narration,
     lines
 }) => {
@@ -62,23 +93,26 @@ export const postAccountingVoucher = async (client, {
 
     const voucherType = await client.query(`
         SELECT voucher_type_id FROM voucher_types
-        WHERE company_id = $1 AND voucher_type_code = 'VCH-JOURNAL'
+        WHERE (company_id = $1 OR company_id IS NULL)
+          AND (voucher_type_code = $2 OR voucher_type_code = 'VCH-JOURNAL' OR base_category = 'JOURNAL')
+        ORDER BY (company_id = $1) DESC NULLS LAST
         LIMIT 1
-    `, [companyId]);
+    `, [companyId, voucherTypeCode || 'VCH-JOURNAL']);
     if (voucherType.rows.length === 0) throw new Error('Journal voucher type is not configured.');
 
+    const prefix = sourceModule === 'MANUFACTURING' ? 'MFG-JRN-' : 'AUTO-JRN-';
     const sequence = await client.query(
-        `SELECT COUNT(*)::INT AS count FROM vouchers WHERE company_id = $1 AND voucher_number LIKE 'AUTO-JRN-%'`,
-        [companyId]
+        `SELECT COUNT(*)::INT AS count FROM vouchers WHERE company_id = $1 AND voucher_number LIKE $2`,
+        [companyId, `${prefix}%`]
     );
-    const voucherNumber = `AUTO-JRN-${new Date(voucherDate).getFullYear()}-${String(sequence.rows[0].count + 1).padStart(6, '0')}`;
+    const voucherNumber = `${prefix}${new Date(voucherDate).getFullYear()}-${String(sequence.rows[0].count + 1).padStart(6, '0')}`;
     const voucher = await client.query(`
         INSERT INTO vouchers (
             company_id, branch_id, voucher_type_id, voucher_number, voucher_date,
-            narration, source_module, source_document_id, is_posted, posted_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, 'INVENTORY_CLEARING', $7, TRUE, CURRENT_TIMESTAMP)
+            narration, reference_number, reference_date, source_module, source_document_id, is_posted, posted_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $5, $8, $9, TRUE, CURRENT_TIMESTAMP)
         RETURNING voucher_id, voucher_number
-    `, [companyId, branchId || null, voucherType.rows[0].voucher_type_id, voucherNumber, voucherDate, narration, sourceDocumentId || null]);
+    `, [companyId, branchId || null, voucherType.rows[0].voucher_type_id, voucherNumber, voucherDate, narration, referenceNumber, sourceModule, sourceDocumentId || null]);
 
     for (let index = 0; index < lines.length; index += 1) {
         const line = lines[index];
