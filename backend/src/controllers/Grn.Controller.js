@@ -1,4 +1,5 @@
 import pool from '../config/database.js';
+import { resolveTaxRates } from '../services/TaxMaster.js';
 
 // Helper to auto-generate GRN number
 const generateGrnNumber = async (client) => {
@@ -107,7 +108,16 @@ export const createGrn = async (req, res) => {
             const receivedQty = parseFloat(item.received_quantity || item.quantity || 0);
             const freeQty = parseFloat(item.free_quantity || 0);
             const unitCost = parseFloat(item.unit_cost || item.unit_price || 0);
-            const tax = parseFloat(item.tax || 0);
+            const materialRes = await client.query(
+                `SELECT hsn_code, gst_rate, unit_price FROM raw_materials WHERE material_id = $1 AND company_id = $2`,
+                [rawMaterialId, effectiveCompanyId]
+            );
+            const material = materialRes.rows[0];
+            const gstRate = parseFloat(item.gst_rate ?? material?.gst_rate ?? 0) || 0;
+            const masterRates = await resolveTaxRates(client, effectiveCompanyId, gstRate);
+            const taxableAmount = +(receivedQty * unitCost).toFixed(2);
+            const taxAmount = +(taxableAmount * (masterRates.total / 100)).toFixed(2);
+            const tax = taxAmount;
             const expiryDate = item.expiry_date || null;
             const mfgDate = item.manufacturing_date || null;
             const itemRemarks = item.remarks || null;
@@ -259,7 +269,7 @@ export const getAllGrns = async (req, res) => {
                 b.branch_name,
                 CONCAT(e.first_name, ' ', COALESCE(e.last_name, '')) as received_by_name,
                 COUNT(gi.id) as total_items,
-                COALESCE(SUM(gi.received_quantity * gi.unit_cost), 0) as total_value
+                COALESCE(SUM((gi.received_quantity * gi.unit_cost) + gi.tax), 0) as total_value
             FROM grns g
             LEFT JOIN vendors v ON g.vendor_id = v.vendor_id
             LEFT JOIN companies c ON g.company_id = c.company_id
@@ -373,6 +383,8 @@ export const getGrnById = async (req, res) => {
                 rm.material_name,
                 rm.unit_of_measure,
                 rm.category,
+                rm.gst_rate,
+                rm.hsn_code,
                 rmi.available_quantity as current_available_qty,
                 rmi.status as inventory_status
             FROM grn_items gi

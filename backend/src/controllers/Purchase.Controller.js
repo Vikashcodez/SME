@@ -127,7 +127,11 @@ export const createPurchaseInvoice = async (req, res) => {
             }
             const grn = grnRes.rows[0];
             const grnItems = await client.query(
-                `SELECT * FROM grn_items WHERE grn_id = $1 ORDER BY id`,
+                `SELECT gi.*, rm.gst_rate, rm.hsn_code
+                 FROM grn_items gi
+                 JOIN raw_materials rm ON rm.material_id = gi.raw_material_id
+                 WHERE gi.grn_id = $1
+                 ORDER BY gi.id`,
                 [grn_id]
             );
             vendor_id = grn.vendor_id;
@@ -140,8 +144,8 @@ export const createPurchaseInvoice = async (req, res) => {
                 raw_material_id: item.raw_material_id,
                 billed_quantity: parseFloat(item.received_quantity) + parseFloat(item.free_quantity || 0),
                 unit_rate: parseFloat(item.unit_cost || 0),
-                tax_rate: 0,
-                hsn_code: '8471',
+                tax_rate: parseFloat(item.gst_rate || 0),
+                hsn_code: item.hsn_code || '8471',
                 unit_of_measure: 'PCS'
             }));
         }

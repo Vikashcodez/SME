@@ -190,13 +190,24 @@ const GrnManagement = () => {
   };
 
   // Calculate totals
-  const formGrandTotal = useMemo(() => {
-    return formData.items.reduce((sum, item) => {
+  const formValuation = useMemo(() => {
+    return formData.items.reduce((totals, item) => {
+      const selectedMat = materialsList.find(m => String(m.material_id) === String(item.raw_material_id));
       const qty = parseFloat(item.received_quantity) || 0;
       const cost = parseFloat(item.unit_cost) || 0;
-      return sum + (qty * cost);
-    }, 0);
-  }, [formData.items]);
+      const gstRate = parseFloat(selectedMat?.gst_rate ?? item.gst_rate ?? 0) || 0;
+      const taxable = qty * cost;
+      const tax = taxable * (gstRate / 100);
+      return {
+        taxable: totals.taxable + taxable,
+        tax: totals.tax + tax,
+        grand: totals.grand + taxable + tax
+      };
+    }, { taxable: 0, tax: 0, grand: 0 });
+  }, [formData.items, materialsList]);
+
+  const formGrandTotal = formValuation.grand;
+  const formTaxTotal = formValuation.tax;
 
   const formTotalQuantity = useMemo(() => {
     return formData.items.reduce((sum, item) => {
@@ -547,6 +558,7 @@ const GrnManagement = () => {
                         <th className="py-2.5 px-3 min-w-[200px]">Raw Material *</th>
                         <th className="py-2.5 px-3 w-32">Received Qty *</th>
                         <th className="py-2.5 px-3 w-32">Unit Price (₹)</th>
+                        <th className="py-2.5 px-3 w-24 text-right">GST</th>
                         <th className="py-2.5 px-3 min-w-[150px]">Batch Number</th>
                         <th className="py-2.5 px-3 w-32">Expiry Date</th>
                         <th className="py-2.5 px-3 text-right w-28">Subtotal</th>
@@ -556,7 +568,12 @@ const GrnManagement = () => {
                     <tbody className="divide-y divide-slate-100">
                       {formData.items.map((item, index) => {
                         const selectedMat = materialsList.find(m => String(m.material_id) === String(item.raw_material_id));
-                        const lineSubtotal = (parseFloat(item.received_quantity) || 0) * (parseFloat(item.unit_cost) || 0);
+                        const qty = parseFloat(item.received_quantity) || 0;
+                        const baseUnitCost = parseFloat(item.unit_cost) || 0;
+                        const gstRate = parseFloat(selectedMat?.gst_rate ?? item.gst_rate ?? 0) || 0;
+                        const lineTaxable = qty * baseUnitCost;
+                        const lineTax = lineTaxable * (gstRate / 100);
+                        const lineSubtotal = lineTaxable + lineTax;
                         return (
                           <tr key={index} className="hover:bg-slate-50/60 transition-colors">
                             {/* Raw Material Select */}
@@ -615,6 +632,12 @@ const GrnManagement = () => {
                                 onChange={(e) => handleItemChange(index, 'unit_cost', e.target.value)}
                                 className="w-full px-2.5 py-1.5 text-xs border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500 font-medium text-slate-800 outline-none"
                               />
+                            </td>
+
+                            {/* GST & Tax Amount */}
+                            <td className="p-2.5 text-right">
+                              <div className="font-bold text-emerald-700">{gstRate}%</div>
+                              <div className="mt-0.5 text-[10px] text-slate-500">₹{lineTax.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</div>
                             </td>
 
                             {/* Batch Number */}
@@ -679,11 +702,17 @@ const GrnManagement = () => {
                     <span>Total Materials: <strong className="text-slate-900 font-bold">{formData.items.length}</strong></span>
                     <span>Total Quantity: <strong className="text-slate-900 font-bold">{formTotalQuantity.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</strong></span>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs text-slate-500 font-medium">Grand GRN Valuation:</span>
-                    <span className="text-base font-extrabold text-blue-700 font-mono">
-                      ₹{formGrandTotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                    </span>
+                  <div className="flex items-center gap-4">
+                    <div className="text-right">
+                      <div className="text-[10px] text-slate-400">Tax Amount</div>
+                      <div className="text-sm font-bold text-emerald-700">₹{formTaxTotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-slate-500 font-medium">Grand GRN Valuation:</span>
+                      <span className="text-base font-extrabold text-blue-700 font-mono">
+                        ₹{formGrandTotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                      </span>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -849,6 +878,8 @@ const GrnManagement = () => {
                         <th className="py-2.5 px-3 text-right">Received Qty</th>
                         <th className="py-2.5 px-3 text-right">Current Available</th>
                         <th className="py-2.5 px-3 text-right">Unit Cost</th>
+                        <th className="py-2.5 px-3 text-right">GST / Tax</th>
+                        <th className="py-2.5 px-3 text-right">Line Total</th>
                         <th className="py-2.5 px-3">Expiry Date</th>
                         <th className="py-2.5 px-3 text-center">Batch Status</th>
                       </tr>
@@ -874,6 +905,13 @@ const GrnManagement = () => {
                           </td>
                           <td className="py-2.5 px-3 text-right">
                             ₹{parseFloat(item.unit_cost || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                          </td>
+                          <td className="py-2.5 px-3 text-right">
+                            <div className="font-semibold text-emerald-700">{parseFloat(item.gst_rate || 0).toFixed(2)}%</div>
+                            <div className="text-[10px] text-slate-500">₹{parseFloat(item.tax || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</div>
+                          </td>
+                          <td className="py-2.5 px-3 text-right font-semibold text-slate-900">
+                            ₹{((parseFloat(item.received_quantity) || 0) * parseFloat(item.unit_cost || 0) + parseFloat(item.tax || 0)).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                           </td>
                           <td className="py-2.5 px-3 text-gray-500">
                             {item.expiry_date ? new Date(item.expiry_date).toLocaleDateString() : 'N/A'}
