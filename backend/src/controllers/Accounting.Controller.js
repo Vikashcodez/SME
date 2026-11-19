@@ -616,6 +616,9 @@ export const createBankAccount = async (req, res) => {
         if (!['DR', 'CR'].includes(opening_balance_type)) {
             return res.status(400).json({ success: false, message: 'Opening balance type must be DR or CR' });
         }
+        const effectiveOpeningType = ['OVERDRAFT', 'CASH_CREDIT'].includes(account_type)
+            ? 'CR'
+            : 'DR';
 
         await client.query('BEGIN');
         const groupResult = await client.query(
@@ -635,7 +638,7 @@ export const createBankAccount = async (req, res) => {
                 opening_balance_type, current_balance, current_balance_type, tax_type, is_active
             ) VALUES ($1, $2, $3, $4, $5, $6, $5, $6, 'NONE', TRUE)
             RETURNING *
-        `, [companyId, groupResult.rows[0].group_id, ledgerName, ledgerCode, balance, opening_balance_type]);
+        `, [companyId, groupResult.rows[0].group_id, ledgerName, ledgerCode, balance, effectiveOpeningType]);
 
         const bankResult = await client.query(`
             INSERT INTO bank_accounts (
@@ -1967,14 +1970,16 @@ export const getBalanceSheet = async (req, res) => {
                 l.opening_balance_type,
                 l.current_balance,
                 l.current_balance_type,
+                ba.account_type,
                 COALESCE(SUM(CASE WHEN v.voucher_id IS NOT NULL THEN vl.debit_amount ELSE 0 END), 0)::NUMERIC(16,2) AS period_debit,
                 COALESCE(SUM(CASE WHEN v.voucher_id IS NOT NULL THEN vl.credit_amount ELSE 0 END), 0)::NUMERIC(16,2) AS period_credit
             FROM ledgers l
             JOIN account_groups ag ON l.group_id = ag.group_id
+            LEFT JOIN bank_accounts ba ON ba.ledger_id = l.ledger_id AND ba.company_id = l.company_id
             LEFT JOIN voucher_lines vl ON l.ledger_id = vl.ledger_id
             LEFT JOIN vouchers v ON vl.voucher_id = v.voucher_id AND v.is_posted = TRUE AND v.voucher_date <= $2
             WHERE l.company_id = $1 AND ag.nature IN ('ASSET', 'LIABILITY', 'EQUITY')
-            GROUP BY l.ledger_id, l.ledger_name, l.ledger_code, ag.group_name, ag.group_code, ag.nature, l.opening_balance, l.opening_balance_type, l.current_balance, l.current_balance_type
+            GROUP BY l.ledger_id, l.ledger_name, l.ledger_code, ag.group_name, ag.group_code, ag.nature, l.opening_balance, l.opening_balance_type, l.current_balance, l.current_balance_type, ba.account_type
             ORDER BY ag.nature, ag.group_name, l.ledger_name ASC
         `, [companyId, asOnDate]);
 
@@ -2024,12 +2029,84 @@ export const getBalanceSheet = async (req, res) => {
             const opBal = (l.opening_balance_type === 'CR' ? -1 : 1) * (parseFloat(l.opening_balance) || 0);
             const dr = parseFloat(l.period_debit) || 0;
             const cr = parseFloat(l.period_credit) || 0;
-            const netDr = opBal + dr - cr;
+            const isBankOrCashControl =
+                l.group_code === 'GRP-CASH' ||
+                l.group_code === 'CASH_IN_HAND' ||
+                l.group_code === 'GRP-BANK' ||
+                l.group_code === 'BANK_ACCOUNTS';
+            const isOverdraftAccount =
+                l.account_type === 'OVERDRAFT' ||
+                l.account_type === 'CASH_CREDIT';
+
+            // A normal Cash/Bank account can have a legacy or incorrectly entered
+            // positive opening balance marked CR. In that case it is still an
+            // asset. CREDIT means overdraft only for an overdraft/cash-credit
+            // account (or a genuinely negative running balance).
+            const openingAmount = parseFloat(l.opening_balance) || 0;
+            const normalizeLegacyPositiveAsset =
+                isBankOrCashControl &&
+                !isOverdraftAccount &&
+                l.opening_balance_type === 'CR' &&
+                openingAmount > 0;
+            const normalizedOpBal = normalizeLegacyPositiveAsset ? openingAmount : opBal;
+            const netDr = normalizedOpBal + dr - cr;
             const netCr = -netDr;
 
             const taxInputLedger = l.ledger_code?.startsWith('LED-TAX-IN-');
 
-            if (l.nature === 'EQUITY') {
+            // Account-group codes are authoritative for balance-sheet placement.
+            // This also repairs ledgers that belong to a valid Cash/Bank/Debtors
+            // control group but have an incorrect or legacy group nature.
+            const balanceAssetGroupCode =
+                l.group_code === 'GRP-FA' ||
+                l.group_code === 'GRP-INV' ||
+                l.group_code === 'GRP-DEBTORS' ||
+                l.group_code === 'SUNDRY_DEBTORS' ||
+                l.group_code === 'GRP-CASH' ||
+                l.group_code === 'CASH_IN_HAND' ||
+                l.group_code === 'GRP-BANK' ||
+                l.group_code === 'BANK_ACCOUNTS' ||
+                l.group_code === 'GRP-STOCK';
+
+            if (balanceAssetGroupCode) {
+                if (netDr >= 0) {
+                    if (l.group_code === 'GRP-FA') {
+                        assets.fixed_assets.total += netDr;
+                        assets.fixed_assets.ledgers.push({ ...l, amount: netDr.toFixed(2) });
+                    } else if (l.group_code === 'GRP-INV') {
+                        assets.investments.total += netDr;
+                        assets.investments.ledgers.push({ ...l, amount: netDr.toFixed(2) });
+                    } else if (l.group_code === 'GRP-DEBTORS' || l.group_code === 'SUNDRY_DEBTORS') {
+                        assets.current_assets.sundry_debtors.total += netDr;
+                        assets.current_assets.sundry_debtors.ledgers.push({ ...l, amount: netDr.toFixed(2) });
+                    } else if (l.group_code === 'GRP-CASH' || l.group_code === 'CASH_IN_HAND') {
+                        assets.current_assets.cash_in_hand.total += netDr;
+                        assets.current_assets.cash_in_hand.ledgers.push({ ...l, amount: netDr.toFixed(2) });
+                    } else if (l.group_code === 'GRP-BANK' || l.group_code === 'BANK_ACCOUNTS') {
+                        assets.current_assets.bank_accounts.total += netDr;
+                        assets.current_assets.bank_accounts.ledgers.push({ ...l, amount: netDr.toFixed(2) });
+                    } else if (l.group_code === 'GRP-STOCK') {
+                        // Physical stock valuation is taken from inventory tables.
+                    }
+                } else {
+                    const contraBalance = Math.abs(netDr);
+                    if (l.group_code === 'GRP-BANK' || l.group_code === 'BANK_ACCOUNTS') {
+                        liabilities.loans_and_borrowings.total += contraBalance;
+                        liabilities.loans_and_borrowings.ledgers.push({
+                            ...l,
+                            amount: contraBalance.toFixed(2),
+                            classification: 'BANK_OVERDRAFT'
+                        });
+                    } else {
+                        liabilities.current_liabilities.other_liabilities.total += contraBalance;
+                        liabilities.current_liabilities.other_liabilities.ledgers.push({
+                            ...l,
+                            amount: contraBalance.toFixed(2),
+                            classification: 'CREDIT_BALANCE'
+                        });
+                    }
+                }
+            } else if (l.nature === 'EQUITY') {
                 const amt = netCr;
                 liabilities.capital_and_reserves.total += amt;
                 liabilities.capital_and_reserves.ledgers.push({ ...l, amount: amt.toFixed(2) });

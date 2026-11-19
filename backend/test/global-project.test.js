@@ -118,6 +118,16 @@ test('accounting schema enforces one-sided voucher lines', () => {
     assert.match(schema, /credit_amount > 0 AND debit_amount = 0/);
 });
 
+test('balance sheet classifies cash and bank by control-group code', () => {
+    const controller = read(path.join(backendSourceRoot, 'controllers', 'Accounting.Controller.js'));
+    assert.match(controller, /const balanceAssetGroupCode/);
+    assert.match(controller, /GRP-CASH/);
+    assert.match(controller, /GRP-BANK/);
+    assert.match(controller, /BANK_OVERDRAFT/);
+    assert.match(controller, /normalizeLegacyPositiveAsset/);
+    assert.match(controller, /isOverdraftAccount/);
+});
+
 test('compliance payroll is integrated with accounting and statutory records', () => {
     const controller = read(path.join(backendSourceRoot, 'controllers', 'Compliance.Controller.js'));
     const routes = read(path.join(backendSourceRoot, 'routes', 'Compliance.Routes.js'));
