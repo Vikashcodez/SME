@@ -30,6 +30,7 @@ import manufacturingAccountingRouter from './routes/ManufacturingAccounting.Rout
 import serviceRouter from './routes/Service.Routes.js';
 import hsnRouter from './routes/Hsn.Routes.js';
 import complianceRouter from './routes/Compliance.Routes.js';
+import taxRouter from './routes/Tax.Routes.js';
 
 const app = express();
 
@@ -67,6 +68,7 @@ app.use('/api/sales', salesRouter);
 app.use('/api/purchases', purchaseRouter);
 app.use('/api/manufacturing-accounting', manufacturingAccountingRouter);
 app.use('/api/compliance', complianceRouter);
+app.use('/api/taxes', taxRouter);
 // Health check
 app.get('/health', (req, res) => {
     res.json({

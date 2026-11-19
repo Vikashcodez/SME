@@ -21,6 +21,7 @@ const Sidebar = ({ isCollapsed, onToggleCollapse }) => {
       items: [
         { path: '/branch/ledger-management', label: 'Ledger & Banking' },
         { path: '/branch/chart-of-accounts', label: 'Chart of Accounts' },
+        { path: '/branch/tax-master', label: 'Tax Master' },
         { path: '/branch/purchase-invoices', label: 'Purchase Invoices & Bills' },
         { path: '/branch/sales-invoices', label: 'Sales Invoices & Billing' },
         { path: '/branch/receipts-settlement', label: 'Receipts & Settlements' },

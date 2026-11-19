@@ -339,4 +339,11 @@ export const compliance = {
   generateForm16: (data) => api.post('/compliance/form16/generate', data),
 };
 
+export const taxes = {
+  getAll: (params) => api.get('/taxes', { params }),
+  create: (data) => api.post('/taxes', data),
+  update: (taxId, data) => api.put(`/taxes/${taxId}`, data),
+  remove: (taxId, params) => api.delete(`/taxes/${taxId}`, { params }),
+};
+
 export default api;

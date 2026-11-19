@@ -4,7 +4,8 @@ import {
   sales as salesApi,
   customers as customersApi,
   products as productsApi,
-  services as servicesApi
+  services as servicesApi,
+  taxes as taxApi
 } from '../../services/api';
 import toast from 'react-hot-toast';
 import {
@@ -37,6 +38,7 @@ const SalesInvoiceManagement = () => {
   const [productsList, setProductsList] = useState([]);
   const [servicesList, setServicesList] = useState([]);
   const [quotations, setQuotations] = useState([]);
+  const [taxesList, setTaxesList] = useState([]);
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
@@ -88,16 +90,18 @@ const SalesInvoiceManagement = () => {
   const fetchDropdowns = async () => {
     if (!companyId) return;
     try {
-      const [cRes, pRes, sRes, qRes] = await Promise.all([
+      const [cRes, pRes, sRes, qRes, tRes] = await Promise.all([
         customersApi.getAll({ company_id: companyId, status: true }),
         productsApi.getAll({ company_id: companyId }),
         servicesApi.getAll({ company_id: companyId, status: 'Active' }),
-        salesApi.getQuotations({ company_id: companyId })
+        salesApi.getQuotations({ company_id: companyId }),
+        taxApi.getAll({ company_id: companyId })
       ]);
       setCustomersList(cRes.data.data || []);
       setProductsList(pRes.data.data || pRes.data || []);
       setServicesList(sRes.data.data || []);
       setQuotations(qRes.data.data || []);
+      setTaxesList((tRes.data.data || []).filter(tax => tax.is_active));
     } catch (err) {
       console.error(err);
     }
@@ -258,13 +262,14 @@ const SalesInvoiceManagement = () => {
       const discAmt = gross * (disc / 100);
       const lineTaxable = gross - discAmt;
       const taxRate = parseFloat(it.tax_rate) || 18;
+      const masterTax = taxesList.find(tax => Number(tax.total_rate) === taxRate);
 
       taxable += lineTaxable;
       if (isIntraState) {
-        cgst += lineTaxable * (taxRate / 200);
-        sgst += lineTaxable * (taxRate / 200);
+        cgst += lineTaxable * (Number(masterTax?.cgst_rate ?? taxRate / 2) / 100);
+        sgst += lineTaxable * (Number(masterTax?.sgst_rate ?? taxRate / 2) / 100);
       } else {
-        igst += lineTaxable * (taxRate / 100);
+        igst += lineTaxable * (Number(masterTax?.igst_rate ?? taxRate) / 100);
       }
     });
 
@@ -765,11 +770,11 @@ const SalesInvoiceManagement = () => {
                                 disabled={quotationSelected && !quotationEditMode}
                                 className="w-full px-2 py-1.5 bg-white border border-slate-200 rounded-lg font-semibold text-slate-700"
                               >
-                                <option value="0">0%</option>
-                                <option value="5">5%</option>
-                                <option value="12">12%</option>
-                                <option value="18">18%</option>
-                                <option value="28">28%</option>
+                                {taxesList.map(tax => (
+                                  <option key={tax.tax_id} value={tax.total_rate}>
+                                    {tax.tax_name}
+                                  </option>
+                                ))}
                               </select>
                             </td>
 

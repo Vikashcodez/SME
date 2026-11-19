@@ -829,6 +829,24 @@ export const initAccountingSchema = async (dbPool) => {
             );
             CREATE INDEX IF NOT EXISTS idx_audit_entity ON accounting_audit_logs(entity_name, entity_id);
 
+            CREATE TABLE IF NOT EXISTS tax_master (
+                tax_id BIGSERIAL PRIMARY KEY,
+                company_id BIGINT NOT NULL REFERENCES companies(company_id) ON DELETE CASCADE,
+                tax_name VARCHAR(100) NOT NULL,
+                tax_type VARCHAR(20) NOT NULL DEFAULT 'GST'
+                    CHECK (tax_type IN ('GST', 'IGST', 'TDS', 'CESS', 'VAT', 'OTHER')),
+                total_rate NUMERIC(7, 3) NOT NULL DEFAULT 0.000 CHECK (total_rate >= 0),
+                cgst_rate NUMERIC(7, 3) NOT NULL DEFAULT 0.000 CHECK (cgst_rate >= 0),
+                sgst_rate NUMERIC(7, 3) NOT NULL DEFAULT 0.000 CHECK (sgst_rate >= 0),
+                igst_rate NUMERIC(7, 3) NOT NULL DEFAULT 0.000 CHECK (igst_rate >= 0),
+                cess_rate NUMERIC(7, 3) NOT NULL DEFAULT 0.000 CHECK (cess_rate >= 0),
+                is_active BOOLEAN NOT NULL DEFAULT TRUE,
+                created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                CONSTRAINT uq_tax_master_name UNIQUE (company_id, tax_name)
+            );
+            CREATE INDEX IF NOT EXISTS idx_tax_master_company_active ON tax_master(company_id, is_active);
+
             CREATE TABLE IF NOT EXISTS compliance_settings (
                 setting_id BIGSERIAL PRIMARY KEY,
                 company_id BIGINT NOT NULL REFERENCES companies(company_id) ON DELETE CASCADE,
@@ -962,6 +980,22 @@ export const seedStandardAccountingMasters = async (client) => {
 
     for (const comp of companies) {
         const cId = comp.company_id;
+
+        for (const tax of [
+            { name: 'GST Exempt', total: 0, cgst: 0, sgst: 0, igst: 0 },
+            { name: 'GST 5%', total: 5, cgst: 2.5, sgst: 2.5, igst: 5 },
+            { name: 'GST 12%', total: 12, cgst: 6, sgst: 6, igst: 12 },
+            { name: 'GST 18%', total: 18, cgst: 9, sgst: 9, igst: 18 },
+            { name: 'GST 28%', total: 28, cgst: 14, sgst: 14, igst: 28 }
+        ]) {
+            await client.query(`
+                INSERT INTO tax_master (
+                    company_id, tax_name, tax_type, total_rate,
+                    cgst_rate, sgst_rate, igst_rate, cess_rate, is_active
+                ) VALUES ($1, $2, 'GST', $3, $4, $5, $6, 0, TRUE)
+                ON CONFLICT (company_id, tax_name) DO NOTHING
+            `, [cId, tax.name, tax.total, tax.cgst, tax.sgst, tax.igst]);
+        }
 
         // Check if standard groups already exist for this company
         const existingGroupsRes = await client.query('SELECT COUNT(*) FROM account_groups WHERE company_id = $1', [cId]);

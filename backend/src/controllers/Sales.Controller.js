@@ -1,5 +1,6 @@
 import pool from '../config/database.js';
 import { applyLedgerBalance } from '../services/AccountingPosting.js';
+import { resolveTaxRates } from '../services/TaxMaster.js';
 
 // Helper: Generate sequential invoice / quotation / order numbers
 const generateDocNumber = async (client, companyId, prefix) => {
@@ -171,6 +172,7 @@ export const createSalesInvoice = async (req, res) => {
 
             // Default GST tax rate
             const gstRate = parseFloat(item.tax_rate !== undefined ? item.tax_rate : defaultGst);
+            const masterRates = await resolveTaxRates(client, companyId, gstRate);
             let cgstRate = 0, sgstRate = 0, igstRate = 0;
             let cgstAmt = 0, sgstAmt = 0, igstAmt = 0;
 
@@ -182,12 +184,12 @@ export const createSalesInvoice = async (req, res) => {
                 sgstAmt = parseFloat(item.sgst_amount || 0);
                 igstAmt = parseFloat(item.igst_amount || 0);
             } else if (isIntraState) {
-                cgstRate = +(gstRate / 2).toFixed(2);
-                sgstRate = +(gstRate / 2).toFixed(2);
+                cgstRate = masterRates.cgst;
+                sgstRate = masterRates.sgst;
                 cgstAmt = +(taxable * (cgstRate / 100)).toFixed(2);
                 sgstAmt = +(taxable * (sgstRate / 100)).toFixed(2);
             } else {
-                igstRate = gstRate;
+                igstRate = masterRates.igst || masterRates.total;
                 igstAmt = +(taxable * (igstRate / 100)).toFixed(2);
             }
 

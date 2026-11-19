@@ -1,5 +1,6 @@
 import pool from '../config/database.js';
 import { applyLedgerBalance } from '../services/AccountingPosting.js';
+import { resolveTaxRates } from '../services/TaxMaster.js';
 
 export const getPendingGrns = async (req, res) => {
     try {
@@ -246,13 +247,14 @@ export const createPurchaseInvoice = async (req, res) => {
             const taxRate = taxRateValue === undefined || taxRateValue === null || taxRateValue === ''
                 ? 18
                 : parseFloat(taxRateValue);
+            const masterRates = await resolveTaxRates(client, companyId, taxRate);
 
             let cgst = 0, sgst = 0, igst = 0;
             if (isIntraState) {
-                cgst = +((taxable * (taxRate / 2)) / 100).toFixed(2);
-                sgst = +((taxable * (taxRate / 2)) / 100).toFixed(2);
+                cgst = +((taxable * masterRates.cgst) / 100).toFixed(2);
+                sgst = +((taxable * masterRates.sgst) / 100).toFixed(2);
             } else {
-                igst = +((taxable * taxRate) / 100).toFixed(2);
+                igst = +((taxable * (masterRates.igst || masterRates.total)) / 100).toFixed(2);
             }
 
             const lineTotal = +(taxable + cgst + sgst + igst).toFixed(2);

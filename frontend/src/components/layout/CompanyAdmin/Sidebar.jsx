@@ -28,6 +28,7 @@ const Sidebar = ({ isCollapsed, onToggleCollapse }) => {
         { path: '/products', label: 'Product Master' },
         { path: '/services', label: 'Service Master' },
         { path: '/chart-of-accounts', label: 'Chart of Accounts' },
+        { path: '/tax-master', label: 'Tax Master' },
       ]
     },
     {

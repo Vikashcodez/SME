@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useAuth } from '../../context/AuthContext';
-import { purchases as purchaseApi, rawMaterials as rawMaterialApi, vendors as vendorsApi } from '../../services/api';
+import { purchases as purchaseApi, rawMaterials as rawMaterialApi, vendors as vendorsApi, taxes as taxApi } from '../../services/api';
 import toast from 'react-hot-toast';
 import {
   FileText,
@@ -32,6 +32,7 @@ const PurchaseInvoiceManagement = () => {
   const [vendorsList, setVendorsList] = useState([]);
   const [rawMaterialsList, setRawMaterialsList] = useState([]);
   const [pendingGrns, setPendingGrns] = useState([]);
+  const [taxesList, setTaxesList] = useState([]);
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('ALL');
@@ -87,14 +88,16 @@ const PurchaseInvoiceManagement = () => {
   const fetchMasterData = async () => {
     if (!companyId) return;
     try {
-      const [vRes, rmRes, grnRes] = await Promise.all([
+      const [vRes, rmRes, grnRes, tRes] = await Promise.all([
         vendorsApi.getAll({ company_id: companyId, is_active: true }),
         rawMaterialApi.getAll({ company_id: companyId }),
-        purchaseApi.getPendingGrns({ company_id: companyId })
+        purchaseApi.getPendingGrns({ company_id: companyId }),
+        taxApi.getAll({ company_id: companyId })
       ]);
       setVendorsList(vRes.data.data || []);
       setRawMaterialsList(rmRes.data.data || rmRes.data || []);
       setPendingGrns(grnRes.data.data || []);
+      setTaxesList((tRes.data.data || []).filter(tax => tax.is_active));
     } catch (err) {
       console.error(err);
     }
@@ -136,13 +139,14 @@ const PurchaseInvoiceManagement = () => {
       const taxRate = it.tax_rate === undefined || it.tax_rate === null || it.tax_rate === ''
         ? 18
         : parseFloat(it.tax_rate);
+      const masterTax = taxesList.find(tax => Number(tax.total_rate) === taxRate);
 
       taxable += lineTaxable;
       if (isIntra) {
-        cgst += +((lineTaxable * (taxRate / 2)) / 100).toFixed(2);
-        sgst += +((lineTaxable * (taxRate / 2)) / 100).toFixed(2);
+        cgst += +((lineTaxable * Number(masterTax?.cgst_rate ?? taxRate / 2)) / 100).toFixed(2);
+        sgst += +((lineTaxable * Number(masterTax?.sgst_rate ?? taxRate / 2)) / 100).toFixed(2);
       } else {
-        igst += +((lineTaxable * taxRate) / 100).toFixed(2);
+        igst += +((lineTaxable * Number(masterTax?.igst_rate ?? taxRate)) / 100).toFixed(2);
       }
     });
 
@@ -682,11 +686,11 @@ const PurchaseInvoiceManagement = () => {
                             }}
                             className="w-full px-2 py-1.5 border border-slate-200 rounded-lg text-xs"
                           >
-                            <option value="0">0%</option>
-                            <option value="5">5%</option>
-                            <option value="12">12%</option>
-                            <option value="18">18%</option>
-                            <option value="28">28%</option>
+                            {taxesList.map(tax => (
+                              <option key={tax.tax_id} value={tax.total_rate}>
+                                {tax.tax_name}
+                              </option>
+                            ))}
                           </select>
                         </td>
                         <td className="p-2">

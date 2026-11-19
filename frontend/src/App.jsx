@@ -43,6 +43,7 @@ import PurchaseInvoiceManagement from './pages/Commercial/PurchaseInvoiceManagem
 import ManufacturingJournal from './pages/Commercial/ManufacturingJournal';
 import Compliance from './pages/Commercial/Compliance';
 import LedgerManagement from './pages/Commercial/LedgerManagement';
+import TaxMaster from './pages/Master Data/TaxMaster';
 
 const AppContent = () => {
   const { isAuthenticated, isSuperAdmin, isCompanyAdmin, isBranchAdmin, isEmployee } = useAuth();
@@ -92,6 +93,17 @@ const AppContent = () => {
           <ProtectedRoute requiredRole="company_admin">
             <CompanyAdminLayout>
               <LedgerManagement />
+            </CompanyAdminLayout>
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/tax-master"
+        element={
+          <ProtectedRoute requiredRole="company_admin">
+            <CompanyAdminLayout>
+              <TaxMaster />
             </CompanyAdminLayout>
           </ProtectedRoute>
         }
@@ -632,6 +644,17 @@ const AppContent = () => {
           <ProtectedRoute requiredRole="branch_admin">
             <BranchAdminLayout>
               <LedgerManagement />
+            </BranchAdminLayout>
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/branch/tax-master"
+        element={
+          <ProtectedRoute requiredRole="branch_admin">
+            <BranchAdminLayout>
+              <TaxMaster />
             </BranchAdminLayout>
           </ProtectedRoute>
         }
