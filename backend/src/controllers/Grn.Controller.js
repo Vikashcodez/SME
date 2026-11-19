@@ -1,5 +1,6 @@
 import pool from '../config/database.js';
 import { resolveTaxRates } from '../services/TaxMaster.js';
+import { createPurchaseInvoice } from './Purchase.Controller.js';
 
 // Helper to auto-generate GRN number
 const generateGrnNumber = async (client) => {
@@ -219,12 +220,57 @@ export const createGrn = async (req, res) => {
 
         await client.query('COMMIT');
 
-        return res.status(201).json({
-            success: true,
-            message: 'GRN created successfully and raw material batch inventory updated.',
+        let purchaseInvoice = null;
+        let purchaseInvoiceError = null;
+        try {
+            const purchaseResponse = {
+                statusCode: null,
+                body: null
+            };
+            await createPurchaseInvoice({
+                body: {
+                    company_id: effectiveCompanyId,
+                    branch_id: effectiveBranchId,
+                    vendor_id,
+                    grn_id: grn.id,
+                    supplier_invoice_number: invoice_number || finalGrnNumber,
+                    supplier_invoice_date: invoice_date || received_date || new Date().toISOString().split('T')[0],
+                    due_date: invoice_date || received_date || new Date().toISOString().split('T')[0],
+                    items: [],
+                    place_of_supply_state_code: null,
+                    freight_charges: 0,
+                    other_charges: 0
+                },
+                user: req.user || { company_id: effectiveCompanyId, branch_id: effectiveBranchId, employee_id: createdBy }
+            }, {
+                status(code) {
+                    purchaseResponse.statusCode = code;
+                    return this;
+                },
+                json(body) {
+                    purchaseResponse.body = body;
+                    return body;
+                }
+            });
+            if (purchaseResponse.statusCode === 201 && purchaseResponse.body?.success) {
+                purchaseInvoice = purchaseResponse.body.data;
+            } else {
+                purchaseInvoiceError = purchaseResponse.body?.message || 'Purchase invoice could not be created.';
+            }
+        } catch (error) {
+            purchaseInvoiceError = error.message;
+        }
+
+        return res.status(purchaseInvoice ? 201 : 207).json({
+            success: Boolean(purchaseInvoice),
+            message: purchaseInvoice
+                ? 'GRN created and purchase invoice posted to supplier liability automatically.'
+                : 'GRN created successfully, but automatic purchase invoice posting failed.',
+            warning: purchaseInvoiceError,
             data: {
                 ...grn,
-                items: createdItems
+                items: createdItems,
+                purchase_invoice: purchaseInvoice
             }
         });
 

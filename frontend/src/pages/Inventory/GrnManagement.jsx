@@ -269,7 +269,10 @@ const GrnManagement = () => {
 
       const res = await grnApi.create(payload);
       if (res.data?.success) {
-        toast.success('GRN recorded and Raw Material Inventory Batches updated successfully.');
+        const invoice = res.data.data?.purchase_invoice;
+        toast.success(invoice
+          ? `GRN recorded. Purchase invoice ${invoice.internal_entry_number} posted and supplier liability created.`
+          : 'GRN recorded and Raw Material Inventory Batches updated successfully.');
         setShowCreateModal(false);
         // Reset form
         setFormData({
