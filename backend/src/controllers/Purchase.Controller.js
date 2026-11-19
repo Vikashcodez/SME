@@ -565,10 +565,14 @@ export const getPurchaseInvoices = async (req, res) => {
                 vp.vendor_code,
                 vp.gstin AS vendor_gstin,
                 vp.existing_vendor_id,
+                pm.party_id,
                 v.voucher_number,
                 g.grn_number
             FROM purchase_invoices pi
             JOIN vendor_profiles vp ON pi.vendor_id = vp.vendor_profile_id
+            LEFT JOIN party_master pm
+              ON pm.vendor_profile_id = vp.vendor_profile_id
+             AND pm.company_id = pi.company_id
             LEFT JOIN vouchers v ON pi.accounting_voucher_id = v.voucher_id
             LEFT JOIN grns g ON pi.grn_id = g.id
             WHERE pi.company_id = $1
@@ -688,7 +692,13 @@ export const recordVendorPayment = async (req, res) => {
             SELECT vp.*, l.ledger_id 
             FROM vendor_profiles vp 
             JOIN ledgers l ON vp.ledger_id = l.ledger_id 
-            WHERE (vp.vendor_profile_id = $1 OR vp.existing_vendor_id = $1) AND vp.company_id = $2
+            LEFT JOIN party_master pm
+              ON pm.vendor_profile_id = vp.vendor_profile_id AND pm.company_id = vp.company_id
+            WHERE (
+                vp.vendor_profile_id = $1
+                OR vp.existing_vendor_id = $1
+                OR pm.party_id = $1
+            ) AND vp.company_id = $2
         `, [vendor_id, companyId]);
 
         if (vendRes.rows.length === 0) {
@@ -885,6 +895,9 @@ export const getVendorBillOutstanding = async (req, res) => {
         const result = await pool.query(`
             SELECT 
                 pi.purchase_invoice_id,
+                vp.vendor_profile_id,
+                vp.existing_vendor_id,
+                pm.party_id,
                 pi.supplier_invoice_number,
                 pi.supplier_invoice_date,
                 pi.due_date,
@@ -895,6 +908,9 @@ export const getVendorBillOutstanding = async (req, res) => {
                 (CURRENT_DATE - pi.due_date) AS overdue_days
             FROM purchase_invoices pi
             JOIN vendor_profiles vp ON pi.vendor_id = vp.vendor_profile_id
+            LEFT JOIN party_master pm
+              ON pm.vendor_profile_id = vp.vendor_profile_id
+             AND pm.company_id = pi.company_id
             WHERE (vp.vendor_profile_id = $1 OR vp.existing_vendor_id = $1)
               AND pi.company_id = $2
               AND pi.outstanding_amount > 0

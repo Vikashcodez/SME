@@ -108,6 +108,36 @@ const PurchaseInvoiceManagement = () => {
     fetchMasterData();
   }, [companyId]);
 
+  useEffect(() => {
+    if (activeTab !== 'payment-settlement') return;
+    const allUnpaid = invoices.filter(invoice =>
+      parseFloat(invoice.outstanding_amount || 0) > 0
+    );
+    if (allUnpaid.length === 0) {
+      setUnpaidBills([]);
+      return;
+    }
+    setUnpaidBills(allUnpaid);
+    const firstUnpaid = allUnpaid.find(invoice =>
+      invoice.party_id || invoice.vendor_profile_id || invoice.vendor_id
+    ) || allUnpaid[0];
+    const partyId =
+      firstUnpaid.party_id ||
+      firstUnpaid.vendor_profile_id ||
+      firstUnpaid.vendor_id ||
+      firstUnpaid.existing_vendor_id;
+    setPaymentForm(prev => ({
+      ...prev,
+      vendor_id: partyId ? String(partyId) : '',
+      selected_invoice_id: String(firstUnpaid.purchase_invoice_id),
+      amount: String(parseFloat(firstUnpaid.outstanding_amount || 0)),
+      invoices_to_settle: [{
+        purchase_invoice_id: firstUnpaid.purchase_invoice_id,
+        amount: parseFloat(firstUnpaid.outstanding_amount || 0)
+      }]
+    }));
+  }, [activeTab, invoices]);
+
   // Selected vendor details for place of supply
   const selectedVendorData = useMemo(() => {
     return vendorsList.find(v => v.vendor_id === parseInt(newInvoice.vendor_id) || v.vendor_profile_id === parseInt(newInvoice.vendor_id));
@@ -837,48 +867,47 @@ const PurchaseInvoiceManagement = () => {
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
-              <label className="block text-xs font-semibold text-slate-600 mb-1">Select Vendor *</label>
-              <select
-                value={paymentForm.vendor_id}
-                onChange={(e) => handlePaymentVendorSelect(e.target.value)}
-                className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm bg-slate-50 focus:bg-white focus:outline-none"
-                required
-              >
-                <option value="">Select Vendor...</option>
-                {vendorsList.map(v => (
-                  <option key={v.vendor_profile_id || v.vendor_id} value={v.vendor_profile_id || v.vendor_id}>
-                    {v.vendor_name || v.vendor_trade_name}
-                  </option>
-                ))}
-              </select>
+              <label className="block text-xs font-semibold text-slate-600 mb-1">Party (Auto-selected from Bill)</label>
+              <input
+                type="text"
+                value={(() => {
+                  const selectedBill = unpaidBills.find(item =>
+                    String(item.purchase_invoice_id) === String(paymentForm.selected_invoice_id)
+                  );
+                  const party = vendorsList.find(v =>
+                    [
+                      v.party_id,
+                      v.vendor_profile_id,
+                      v.vendor_id,
+                      v.existing_vendor_id
+                    ].some(id => String(id) === String(paymentForm.vendor_id))
+                  );
+                  return selectedBill?.vendor_trade_name ||
+                    party?.party_name ||
+                    party?.vendor_name ||
+                    party?.vendor_trade_name ||
+                    'No party selected';
+                })()}
+                readOnly
+                className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm bg-slate-50 text-slate-700"
+              />
             </div>
 
             <div>
-              <label className="block text-xs font-semibold text-slate-600 mb-1">Select Pending Invoice *</label>
-              <select
-                value={paymentForm.selected_invoice_id}
-                onChange={(e) => {
-                  const bill = unpaidBills.find(item => String(item.purchase_invoice_id) === e.target.value);
-                  setPaymentForm(prev => ({
-                    ...prev,
-                    selected_invoice_id: e.target.value,
-                    amount: bill ? String(parseFloat(bill.outstanding_amount || 0)) : '',
-                    invoices_to_settle: bill ? [{
-                      purchase_invoice_id: bill.purchase_invoice_id,
-                      amount: parseFloat(bill.outstanding_amount || 0)
-                    }] : []
-                  }));
-                }}
-                className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm bg-slate-50 focus:bg-white focus:outline-none"
-                required
-              >
-                <option value="">Select invoice...</option>
-                {unpaidBills.map(bill => (
-                  <option key={bill.purchase_invoice_id} value={bill.purchase_invoice_id}>
-                    {bill.supplier_invoice_number} - Pending ₹{parseFloat(bill.outstanding_amount || 0).toFixed(2)}
-                  </option>
-                ))}
-              </select>
+              <label className="block text-xs font-semibold text-slate-600 mb-1">Pending Invoice (Auto-selected)</label>
+              <input
+                type="text"
+                value={(() => {
+                  const bill = unpaidBills.find(item =>
+                    String(item.purchase_invoice_id) === String(paymentForm.selected_invoice_id)
+                  );
+                  return bill
+                    ? `${bill.supplier_invoice_number} - Pending ₹${parseFloat(bill.outstanding_amount || 0).toFixed(2)}`
+                    : 'No pending invoice';
+                })()}
+                readOnly
+                className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm bg-slate-50 text-slate-700"
+              />
             </div>
 
             <div>
