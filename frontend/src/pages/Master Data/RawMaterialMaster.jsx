@@ -4,7 +4,8 @@ import {
   rawMaterials as rawMaterialsApi, 
   vendors as vendorsApi,
   branches as branchesApi, 
-  companies as companiesApi 
+  companies as companiesApi,
+  hsn as hsnApi
 } from '../../services/api';
 import toast from 'react-hot-toast';
 import { 
@@ -108,6 +109,9 @@ const RawMaterialMaster = () => {
   const [showEditModal, setShowEditModal] = useState(false);
   const [showDetailsModal, setShowDetailsModal] = useState(false);
   const [activeMaterial, setActiveMaterial] = useState(null);
+  const [hsnList, setHsnList] = useState([]);
+  const [showHsnAdd, setShowHsnAdd] = useState(false);
+  const [showHsnEdit, setShowHsnEdit] = useState(false);
 
   // Forms
   const initialForm = {
@@ -148,6 +152,82 @@ const RawMaterialMaster = () => {
   useEffect(() => {
     fetchMaterials();
   }, [selectedCompanyId, selectedBranchId]);
+
+  useEffect(() => {
+    const fetchHsnDataset = async () => {
+      try {
+        const response = await hsnApi.getAll({ type: 'GOODS', limit: 250 });
+        setHsnList(response.data?.data || []);
+      } catch (error) {
+        console.error('Failed to load HSN dataset:', error);
+      }
+    };
+    fetchHsnDataset();
+  }, []);
+
+  const handleHsnChange = async (code, isEdit = false) => {
+    const cleanCode = code.trim();
+    if (isEdit) {
+      setEditFormData(prev => ({ ...prev, hsn_code: code }));
+      setShowHsnEdit(true);
+    } else {
+      setFormData(prev => ({ ...prev, hsn_code: code }));
+      setShowHsnAdd(true);
+    }
+    if (!cleanCode) return;
+
+    let matched = hsnList.find(item =>
+      item.hsn_code.toLowerCase() === cleanCode.toLowerCase()
+    );
+    if (!matched && cleanCode.length >= 2) {
+      try {
+        const response = await hsnApi.getByCode(cleanCode);
+        matched = response.data?.data || null;
+      } catch (error) {
+        // Continue while the user is typing.
+      }
+    }
+    if (matched) {
+      if (isEdit) {
+        setEditFormData(prev => ({
+          ...prev,
+          hsn_code: matched.hsn_code,
+          category: matched.category,
+          gst_rate: String(matched.gst_rate)
+        }));
+      } else {
+        setFormData(prev => ({
+          ...prev,
+          hsn_code: matched.hsn_code,
+          category: matched.category,
+          gst_rate: String(matched.gst_rate)
+        }));
+      }
+      setShowHsnAdd(false);
+      setShowHsnEdit(false);
+      toast.success(`Matched HSN ${matched.hsn_code}: Category and GST rate updated`);
+    }
+  };
+
+  const selectHsnItem = (item, isEdit = false) => {
+    if (isEdit) {
+      setEditFormData(prev => ({
+        ...prev,
+        hsn_code: item.hsn_code,
+        category: item.category,
+        gst_rate: String(item.gst_rate)
+      }));
+      setShowHsnEdit(false);
+    } else {
+      setFormData(prev => ({
+        ...prev,
+        hsn_code: item.hsn_code,
+        category: item.category,
+        gst_rate: String(item.gst_rate)
+      }));
+      setShowHsnAdd(false);
+    }
+  };
 
   // Sync Branch Admin
   useEffect(() => {
@@ -800,13 +880,42 @@ const RawMaterialMaster = () => {
                   <label className="block font-semibold text-slate-700 mb-1">
                     HSN / Tariff Code
                   </label>
-                  <input
-                    type="text"
-                    placeholder="e.g. 7209"
-                    value={formData.hsn_code}
-                    onChange={(e) => setFormData({ ...formData, hsn_code: e.target.value })}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-slate-800 font-mono focus:bg-white focus:ring-2 focus:ring-blue-500 outline-none"
-                  />
+                  <div className="relative">
+                    <input
+                      type="text"
+                      placeholder="Type or select HSN code (e.g. 7209)"
+                      value={formData.hsn_code}
+                      onChange={(e) => handleHsnChange(e.target.value, false)}
+                      onFocus={() => setShowHsnAdd(true)}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-slate-800 font-mono font-bold focus:bg-white focus:ring-2 focus:ring-blue-500 outline-none"
+                    />
+                    {showHsnAdd && (
+                      <div className="absolute left-0 right-0 top-full mt-1 max-h-56 overflow-y-auto divide-y divide-slate-100 rounded-xl border border-slate-200 bg-white shadow-xl z-30">
+                        <div className="sticky top-0 flex items-center justify-between bg-slate-50 p-2 text-[11px] font-semibold text-slate-500">
+                          <span>Select HSN (Auto-sets Category & GST)</span>
+                          <button type="button" onClick={() => setShowHsnAdd(false)} className="text-slate-400 hover:text-slate-700"><X size={12} /></button>
+                        </div>
+                        {hsnList
+                          .filter(item => {
+                            const search = formData.hsn_code.toLowerCase();
+                            return !search || item.hsn_code.toLowerCase().includes(search) ||
+                              item.description?.toLowerCase().includes(search) ||
+                              item.category?.toLowerCase().includes(search);
+                          })
+                          .slice(0, 30)
+                          .map(item => (
+                            <div key={item.hsn_code} onClick={() => selectHsnItem(item, false)} className="cursor-pointer p-2.5 hover:bg-blue-50/70">
+                              <div className="flex items-center justify-between">
+                                <span className="font-mono text-xs font-bold text-blue-700">{item.hsn_code}</span>
+                                <span className="rounded border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-[10px] font-bold text-emerald-700">{item.gst_rate}% GST</span>
+                              </div>
+                              <div className="mt-0.5 text-[11px] font-bold text-slate-800">{item.category}</div>
+                              <div className="line-clamp-1 text-[10px] text-slate-500">{item.description}</div>
+                            </div>
+                          ))}
+                      </div>
+                    )}
+                  </div>
                 </div>
 
                 <div>
@@ -993,12 +1102,42 @@ const RawMaterialMaster = () => {
 
                 <div>
                   <label className="block font-semibold text-slate-700 mb-1">HSN Code</label>
-                  <input
-                    type="text"
-                    value={editFormData.hsn_code}
-                    onChange={(e) => setEditFormData({ ...editFormData, hsn_code: e.target.value })}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-slate-800 font-mono focus:bg-white focus:ring-2 focus:ring-amber-500 outline-none"
-                  />
+                  <div className="relative">
+                    <input
+                      type="text"
+                      placeholder="Type or select HSN code"
+                      value={editFormData.hsn_code}
+                      onChange={(e) => handleHsnChange(e.target.value, true)}
+                      onFocus={() => setShowHsnEdit(true)}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-slate-800 font-mono font-bold focus:bg-white focus:ring-2 focus:ring-amber-500 outline-none"
+                    />
+                    {showHsnEdit && (
+                      <div className="absolute left-0 right-0 top-full mt-1 max-h-56 overflow-y-auto divide-y divide-slate-100 rounded-xl border border-slate-200 bg-white shadow-xl z-30">
+                        <div className="sticky top-0 flex items-center justify-between bg-slate-50 p-2 text-[11px] font-semibold text-slate-500">
+                          <span>Select HSN (Auto-sets Category & GST)</span>
+                          <button type="button" onClick={() => setShowHsnEdit(false)} className="text-slate-400 hover:text-slate-700"><X size={12} /></button>
+                        </div>
+                        {hsnList
+                          .filter(item => {
+                            const search = (editFormData.hsn_code || '').toLowerCase();
+                            return !search || item.hsn_code.toLowerCase().includes(search) ||
+                              item.description?.toLowerCase().includes(search) ||
+                              item.category?.toLowerCase().includes(search);
+                          })
+                          .slice(0, 30)
+                          .map(item => (
+                            <div key={item.hsn_code} onClick={() => selectHsnItem(item, true)} className="cursor-pointer p-2.5 hover:bg-amber-50/70">
+                              <div className="flex items-center justify-between">
+                                <span className="font-mono text-xs font-bold text-blue-700">{item.hsn_code}</span>
+                                <span className="rounded border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-[10px] font-bold text-emerald-700">{item.gst_rate}% GST</span>
+                              </div>
+                              <div className="mt-0.5 text-[11px] font-bold text-slate-800">{item.category}</div>
+                              <div className="line-clamp-1 text-[10px] text-slate-500">{item.description}</div>
+                            </div>
+                          ))}
+                      </div>
+                    )}
+                  </div>
                 </div>
 
                 <div>
