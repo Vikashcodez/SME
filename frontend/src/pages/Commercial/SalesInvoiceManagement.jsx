@@ -5,7 +5,8 @@ import {
   customers as customersApi,
   products as productsApi,
   services as servicesApi,
-  taxes as taxApi
+  taxes as taxApi,
+  parties as partyApi
 } from '../../services/api';
 import toast from 'react-hot-toast';
 import {
@@ -91,7 +92,7 @@ const SalesInvoiceManagement = () => {
     if (!companyId) return;
     try {
       const [cRes, pRes, sRes, qRes, tRes] = await Promise.all([
-        customersApi.getAll({ company_id: companyId, status: true }),
+        partyApi.getAll({ company_id: companyId, role: 'CUSTOMER' }),
         productsApi.getAll({ company_id: companyId }),
         servicesApi.getAll({ company_id: companyId, status: 'Active' }),
         salesApi.getQuotations({ company_id: companyId }),

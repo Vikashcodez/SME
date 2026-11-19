@@ -829,6 +829,39 @@ export const initAccountingSchema = async (dbPool) => {
             );
             CREATE INDEX IF NOT EXISTS idx_audit_entity ON accounting_audit_logs(entity_name, entity_id);
 
+            CREATE TABLE IF NOT EXISTS party_master (
+                party_id BIGSERIAL PRIMARY KEY,
+                company_id BIGINT NOT NULL REFERENCES companies(company_id) ON DELETE CASCADE,
+                branch_id BIGINT REFERENCES branches(branch_id) ON DELETE SET NULL,
+                party_code VARCHAR(50) NOT NULL,
+                party_name VARCHAR(200) NOT NULL,
+                party_type VARCHAR(20) NOT NULL CHECK (party_type IN ('CUSTOMER', 'SUPPLIER', 'BOTH')),
+                gstin VARCHAR(30),
+                pan VARCHAR(30),
+                email VARCHAR(150),
+                phone VARCHAR(25),
+                address_line1 TEXT,
+                address_line2 TEXT,
+                city VARCHAR(100),
+                state_code VARCHAR(50),
+                postal_code VARCHAR(30),
+                country VARCHAR(50) NOT NULL DEFAULT 'India',
+                payment_terms VARCHAR(100),
+                credit_limit NUMERIC(16, 2) NOT NULL DEFAULT 0,
+                credit_period_days INTEGER NOT NULL DEFAULT 0,
+                opening_balance NUMERIC(16, 4) NOT NULL DEFAULT 0,
+                opening_balance_type VARCHAR(2) NOT NULL DEFAULT 'DR' CHECK (opening_balance_type IN ('DR', 'CR')),
+                customer_profile_id BIGINT,
+                vendor_profile_id BIGINT,
+                customer_ledger_id BIGINT,
+                supplier_ledger_id BIGINT,
+                is_active BOOLEAN NOT NULL DEFAULT TRUE,
+                created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                CONSTRAINT uq_party_master_code UNIQUE (company_id, party_code)
+            );
+            CREATE INDEX IF NOT EXISTS idx_party_master_company_type ON party_master(company_id, party_type, is_active);
+
             CREATE TABLE IF NOT EXISTS tax_master (
                 tax_id BIGSERIAL PRIMARY KEY,
                 company_id BIGINT NOT NULL REFERENCES companies(company_id) ON DELETE CASCADE,

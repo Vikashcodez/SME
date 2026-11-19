@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useAuth } from '../../context/AuthContext';
-import { purchases as purchaseApi, rawMaterials as rawMaterialApi, vendors as vendorsApi, taxes as taxApi } from '../../services/api';
+import { purchases as purchaseApi, rawMaterials as rawMaterialApi, vendors as vendorsApi, taxes as taxApi, parties as partyApi } from '../../services/api';
 import toast from 'react-hot-toast';
 import {
   FileText,
@@ -89,7 +89,7 @@ const PurchaseInvoiceManagement = () => {
     if (!companyId) return;
     try {
       const [vRes, rmRes, grnRes, tRes] = await Promise.all([
-        vendorsApi.getAll({ company_id: companyId, is_active: true }),
+        partyApi.getAll({ company_id: companyId, role: 'SUPPLIER' }),
         rawMaterialApi.getAll({ company_id: companyId }),
         purchaseApi.getPendingGrns({ company_id: companyId }),
         taxApi.getAll({ company_id: companyId })

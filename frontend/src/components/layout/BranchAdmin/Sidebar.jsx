@@ -46,7 +46,7 @@ const Sidebar = ({ isCollapsed, onToggleCollapse }) => {
     {
       label: 'Procurement & Suppliers',
       items: [
-        { path: '/branch/vendors', label: 'Supplier / Vendor Records' },
+        { path: '/branch/party-master', label: 'Party Master' },
         { path: '/branch-dashboard#purchase-tracking', label: 'Purchase Tracking' },
       ]
     },
@@ -61,7 +61,6 @@ const Sidebar = ({ isCollapsed, onToggleCollapse }) => {
     {
       label: 'Sales & Customers',
       items: [
-        { path: '/branch/customers', label: 'Customer Master' },
         { path: '/branch/quotations-orders', label: 'Quotations' },
         { path: '/branch/services', label: 'Service Master' },
       ]

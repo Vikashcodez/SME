@@ -17,7 +17,6 @@ import EmployeeDashboard from './pages/EmployeeDashboard';
 import RolesMaster from './pages/Master Data/RolesMaster';
 import DepartmentsMaster from './pages/Master Data/DepartmentsMaster';
 import Employees from './pages/Master Data/Employees';
-import VendorMaster from './pages/Master Data/VendorMaster';
 import RawMaterialMaster from './pages/Master Data/RawMaterialMaster';
 import ProductMaster from './pages/Master Data/ProductMaster';
 import ServiceMaster from './pages/Master Data/ServiceMaster';
@@ -30,7 +29,6 @@ import ProductionOrderManagement from './pages/Inventory/ProductionOrderManageme
 import QualityCheckManagement from './pages/Inventory/QualityCheckManagement';
 import ReworkManagement from './pages/Inventory/ReworkManagement';
 import FinishedGoodsInventory from './pages/Inventory/FinishedGoodsInventory';
-import CustomerMaster from './pages/Master Data/CustomerMaster';
 import ChartOfAccounts from './pages/Commercial/ChartOfAccounts';
 import SalesInvoiceManagement from './pages/Commercial/SalesInvoiceManagement';
 import ReceiptManagement from './pages/Commercial/ReceiptManagement';
@@ -44,6 +42,7 @@ import ManufacturingJournal from './pages/Commercial/ManufacturingJournal';
 import Compliance from './pages/Commercial/Compliance';
 import LedgerManagement from './pages/Commercial/LedgerManagement';
 import TaxMaster from './pages/Master Data/TaxMaster';
+import PartyMaster from './pages/Master Data/PartyMaster';
 
 const AppContent = () => {
   const { isAuthenticated, isSuperAdmin, isCompanyAdmin, isBranchAdmin, isEmployee } = useAuth();
@@ -110,6 +109,17 @@ const AppContent = () => {
       />
 
       <Route
+        path="/party-master"
+        element={
+          <ProtectedRoute requiredRole="company_admin">
+            <CompanyAdminLayout>
+              <PartyMaster />
+            </CompanyAdminLayout>
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
         path="/compliance"
         element={
           <ProtectedRoute requiredRole="company_admin">
@@ -159,17 +169,6 @@ const AppContent = () => {
           <ProtectedRoute requiredRole="company_admin">
             <CompanyAdminLayout>
               <Employees />
-            </CompanyAdminLayout>
-          </ProtectedRoute>
-        }
-      />
-
-      <Route
-        path="/vendors"
-        element={
-          <ProtectedRoute requiredRole="company_admin">
-            <CompanyAdminLayout>
-              <VendorMaster />
             </CompanyAdminLayout>
           </ProtectedRoute>
         }
@@ -302,17 +301,6 @@ const AppContent = () => {
           <ProtectedRoute requiredRole="company_admin">
             <CompanyAdminLayout>
               <FinishedGoodsInventory />
-            </CompanyAdminLayout>
-          </ProtectedRoute>
-        }
-      />
-
-      <Route
-        path="/customers"
-        element={
-          <ProtectedRoute requiredRole="company_admin">
-            <CompanyAdminLayout>
-              <CustomerMaster />
             </CompanyAdminLayout>
           </ProtectedRoute>
         }
@@ -474,17 +462,6 @@ const AppContent = () => {
       />
 
       <Route
-        path="/branch/vendors"
-        element={
-          <ProtectedRoute requiredRole="branch_admin">
-            <BranchAdminLayout>
-              <VendorMaster />
-            </BranchAdminLayout>
-          </ProtectedRoute>
-        }
-      />
-
-      <Route
         path="/branch/raw-materials"
         element={
           <ProtectedRoute requiredRole="branch_admin">
@@ -617,17 +594,6 @@ const AppContent = () => {
       />
 
       <Route
-        path="/branch/customers"
-        element={
-          <ProtectedRoute requiredRole="branch_admin">
-            <BranchAdminLayout>
-              <CustomerMaster />
-            </BranchAdminLayout>
-          </ProtectedRoute>
-        }
-      />
-
-      <Route
         path="/branch/chart-of-accounts"
         element={
           <ProtectedRoute requiredRole="branch_admin">
@@ -655,6 +621,17 @@ const AppContent = () => {
           <ProtectedRoute requiredRole="branch_admin">
             <BranchAdminLayout>
               <TaxMaster />
+            </BranchAdminLayout>
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/branch/party-master"
+        element={
+          <ProtectedRoute requiredRole="branch_admin">
+            <BranchAdminLayout>
+              <PartyMaster />
             </BranchAdminLayout>
           </ProtectedRoute>
         }

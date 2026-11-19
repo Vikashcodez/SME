@@ -346,4 +346,9 @@ export const taxes = {
   remove: (taxId, params) => api.delete(`/taxes/${taxId}`, { params }),
 };
 
+export const parties = {
+  getAll: (params) => api.get('/parties', { params }),
+  create: (data) => api.post('/parties', data),
+};
+
 export default api;
