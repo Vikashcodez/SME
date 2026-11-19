@@ -207,8 +207,18 @@ const ChartOfAccounts = () => {
   const totals = useMemo(() => {
     const totalLedgers = data.ledgers.length;
     const totalGroups = data.groups.length;
-    const assetBal = data.ledgers.filter(l => l.nature === 'ASSET').reduce((acc, l) => acc + parseFloat(l.current_balance || 0), 0);
-    const liabBal = data.ledgers.filter(l => l.nature === 'LIABILITY').reduce((acc, l) => acc + parseFloat(l.current_balance || 0), 0);
+    const assetBal = data.ledgers.reduce((acc, l) => {
+      const balance = parseFloat(l.current_balance || 0);
+      const isInputTax = String(l.ledger_code || '').startsWith('LED-TAX-IN-');
+      if (l.nature === 'ASSET' || isInputTax) return acc + balance;
+      return acc;
+    }, 0);
+    const liabBal = data.ledgers.reduce((acc, l) => {
+      const balance = parseFloat(l.current_balance || 0);
+      const isInputTax = String(l.ledger_code || '').startsWith('LED-TAX-IN-');
+      if (l.nature === 'LIABILITY' && !isInputTax) return acc + (l.current_balance_type === 'CR' ? balance : 0);
+      return acc;
+    }, 0);
     return { totalLedgers, totalGroups, assetBal, liabBal };
   }, [data]);
 

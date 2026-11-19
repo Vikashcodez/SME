@@ -174,9 +174,10 @@ export const createPurchaseInvoice = async (req, res) => {
 
         // 1. Fetch Vendor & Accounting Ledger
         let vendorRes = await client.query(`
-            SELECT vp.*, l.ledger_id, l.ledger_name 
+            SELECT vp.*, l.ledger_id, l.ledger_name, ag.group_code, ag.nature
             FROM vendor_profiles vp
             JOIN ledgers l ON vp.ledger_id = l.ledger_id
+            JOIN account_groups ag ON ag.group_id = l.group_id
             WHERE (vp.vendor_profile_id = $1 OR vp.existing_vendor_id = $1) AND vp.company_id = $2
         `, [vendor_id, companyId]);
 
@@ -195,10 +196,12 @@ export const createPurchaseInvoice = async (req, res) => {
             let led = await client.query(`SELECT ledger_id FROM ledgers WHERE company_id = $1 AND ledger_code = $2`, [companyId, v.vendor_code]);
             let ledId;
             if (led.rows.length === 0) {
+                const supplierLedgerName = `${v.vendor_name.trim()} (Supplier)`;
+                const supplierLedgerCode = `${v.vendor_code}-SUP`;
                 const newL = await client.query(`
                     INSERT INTO ledgers (company_id, group_id, ledger_name, ledger_code, opening_balance_type, current_balance_type, maintain_bill_by_bill)
                     VALUES ($1, $2, $3, $4, 'CR', 'CR', TRUE) RETURNING ledger_id
-                `, [companyId, gid, v.vendor_name, v.vendor_code]);
+                `, [companyId, gid, supplierLedgerName, supplierLedgerCode]);
                 ledId = newL.rows[0].ledger_id;
             } else {
                 ledId = led.rows[0].ledger_id;
@@ -209,6 +212,52 @@ export const createPurchaseInvoice = async (req, res) => {
             `, [companyId, ledId, v.vendor_id, v.vendor_code, v.vendor_name, v.gstin, v.pan, v.address || 'Address', v.city || 'City', v.state || '27', v.pincode || '400001']);
             vendorProfile = newVp.rows[0];
             vendorProfile.ledger_id = ledId;
+        }
+
+        // Repair legacy Party Master records that linked a supplier to the
+        // Sundry Debtors ledger because customer and supplier shared one code.
+        if (vendorProfile.ledger_id && vendorProfile.group_code !== 'GRP-CREDITORS' && vendorProfile.group_code !== 'SUNDRY_CREDITORS') {
+            const vendorId = vendorProfile.existing_vendor_id;
+            const vendorRow = await client.query(
+                `SELECT vendor_code, vendor_name FROM vendors WHERE vendor_id = $1 AND company_id = $2`,
+                [vendorId, companyId]
+            );
+            const legacyVendorCode = vendorRow.rows[0]?.vendor_code || `VND-${companyId}-${Date.now()}`;
+            const supplierLedgerCode = `${legacyVendorCode}-SUP`;
+            const supplierLedgerName = `${vendorRow.rows[0]?.vendor_name || legacyVendorCode} (Supplier)`;
+            const creditorGroup = await client.query(
+                `SELECT group_id FROM account_groups WHERE company_id = $1 AND group_code = 'GRP-CREDITORS' LIMIT 1`,
+                [companyId]
+            );
+            let creditorGroupId = creditorGroup.rows[0]?.group_id;
+            if (!creditorGroupId) {
+                const createdGroup = await client.query(`
+                    INSERT INTO account_groups (company_id, group_name, group_code, nature, affects_gross_profit, is_system_group)
+                    VALUES ($1, 'Sundry Creditors', 'GRP-CREDITORS', 'LIABILITY', FALSE, TRUE)
+                    ON CONFLICT (company_id, group_code) DO UPDATE SET group_name = EXCLUDED.group_name
+                    RETURNING group_id
+                `, [companyId]);
+                creditorGroupId = createdGroup.rows[0].group_id;
+            }
+            const supplierLedger = await client.query(`
+                INSERT INTO ledgers (
+                    company_id, group_id, ledger_name, ledger_code,
+                    opening_balance_type, current_balance_type, maintain_bill_by_bill, is_active
+                ) VALUES ($1,$2,$3,$4,'CR','CR',TRUE,TRUE)
+                ON CONFLICT (company_id, ledger_code) DO UPDATE SET
+                    ledger_name = EXCLUDED.ledger_name,
+                    group_id = EXCLUDED.group_id
+                RETURNING ledger_id
+            `, [companyId, creditorGroupId, supplierLedgerName, supplierLedgerCode]);
+            vendorProfile.ledger_id = supplierLedger.rows[0].ledger_id;
+            await client.query(
+                `UPDATE vendor_profiles SET ledger_id = $1 WHERE vendor_profile_id = $2 AND company_id = $3`,
+                [supplierLedger.rows[0].ledger_id, vendorProfile.vendor_profile_id, companyId]
+            );
+            await client.query(
+                `UPDATE party_master SET supplier_ledger_id = $1 WHERE vendor_profile_id = $2 AND company_id = $3`,
+                [supplierLedger.rows[0].ledger_id, vendorProfile.vendor_profile_id, companyId]
+            );
         }
 
         // 2. Fetch Company GST State

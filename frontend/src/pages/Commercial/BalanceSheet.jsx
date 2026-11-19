@@ -341,6 +341,22 @@ const BalanceSheet = () => {
                     </div>
                   ))}
                 </div>
+
+                {/* Other Current Assets / Input Tax */}
+                {parseFloat(assets?.current_assets?.other_assets?.total || 0) > 0 && (
+                  <div className="py-2 pl-3 border-t border-slate-100">
+                    <div className="flex justify-between text-sm font-semibold text-slate-700">
+                      <span>Other Current Assets / Input Tax</span>
+                      <span className="font-mono">₹{parseFloat(assets?.current_assets?.other_assets?.total || 0).toFixed(2)}</span>
+                    </div>
+                    {assets?.current_assets?.other_assets?.ledgers?.map(l => (
+                      <div key={l.ledger_id} className="flex justify-between text-xs text-slate-500 pl-3 py-0.5">
+                        <span>• {l.ledger_name}</span>
+                        <span className="font-mono">₹{parseFloat(l.amount).toFixed(2)}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
           </div>

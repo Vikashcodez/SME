@@ -20,11 +20,22 @@ export const resolveTaxRates = async (client, companyId, taxRate) => {
     }
 
     const tax = result.rows[0];
-    return {
-        total: Number(tax.total_rate),
-        cgst: Number(tax.cgst_rate),
-        sgst: Number(tax.sgst_rate),
-        igst: Number(tax.igst_rate),
-        cess: Number(tax.cess_rate)
-    };
+    const total = Number(tax.total_rate);
+    let cgst = Number(tax.cgst_rate);
+    let sgst = Number(tax.sgst_rate);
+    let igst = Number(tax.igst_rate);
+    const cess = Number(tax.cess_rate);
+
+    // GST split must never exceed the total tax rate. This also repairs
+    // legacy/custom master rows that contain 18% CGST + 18% SGST for GST 18.
+    if (total > 0) {
+        const validIntraSplit = cgst > 0 && sgst > 0 && Math.abs(cgst + sgst - total) < 0.001;
+        if (!validIntraSplit) {
+            cgst = +(total / 2).toFixed(3);
+            sgst = +(total / 2).toFixed(3);
+        }
+        if (!(igst > 0) || igst > total) igst = total;
+    }
+
+    return { total, cgst, sgst, igst, cess };
 };

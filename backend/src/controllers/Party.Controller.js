@@ -163,6 +163,10 @@ export const createParty = async (req, res) => {
 
         if (party_type === 'SUPPLIER' || party_type === 'BOTH') {
             const creditorGroupId = await resolveGroup(client, companyId, 'GRP-CREDITORS', 'Sundry Creditors', 'LIABILITY');
+            const supplierLedgerCode = party_type === 'BOTH' ? `${code}-SUP` : code;
+            const supplierLedgerName = party_type === 'BOTH'
+                ? `${party_name.trim()} (Supplier)`
+                : party_name.trim();
             const supplierLedger = await client.query(`
                 INSERT INTO ledgers (
                     company_id, group_id, ledger_name, ledger_code, opening_balance,
@@ -171,7 +175,7 @@ export const createParty = async (req, res) => {
                 ) VALUES ($1,$2,$3,$4,$5,'CR',$5,'CR',TRUE,TRUE)
                 ON CONFLICT (company_id, ledger_code) DO UPDATE SET ledger_name = EXCLUDED.ledger_name
                 RETURNING ledger_id
-            `, [companyId, creditorGroupId, party_name.trim(), code, balance]);
+            `, [companyId, creditorGroupId, supplierLedgerName, supplierLedgerCode, balance]);
             supplierLedgerId = supplierLedger.rows[0].ledger_id;
 
             const vendor = await client.query(`
@@ -329,7 +333,7 @@ export const updateParty = async (req, res) => {
                 UPDATE ledgers SET ledger_name = $1, opening_balance = $2,
                     opening_balance_type = 'CR', updated_at = CURRENT_TIMESTAMP
                 WHERE ledger_id = $3 AND company_id = $4
-            `, [partyName, openingBalance, oldParty.supplier_ledger_id, companyId]);
+            `, [partyType === 'BOTH' ? `${partyName} (Supplier)` : partyName, openingBalance, oldParty.supplier_ledger_id, companyId]);
         }
         if (oldParty.customer_profile_id) {
             await client.query(`

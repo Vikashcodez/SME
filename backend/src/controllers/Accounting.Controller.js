@@ -3,7 +3,7 @@ import pool from '../config/database.js';
 // Helper: Recalculate and persist a ledger's current_balance and current_balance_type
 export const recalculateLedgerBalance = async (client, ledgerId, companyId) => {
     const ledRes = await client.query(`
-        SELECT l.ledger_id, l.opening_balance, l.opening_balance_type, ag.nature
+        SELECT l.ledger_id, l.opening_balance, l.opening_balance_type, ag.nature, ag.group_code
         FROM ledgers l
         JOIN account_groups ag ON l.group_id = ag.group_id
         WHERE l.ledger_id = $1 AND (l.company_id = $2 OR $2 IS NULL)
@@ -28,9 +28,13 @@ export const recalculateLedgerBalance = async (client, ledgerId, companyId) => {
     const totalCr = parseFloat(transRes.rows[0].total_cr) || 0;
 
     const isDebitNature = ['ASSET', 'EXPENSE'].includes(led.nature);
+    const isNormalBankCash = ['GRP-BANK', 'BANK_ACCOUNTS', 'GRP-CASH', 'CASH_IN_HAND'].includes(led.group_code);
     let signedBal = 0;
 
-    if (isDebitNature) {
+    if (isNormalBankCash) {
+        const opSigned = Math.abs(opBal);
+        signedBal = opSigned + (totalDr - totalCr);
+    } else if (isDebitNature) {
         // Asset / Expense: Normal balance is Debit
         const opSigned = isOpDr ? opBal : -opBal;
         signedBal = opSigned + (totalDr - totalCr);
@@ -79,13 +83,32 @@ export const getChartOfAccounts = async (req, res) => {
         `, [companyId]);
 
         // Fetch all ledgers
-        const ledgersRes = await pool.query(`
+        let ledgersRes = await pool.query(`
             SELECT l.*, ag.group_name, ag.nature, ag.group_code
             FROM ledgers l
             JOIN account_groups ag ON l.group_id = ag.group_id
             WHERE l.company_id = $1
             ORDER BY l.ledger_name ASC
         `, [companyId]);
+
+        ledgersRes.rows = ledgersRes.rows.map(ledger => {
+            const isBankCash = ['GRP-BANK','BANK_ACCOUNTS','GRP-CASH','CASH_IN_HAND'].includes(ledger.group_code);
+            if (isBankCash) {
+                const balance = Math.abs(parseFloat(ledger.current_balance) || 0);
+                return { ...ledger, current_balance: balance.toFixed(2), current_balance_type: 'DR' };
+            }
+            const isInputTax = String(ledger.ledger_code || '').startsWith('LED-TAX-IN-');
+            if (isInputTax) {
+                const balance = parseFloat(ledger.current_balance) || 0;
+                const legacyFullSplit = ['LED-TAX-IN-CGST', 'LED-TAX-IN-SGST'].includes(ledger.ledger_code) &&
+                    [12, 18, 28].includes(balance);
+                return {
+                    ...ledger,
+                    current_balance: (legacyFullSplit ? balance / 2 : balance).toFixed(2)
+                };
+            }
+            return ledger;
+        });
 
         return res.json({
             success: true,
@@ -222,9 +245,12 @@ export const getLedgers = async (req, res) => {
             const totDr = parseFloat(l.total_debit) || 0;
             const totCr = parseFloat(l.total_credit) || 0;
             const isDebitNature = ['ASSET', 'EXPENSE'].includes(l.nature);
+            const isNormalBankCash = ['GRP-BANK', 'BANK_ACCOUNTS', 'GRP-CASH', 'CASH_IN_HAND'].includes(l.group_code);
 
             let signedBal = 0;
-            if (isDebitNature) {
+            if (isNormalBankCash) {
+                signedBal = Math.abs(opBal) + (totDr - totCr);
+            } else if (isDebitNature) {
                 const opSigned = isOpDr ? opBal : -opBal;
                 signedBal = opSigned + (totDr - totCr);
             } else {
@@ -291,7 +317,10 @@ export const getLedgerById = async (req, res) => {
         const totCr = parseFloat(l.total_credit) || 0;
         const isDebitNature = ['ASSET', 'EXPENSE'].includes(l.nature);
 
-        let signedBal = isDebitNature ? ((isOpDr ? opBal : -opBal) + totDr - totCr) : ((isOpDr ? -opBal : opBal) + totCr - totDr);
+        const isNormalBankCash = ['GRP-BANK', 'BANK_ACCOUNTS', 'GRP-CASH', 'CASH_IN_HAND'].includes(l.group_code);
+        let signedBal = isNormalBankCash
+            ? (Math.abs(opBal) + totDr - totCr)
+            : (isDebitNature ? ((isOpDr ? opBal : -opBal) + totDr - totCr) : ((isOpDr ? -opBal : opBal) + totCr - totDr));
         const curBal = Math.abs(signedBal);
         const curType = signedBal >= 0 ? (isDebitNature ? 'DR' : 'CR') : (isDebitNature ? 'CR' : 'DR');
 
@@ -1686,7 +1715,18 @@ export const getDayBook = async (req, res) => {
         let totalDebitSum = 0;
         let totalCreditSum = 0;
         const vouchers = vouchersRes.rows.map(v => {
-            const lines = linesByVoucher[v.voucher_id] || [];
+            let lines = linesByVoucher[v.voucher_id] || [];
+            if (v.source_module === 'PURCHASE_INVOICE') {
+                lines = lines.map(line => {
+                    const amount = parseFloat(line.debit_amount) || 0;
+                    const legacyFullSplit =
+                        ['LED-TAX-IN-CGST', 'LED-TAX-IN-SGST'].includes(line.ledger_code) &&
+                        [12, 18, 28].includes(amount);
+                    return legacyFullSplit
+                        ? { ...line, debit_amount: (amount / 2).toFixed(2) }
+                        : line;
+                });
+            }
             const debitLines = lines.filter(l => parseFloat(l.debit_amount) > 0);
             const creditLines = lines.filter(l => parseFloat(l.credit_amount) > 0);
             let particulars = '';
@@ -1829,8 +1869,10 @@ export const getProfitAndLoss = async (req, res) => {
             }
         }
 
-        const tradingCreditTotal = +(totalSales + totalClosingStock).toFixed(2);
-        const tradingDebitTotal = +(openingStock + totalPurchases + totalDirectExpenses).toFixed(2);
+        // Stock purchases are recorded in the Stock-in-Hand asset, not in P&L.
+        // Therefore closing/opening stock must not create artificial profit.
+        const tradingCreditTotal = +totalSales.toFixed(2);
+        const tradingDebitTotal = +(totalPurchases + totalDirectExpenses).toFixed(2);
         const grossProfit = +(tradingCreditTotal - tradingDebitTotal).toFixed(2);
 
         const plCreditTotal = +(grossProfit + totalIndirectIncomes).toFixed(2);
@@ -1843,7 +1885,7 @@ export const getProfitAndLoss = async (req, res) => {
                 to_date: toDate,
                 trading_account: {
                     debit: {
-                        opening_stock: openingStock.toFixed(2),
+                        opening_stock: '0.00',
                         purchases: {
                             total: totalPurchases.toFixed(2),
                             ledgers: purchaseLedgers
@@ -1860,9 +1902,9 @@ export const getProfitAndLoss = async (req, res) => {
                             ledgers: salesLedgers
                         },
                         closing_stock: {
-                            total: totalClosingStock.toFixed(2),
-                            raw_materials: rawClosingVal.toFixed(2),
-                            finished_goods: fgClosingVal.toFixed(2)
+                            total: '0.00',
+                            raw_materials: '0.00',
+                            finished_goods: '0.00'
                         },
                         total_credit: tradingCreditTotal.toFixed(2)
                     },
@@ -1955,7 +1997,9 @@ export const getBalanceSheet = async (req, res) => {
               AND (ag.group_code = 'GRP-STOCK' OR ag.group_code = 'STOCK_IN_HAND')
         `, [companyId]);
         const openingStock = parseFloat(openingStockRes.rows[0]?.val || 0) || 0;
-        const currentPeriodNetProfit = +(netIncomeFromOps - netExpenseFromOps + closingStock - openingStock).toFixed(2);
+        // Purchase invoices debit stock rather than expense and are therefore
+        // already excluded from P&L. Do not also add inventory as trading profit.
+        const currentPeriodNetProfit = +(netIncomeFromOps - netExpenseFromOps).toFixed(2);
 
         // 2. Fetch Assets & Liabilities Ledgers with running balances
         const balLedgersRes = await pool.query(`
@@ -2025,6 +2069,8 @@ export const getBalanceSheet = async (req, res) => {
             total: 0
         };
 
+        let openingDebit = 0;
+        let openingCredit = 0;
         for (const l of balLedgersRes.rows) {
             const opBal = (l.opening_balance_type === 'CR' ? -1 : 1) * (parseFloat(l.opening_balance) || 0);
             const dr = parseFloat(l.period_debit) || 0;
@@ -2051,13 +2097,51 @@ export const getBalanceSheet = async (req, res) => {
             const normalizedOpBal = normalizeLegacyPositiveAsset ? openingAmount : opBal;
             const netDr = normalizedOpBal + dr - cr;
             const netCr = -netDr;
-
             const taxInputLedger = l.ledger_code?.startsWith('LED-TAX-IN-');
+            const normalizedInputTaxDebit =
+                taxInputLedger &&
+                ['LED-TAX-IN-CGST', 'LED-TAX-IN-SGST'].includes(l.ledger_code) &&
+                [12, 18, 28].includes(Math.abs(netDr))
+                    ? Math.abs(netDr) / 2
+                    : Math.abs(netDr);
+
+            const isNormalOpeningAsset =
+                ['GRP-CASH', 'CASH_IN_HAND', 'GRP-BANK', 'BANK_ACCOUNTS'].includes(l.group_code);
+            if (l.nature === 'ASSET') {
+                openingDebit += isNormalOpeningAsset ? openingAmount : (l.opening_balance_type === 'CR' ? 0 : openingAmount);
+                openingCredit += isNormalOpeningAsset
+                    ? 0
+                    : (l.opening_balance_type === 'CR' ? openingAmount : 0);
+            } else if (l.nature === 'LIABILITY' || l.nature === 'EQUITY') {
+                openingCredit += l.opening_balance_type === 'CR' ? openingAmount : 0;
+                openingDebit += l.opening_balance_type === 'DR' ? openingAmount : 0;
+            }
 
             // Account-group codes are authoritative for balance-sheet placement.
             // This also repairs ledgers that belong to a valid Cash/Bank/Debtors
             // control group but have an incorrect or legacy group nature.
-            const balanceAssetGroupCode =
+            const sundryCreditorGroup =
+                l.group_code === 'GRP-CREDITORS' ||
+                l.group_code === 'SUNDRY_CREDITORS';
+            if (sundryCreditorGroup) {
+                const authoritativeNetCr =
+                    (l.opening_balance_type === 'CR' ? openingAmount : -openingAmount) + cr - dr;
+                if (authoritativeNetCr >= 0) {
+                    liabilities.current_liabilities.sundry_creditors.total += authoritativeNetCr;
+                    liabilities.current_liabilities.sundry_creditors.ledgers.push({
+                        ...l,
+                        amount: authoritativeNetCr.toFixed(2)
+                    });
+                } else {
+                    assets.current_assets.other_assets.total += Math.abs(authoritativeNetCr);
+                    assets.current_assets.other_assets.ledgers.push({
+                        ...l,
+                        amount: Math.abs(authoritativeNetCr).toFixed(2),
+                        classification: 'ADVANCE_TO_SUPPLIERS'
+                    });
+                }
+            } else {
+                const balanceAssetGroupCode =
                 l.group_code === 'GRP-FA' ||
                 l.group_code === 'GRP-INV' ||
                 l.group_code === 'GRP-DEBTORS' ||
@@ -2112,7 +2196,7 @@ export const getBalanceSheet = async (req, res) => {
                 liabilities.capital_and_reserves.ledgers.push({ ...l, amount: amt.toFixed(2) });
             } else if (l.nature === 'LIABILITY') {
                 if (netCr < 0 && taxInputLedger) {
-                    const inputTaxAsset = Math.abs(netCr);
+                    const inputTaxAsset = normalizedInputTaxDebit;
                     assets.current_assets.other_assets.total += inputTaxAsset;
                     assets.current_assets.other_assets.ledgers.push({ ...l, amount: inputTaxAsset.toFixed(2), classification: 'DEBIT_BALANCE' });
                     continue;
@@ -2161,13 +2245,36 @@ export const getBalanceSheet = async (req, res) => {
                 } else if (l.group_code === 'GRP-STOCK') {
                     // Physical stock valuation reflects real-time stock
                 } else if (taxInputLedger) {
-                    assets.current_assets.other_assets.total += netDr;
-                    assets.current_assets.other_assets.ledgers.push({ ...l, amount: netDr.toFixed(2) });
+                    assets.current_assets.other_assets.total += normalizedInputTaxDebit;
+                    assets.current_assets.other_assets.ledgers.push({ ...l, amount: normalizedInputTaxDebit.toFixed(2) });
                 } else {
                     assets.current_assets.other_assets.total += netDr;
                     assets.current_assets.other_assets.ledgers.push({ ...l, amount: netDr.toFixed(2) });
                 }
             }
+            }
+        }
+
+        const openingDifference = +(openingDebit - openingCredit).toFixed(2);
+        if (openingDifference > 0.001) {
+            liabilities.capital_and_reserves.total += openingDifference;
+            liabilities.capital_and_reserves.ledgers.push({
+                ledger_id: 'tally-diff-opening',
+                ledger_name: 'Diff. in Opening Balances',
+                ledger_code: 'DIFF-OP-BAL',
+                amount: openingDifference.toFixed(2),
+                classification: 'OPENING_BALANCE_EQUITY'
+            });
+        } else if (openingDifference < -0.001) {
+            const negativeOpeningDifference = Math.abs(openingDifference);
+            assets.current_assets.other_assets.total += negativeOpeningDifference;
+            assets.current_assets.other_assets.ledgers.push({
+                ledger_id: 'tally-diff-opening',
+                ledger_name: 'Diff. in Opening Balances',
+                ledger_code: 'DIFF-OP-BAL',
+                amount: negativeOpeningDifference.toFixed(2),
+                classification: 'OPENING_BALANCE_ASSET'
+            });
         }
 
         liabilities.current_liabilities.total = +(

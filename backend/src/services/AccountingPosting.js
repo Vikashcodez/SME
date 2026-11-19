@@ -52,7 +52,9 @@ const resolveLedger = async (client, companyId, code, name, groupCode, normalSid
 
 export const applyLedgerBalance = async (client, companyId, ledgerId, debit, credit) => {
     const result = await client.query(`
-        SELECT l.current_balance, l.current_balance_type, ag.nature
+        SELECT l.opening_balance, l.opening_balance_type,
+               l.current_balance, l.current_balance_type, ag.nature, ag.group_code,
+               NULL::VARCHAR AS account_type
         FROM ledgers l
         JOIN account_groups ag ON ag.group_id = l.group_id
         WHERE l.ledger_id = $1 AND l.company_id = $2
@@ -62,7 +64,12 @@ export const applyLedgerBalance = async (client, companyId, ledgerId, debit, cre
 
     const ledger = result.rows[0];
     const debitNature = ['ASSET', 'EXPENSE'].includes(ledger.nature);
-    const signed = debitNature
+    const isNormalBankCash =
+        ['GRP-BANK', 'BANK_ACCOUNTS', 'GRP-CASH', 'CASH_IN_HAND'].includes(ledger.group_code) &&
+        !['OVERDRAFT', 'CASH_CREDIT'].includes(ledger.account_type);
+    const signed = isNormalBankCash
+        ? Math.abs(Number(ledger.current_balance)) + debit - credit
+        : debitNature
         ? (ledger.current_balance_type === 'DR' ? Number(ledger.current_balance) : -Number(ledger.current_balance)) + debit - credit
         : (ledger.current_balance_type === 'CR' ? Number(ledger.current_balance) : -Number(ledger.current_balance)) + credit - debit;
     const balance = Math.abs(signed);
