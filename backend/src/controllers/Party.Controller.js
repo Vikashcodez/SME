@@ -239,3 +239,159 @@ export const createParty = async (req, res) => {
         client.release();
     }
 };
+
+export const getPartyById = async (req, res) => {
+    try {
+        const companyId = companyIdOf(req);
+        const result = await pool.query(
+            `SELECT * FROM party_master WHERE party_id = $1 AND company_id = $2`,
+            [req.params.party_id, companyId]
+        );
+        if (!result.rows.length) return res.status(404).json({ success: false, message: 'Party not found.' });
+        return res.json({ success: true, data: result.rows[0] });
+    } catch (error) {
+        return res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+export const updateParty = async (req, res) => {
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        const companyId = companyIdOf(req);
+        const current = await client.query(
+            `SELECT * FROM party_master WHERE party_id = $1 AND company_id = $2`,
+            [req.params.party_id, companyId]
+        );
+        if (!current.rows.length) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({ success: false, message: 'Party not found.' });
+        }
+
+        const oldParty = current.rows[0];
+        const body = req.body;
+        const partyName = String(body.party_name || oldParty.party_name).trim();
+        const partyType = body.party_type || oldParty.party_type;
+        if (!partyName || !['CUSTOMER', 'SUPPLIER', 'BOTH'].includes(partyType)) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({ success: false, message: 'A valid party name and type are required.' });
+        }
+
+        const normalizedGstin = body.gstin !== undefined
+            ? String(body.gstin).replace(/[^a-zA-Z0-9]/g, '').toUpperCase().slice(0, 15)
+            : String(oldParty.gstin || '');
+        if (normalizedGstin && normalizedGstin.length !== 15) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({ success: false, message: 'GSTIN must contain exactly 15 characters.' });
+        }
+        const normalizedPan = normalizedGstin.length >= 12
+            ? normalizedGstin.substring(2, 12)
+            : String(body.pan !== undefined ? body.pan : oldParty.pan || '').replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
+        const normalizedStateCode = normalizedGstin.length >= 2
+            ? normalizedGstin.substring(0, 2)
+            : String(body.state_code ?? oldParty.state_code ?? '27');
+        const openingBalance = Math.max(0, Number(body.opening_balance ?? oldParty.opening_balance) || 0);
+        const openingType = (body.opening_balance_type || oldParty.opening_balance_type) === 'CR' ? 'CR' : 'DR';
+
+        await client.query(`
+            UPDATE party_master SET
+                party_name = $1, party_type = $2, gstin = $3, pan = $4,
+                email = $5, phone = $6, address_line1 = $7, address_line2 = $8,
+                city = $9, state_code = $10, postal_code = $11, country = $12,
+                payment_terms = $13, credit_limit = $14, credit_period_days = $15,
+                opening_balance = $16, opening_balance_type = $17, updated_at = CURRENT_TIMESTAMP
+            WHERE party_id = $18 AND company_id = $19
+            RETURNING *
+        `, [
+            partyName, partyType, normalizedGstin || null, normalizedPan || null,
+            body.email ?? oldParty.email, body.phone ?? oldParty.phone,
+            body.address_line1 ?? oldParty.address_line1, body.address_line2 ?? oldParty.address_line2,
+            body.city ?? oldParty.city, normalizedStateCode, body.postal_code ?? oldParty.postal_code,
+            body.country ?? oldParty.country, body.payment_terms ?? oldParty.payment_terms,
+            Number(body.credit_limit ?? oldParty.credit_limit) || 0,
+            Number(body.credit_period_days ?? oldParty.credit_period_days) || 0,
+            openingBalance, openingType, req.params.party_id, companyId
+        ]);
+
+        if (oldParty.customer_ledger_id) {
+            await client.query(`
+                UPDATE ledgers SET ledger_name = $1, opening_balance = $2,
+                    opening_balance_type = $3, credit_limit = $4,
+                    default_credit_period_days = $5, updated_at = CURRENT_TIMESTAMP
+                WHERE ledger_id = $6 AND company_id = $7
+            `, [partyName, openingBalance, openingType,
+                Number(body.credit_limit ?? oldParty.credit_limit) || 0,
+                Number(body.credit_period_days ?? oldParty.credit_period_days) || 0,
+                oldParty.customer_ledger_id, companyId]);
+        }
+        if (oldParty.supplier_ledger_id) {
+            await client.query(`
+                UPDATE ledgers SET ledger_name = $1, opening_balance = $2,
+                    opening_balance_type = 'CR', updated_at = CURRENT_TIMESTAMP
+                WHERE ledger_id = $3 AND company_id = $4
+            `, [partyName, openingBalance, oldParty.supplier_ledger_id, companyId]);
+        }
+        if (oldParty.customer_profile_id) {
+            await client.query(`
+                UPDATE customer_profiles SET trade_name = $1, legal_name = $1,
+                    gstin = $2, pan = $3, email = $4, phone = $5,
+                    billing_address_line1 = COALESCE($6, billing_address_line1),
+                    billing_address_line2 = $7, billing_city = COALESCE($8, billing_city),
+                    billing_state_code = $9, billing_postal_code = COALESCE($10, billing_postal_code),
+                    shipping_address_line1 = COALESCE($6, shipping_address_line1),
+                    shipping_address_line2 = $7, shipping_city = COALESCE($8, shipping_city),
+                    shipping_state_code = $9, shipping_postal_code = COALESCE($10, shipping_postal_code),
+                    is_active = TRUE, updated_at = CURRENT_TIMESTAMP
+                WHERE customer_id = $11 AND company_id = $12
+            `, [
+                partyName, normalizedGstin || null, normalizedPan || null,
+                body.email ?? oldParty.email, body.phone ?? oldParty.phone,
+                body.address_line1 ?? oldParty.address_line1, body.address_line2 ?? oldParty.address_line2,
+                body.city ?? oldParty.city, normalizedStateCode, body.postal_code ?? oldParty.postal_code,
+                oldParty.customer_profile_id, companyId
+            ]);
+        }
+        if (oldParty.vendor_profile_id) {
+            await client.query(`
+                UPDATE vendor_profiles SET vendor_trade_name = $1, vendor_legal_name = $1,
+                    gstin = $2, pan = $3, address_line1 = COALESCE($4, address_line1),
+                    address_line2 = $5, city = COALESCE($6, city), state_code = $7,
+                    postal_code = COALESCE($8, postal_code), country = $9,
+                    is_active = TRUE, updated_at = CURRENT_TIMESTAMP
+                WHERE vendor_profile_id = $10 AND company_id = $11
+            `, [
+                partyName, normalizedGstin || null, normalizedPan || null,
+                body.address_line1 ?? oldParty.address_line1, body.address_line2 ?? oldParty.address_line2,
+                body.city ?? oldParty.city, normalizedStateCode, body.postal_code ?? oldParty.postal_code,
+                body.country ?? oldParty.country, oldParty.vendor_profile_id, companyId
+            ]);
+        }
+
+        await client.query('COMMIT');
+        const updated = await pool.query(`SELECT * FROM party_master WHERE party_id = $1 AND company_id = $2`, [req.params.party_id, companyId]);
+        return res.json({ success: true, data: updated.rows[0] });
+    } catch (error) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ success: false, message: error.message });
+    } finally {
+        client.release();
+    }
+};
+
+export const deleteParty = async (req, res) => {
+    try {
+        const companyId = companyIdOf(req);
+        const party = await pool.query(
+            `SELECT is_active FROM party_master WHERE party_id = $1 AND company_id = $2`,
+            [req.params.party_id, companyId]
+        );
+        if (!party.rows.length) return res.status(404).json({ success: false, message: 'Party not found.' });
+        await pool.query(
+            `UPDATE party_master SET is_active = FALSE, updated_at = CURRENT_TIMESTAMP WHERE party_id = $1 AND company_id = $2`,
+            [req.params.party_id, companyId]
+        );
+        return res.json({ success: true, message: 'Party deactivated.' });
+    } catch (error) {
+        return res.status(400).json({ success: false, message: error.message });
+    }
+};

@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
-import { Plus, RefreshCw, Users, Truck, UserRound } from 'lucide-react';
+import { Plus, RefreshCw, Users, UserRound, Eye, Edit3, Trash2, X } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { parties as partyApi } from '../../services/api';
 
@@ -34,6 +34,8 @@ const PartyMaster = () => {
   const [typeFilter, setTypeFilter] = useState('ALL');
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [editingPartyId, setEditingPartyId] = useState(null);
+  const [viewParty, setViewParty] = useState(null);
 
   const load = async () => {
     if (!user?.company_id) return;
@@ -71,10 +73,16 @@ const PartyMaster = () => {
     if (!form.party_name.trim()) return toast.error('Party name is required');
     setSaving(true);
     try {
-      await partyApi.create({ ...form, company_id: user.company_id });
-      toast.success('Party created for the selected transaction types');
+      if (editingPartyId) {
+        await partyApi.update(editingPartyId, { ...form, company_id: user.company_id });
+        toast.success('Party updated successfully');
+      } else {
+        await partyApi.create({ ...form, company_id: user.company_id });
+        toast.success('Party created for the selected transaction types');
+      }
       setForm(emptyForm);
       setShowForm(false);
+      setEditingPartyId(null);
       load();
     } catch (error) {
       toast.error(error.response?.data?.message || 'Unable to create party');
@@ -87,6 +95,57 @@ const PartyMaster = () => {
     () => typeFilter === 'ALL' ? parties : parties.filter(party => party.party_type === typeFilter),
     [parties, typeFilter]
   );
+
+  const openCreate = () => {
+    setEditingPartyId(null);
+    setForm(emptyForm);
+    setShowForm(true);
+  };
+
+  const openEdit = (party) => {
+    setEditingPartyId(party.party_id);
+    setForm({
+      party_code: party.party_code || '',
+      party_name: party.party_name || '',
+      party_type: party.party_type || 'BOTH',
+      gstin: party.gstin || '',
+      pan: party.pan || '',
+      email: party.email || '',
+      phone: party.phone || '',
+      address_line1: party.address_line1 || '',
+      address_line2: party.address_line2 || '',
+      city: party.city || '',
+      state_code: party.state_code || '27',
+      postal_code: party.postal_code || '',
+      country: party.country || 'India',
+      payment_terms: party.payment_terms || 'Net 30',
+      credit_limit: party.credit_limit || 0,
+      credit_period_days: party.credit_period_days || 30,
+      opening_balance: party.opening_balance || 0,
+      opening_balance_type: party.opening_balance_type || 'DR'
+    });
+    setShowForm(true);
+  };
+
+  const viewDetails = async (party) => {
+    try {
+      const response = await partyApi.getById(party.party_id, { company_id: user.company_id });
+      setViewParty(response.data.data || party);
+    } catch (error) {
+      toast.error(error.response?.data?.message || 'Unable to load party details');
+    }
+  };
+
+  const deactivateParty = async (party) => {
+    if (!window.confirm(`Deactivate ${party.party_name}?`)) return;
+    try {
+      await partyApi.remove(party.party_id, { company_id: user.company_id });
+      toast.success('Party deactivated');
+      load();
+    } catch (error) {
+      toast.error(error.response?.data?.message || 'Unable to deactivate party');
+    }
+  };
 
   const inputClass = 'mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm';
 
@@ -103,15 +162,15 @@ const PartyMaster = () => {
           </div>
           <div className="flex gap-2">
             <button onClick={load} className="rounded-lg border border-slate-200 p-2 text-slate-500"><RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} /></button>
-            <button onClick={() => setShowForm(true)} className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-bold text-white"><Plus className="h-4 w-4" /> Add Party</button>
+            <button onClick={openCreate} className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-bold text-white"><Plus className="h-4 w-4" /> Add Party</button>
           </div>
         </header>
 
         {showForm && (
           <form onSubmit={submit} className="rounded-xl border border-slate-200 bg-white p-5">
             <div className="mb-4 flex items-center justify-between">
-              <h2 className="font-bold">New Party</h2>
-              <button type="button" onClick={() => setShowForm(false)} className="text-xs font-bold text-slate-500">Close</button>
+              <h2 className="font-bold">{editingPartyId ? 'Edit Party' : 'New Party'}</h2>
+              <button type="button" onClick={() => { setShowForm(false); setEditingPartyId(null); }} className="text-xs font-bold text-slate-500">Close</button>
             </div>
             <div className="grid gap-3 md:grid-cols-4">
               <label className="text-xs font-semibold text-slate-600">Party Type
@@ -182,7 +241,7 @@ const PartyMaster = () => {
                 <input type="number" min="0" value={form.credit_period_days} onChange={e => setForm({ ...form, credit_period_days: e.target.value })} className={inputClass} />
               </label>
             </div>
-            <button disabled={saving} className="mt-4 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-50">{saving ? 'Saving...' : 'Save Party'}</button>
+            <button disabled={saving} className="mt-4 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-50">{saving ? 'Saving...' : editingPartyId ? 'Update Party' : 'Save Party'}</button>
           </form>
         )}
 
@@ -196,7 +255,7 @@ const PartyMaster = () => {
 
           <div className="overflow-x-auto">
             <table className="w-full text-left text-sm">
-              <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr><th className="px-4 py-3">Party</th><th className="px-4 py-3">Type</th><th className="px-4 py-3">GSTIN</th><th className="px-4 py-3">City</th><th className="px-4 py-3 text-right">Opening</th></tr></thead>
+              <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr><th className="px-4 py-3">Party</th><th className="px-4 py-3">Type</th><th className="px-4 py-3">GSTIN</th><th className="px-4 py-3">City</th><th className="px-4 py-3 text-right">Opening</th><th className="px-4 py-3 text-right">Actions</th></tr></thead>
               <tbody className="divide-y divide-slate-100">
                 {visibleParties.map(party => (
                   <tr key={party.party_id}>
@@ -205,14 +264,61 @@ const PartyMaster = () => {
                     <td className="px-4 py-3">{party.gstin || '-'}</td>
                     <td className="px-4 py-3">{party.city || '-'}</td>
                     <td className="px-4 py-3 text-right font-mono">{party.opening_balance} {party.opening_balance_type}</td>
+                    <td className="px-4 py-3">
+                      <div className="flex justify-end gap-1">
+                        <button type="button" onClick={() => viewDetails(party)} title="View party" className="rounded p-1.5 text-slate-500 hover:bg-slate-100"><Eye className="h-4 w-4" /></button>
+                        <button type="button" onClick={() => openEdit(party)} title="Edit party" className="rounded p-1.5 text-indigo-600 hover:bg-indigo-50"><Edit3 className="h-4 w-4" /></button>
+                        <button type="button" onClick={() => deactivateParty(party)} title="Deactivate party" className="rounded p-1.5 text-rose-500 hover:bg-rose-50"><Trash2 className="h-4 w-4" /></button>
+                      </div>
+                    </td>
                   </tr>
                 ))}
-                {!visibleParties.length && <tr><td colSpan="5" className="px-4 py-10 text-center text-slate-400">No parties found.</td></tr>}
+                {!visibleParties.length && <tr><td colSpan="6" className="px-4 py-10 text-center text-slate-400">No parties found.</td></tr>}
               </tbody>
             </table>
           </div>
         </section>
       </div>
+
+      {viewParty && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4" onMouseDown={() => setViewParty(null)}>
+          <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl bg-white shadow-2xl" onMouseDown={event => event.stopPropagation()}>
+            <header className="flex items-center justify-between border-b border-slate-100 px-6 py-4">
+              <div>
+                <h2 className="text-lg font-bold text-slate-900">{viewParty.party_name}</h2>
+                <p className="text-xs text-slate-500">{viewParty.party_code}</p>
+              </div>
+              <button type="button" onClick={() => setViewParty(null)} className="rounded-lg p-2 text-slate-400 hover:bg-slate-100"><X className="h-5 w-5" /></button>
+            </header>
+            <div className="grid gap-4 p-6 sm:grid-cols-2">
+              {[
+                ['Party Type', viewParty.party_type],
+                ['GSTIN', viewParty.gstin || '-'],
+                ['PAN', viewParty.pan || '-'],
+                ['Phone', viewParty.phone || '-'],
+                ['Email', viewParty.email || '-'],
+                ['Payment Terms', viewParty.payment_terms || '-'],
+                ['Address', [viewParty.address_line1, viewParty.address_line2].filter(Boolean).join(', ') || '-'],
+                ['City', viewParty.city || '-'],
+                ['State Code', viewParty.state_code || '-'],
+                ['PIN Code', viewParty.postal_code || '-'],
+                ['Country', viewParty.country || '-'],
+                ['Credit Limit', `₹${Number(viewParty.credit_limit || 0).toLocaleString('en-IN')}`],
+                ['Credit Period', `${viewParty.credit_period_days || 0} days`],
+                ['Opening Balance', `${viewParty.opening_balance || 0} ${viewParty.opening_balance_type || 'DR'}`]
+              ].map(([label, value]) => (
+                <div key={label} className="rounded-lg border border-slate-100 bg-slate-50 p-3">
+                  <div className="text-[10px] font-bold uppercase tracking-wide text-slate-400">{label}</div>
+                  <div className="mt-1 text-sm font-semibold text-slate-800">{value}</div>
+                </div>
+              ))}
+            </div>
+            <footer className="flex justify-end border-t border-slate-100 px-6 py-4">
+              <button type="button" onClick={() => { setViewParty(null); openEdit(viewParty); }} className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-bold text-white"><Edit3 className="h-4 w-4" /> Edit Party</button>
+            </footer>
+          </div>
+        </div>
+      )}
     </main>
   );
 };
