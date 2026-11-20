@@ -51,6 +51,7 @@ const SERVICE_IMPORT_COLUMNS = [
   { key: 'cost_estimate', label: 'Estimated Cost (₹)', required: false, example: 400 },
   { key: 'sac_code', label: 'SAC Code', required: false, example: '9988' },
   { key: 'gst_rate', label: 'GST Rate (%)', required: false, example: 18 },
+  { key: 'photo_1', label: 'Service Image', required: false, type: 'image', example: '', description: 'Click to upload image or paste URL' },
   { key: 'service_duration_hours', label: 'Standard Duration (Hrs)', required: false, example: 2 },
   { key: 'service_description', label: 'Description', required: false, example: 'High precision 4-axis milling service for steel castings' },
   { key: 'branch', label: 'Branch Name or Code', required: false, example: 'Main Plant' }

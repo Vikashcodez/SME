@@ -549,6 +549,7 @@ export const bulkImportServices = async (req, res) => {
             const description = (row.service_description || row.description || '').trim() || null;
             const terms = (row.terms_and_conditions || row.terms || '').trim() || null;
             const status = (row.status || 'Active').trim();
+            const photo1 = (row.photo_1 || row.photo || row.image || row.image_url || '').trim() || null;
 
             const resolvedBranchId = await resolveBranchId(client, effectiveCompanyId, row.branch || row.branch_id || defaultBranchId) || defaultBranchId;
 
@@ -565,12 +566,13 @@ export const bulkImportServices = async (req, res) => {
                         cost_estimate = $6, cost_price = $6, sac_code = $7, hsn_code = $7,
                         gst_rate = $8, service_description = $9, service_duration_hours = $10,
                         terms_and_conditions = $11, status = $12, branch_id = COALESCE($13, branch_id),
-                        updated_by = $14, updated_at = CURRENT_TIMESTAMP
-                    WHERE service_id = $15
+                        photo_1 = COALESCE($14, photo_1),
+                        updated_by = $15, updated_at = CURRENT_TIMESTAMP
+                    WHERE service_id = $16
                 `, [
                     serviceName, category, billingType, uom, serviceCharge,
                     costEstimate, sacCode, gstRate, description, duration,
-                    terms, status, resolvedBranchId, performedBy, existing.rows[0].service_id
+                    terms, status, resolvedBranchId, photo1, performedBy, existing.rows[0].service_id
                 ]);
                 updatedCount++;
             } else {
@@ -580,20 +582,20 @@ export const bulkImportServices = async (req, res) => {
                         billing_type, unit_of_measure, service_charge, selling_price,
                         cost_estimate, cost_price, sac_code, hsn_code, gst_rate,
                         service_description, service_duration_hours, terms_and_conditions,
-                        status, is_active, created_by, updated_by
+                        photo_1, status, is_active, created_by, updated_by
                     ) VALUES (
                         $1, $2, $3, $4, $5,
                         $6, $7, $8, $8,
                         $9, $9, $10, $10, $11,
                         $12, $13, $14,
-                        $15, TRUE, $16, $16
+                        $15, $16, TRUE, $17, $17
                     )
                 `, [
                     effectiveCompanyId, resolvedBranchId, serviceCode, serviceName, category,
                     billingType, uom, serviceCharge,
                     costEstimate, sacCode, gstRate,
                     description, duration, terms,
-                    status, performedBy
+                    photo1, status, performedBy
                 ]);
                 insertedCount++;
             }

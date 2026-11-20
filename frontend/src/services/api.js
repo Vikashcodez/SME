@@ -154,6 +154,9 @@ export const products = {
   getAll: (params) => api.get('/products', { params }),
   getById: (id) => api.get(`/products/${id}`),
   bulkImport: (data) => api.post('/products/bulk-import', data),
+  uploadImage: (formData) => api.post('/products/upload-image', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' }
+  }),
   create: (data) => {
     if (data instanceof FormData) {
       return api.post('/products', data, {
@@ -367,5 +370,9 @@ export const parties = {
   update: (partyId, data) => api.put(`/parties/${partyId}`, data),
   remove: (partyId, params) => api.delete(`/parties/${partyId}`, { params }),
 };
+
+export const uploadMedia = (formData) => api.post('/products/upload-image', formData, {
+  headers: { 'Content-Type': 'multipart/form-data' }
+});
 
 export default api;

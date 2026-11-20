@@ -752,22 +752,24 @@ export const bulkImportProducts = async (req, res) => {
                 rawCode = `PRD-${Math.floor(1000 + Math.random() * 9000)}`;
             }
 
+            const photo1 = (row.photo_1 || row.photo || row.image || row.image_url || '').toString().trim() || null;
+
             const insertQuery = `
                 INSERT INTO products (
                     company_id, branch_id, product_code, product_name, category,
                     unit_of_measure, selling_price, cost_price, hsn_code, gst_rate,
-                    product_specification, min_stock_level,
+                    product_specification, photo_1, min_stock_level,
                     production_time_days, production_time_hours, production_time_minutes,
                     production_time_value, production_time_unit, workforce_required,
                     status, is_active, created_by, updated_by
                 ) VALUES (
                     $1, $2, $3, $4, $5,
                     $6, $7, $8, $9, $10,
-                    $11, $12,
-                    $13, $14, $15,
-                    $16, 'Minutes', $17,
-                    'Active', true, $18, $18
-                ) RETURNING product_id, product_code, product_name, selling_price
+                    $11, $12, $13,
+                    $14, $15, $16,
+                    $17, 'Minutes', $18,
+                    'Active', true, $19, $19
+                ) RETURNING product_id, product_code, product_name, selling_price, photo_1
             `;
 
             const result = await client.query(insertQuery, [
@@ -782,6 +784,7 @@ export const bulkImportProducts = async (req, res) => {
                 hsn,
                 gstRate,
                 spec,
+                photo1,
                 minStock,
                 finalDays,
                 finalHours,

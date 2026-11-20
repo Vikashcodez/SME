@@ -68,6 +68,7 @@ const PRODUCT_IMPORT_COLUMNS = [
   { key: 'cost_price', label: 'Cost Price', required: false, type: 'number', sample: 950 },
   { key: 'hsn_code', label: 'HSN Code', required: false, sample: '84818030' },
   { key: 'gst_rate', label: 'GST Rate (%)', required: false, type: 'number', default: 18, sample: 18 },
+  { key: 'photo_1', label: 'Product Photo / Image', required: false, type: 'image', sample: '', description: 'Click to upload image or paste URL' },
   { key: 'min_stock_level', label: 'Min Stock Level', required: false, type: 'number', default: 0, sample: 10 },
   { key: 'production_time_days', label: 'Prod. Days', required: false, type: 'number', default: 0, sample: 0 },
   { key: 'production_time_hours', label: 'Prod. Hours', required: false, type: 'number', default: 0, sample: 3 },
