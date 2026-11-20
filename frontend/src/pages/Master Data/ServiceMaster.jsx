@@ -36,8 +36,56 @@ import {
   ShieldCheck,
   Percent,
   CheckCircle2,
-  AlertCircle
+  AlertCircle,
+  FileSpreadsheet
 } from 'lucide-react';
+import ExcelImportModal from '../../components/ExcelImportModal';
+
+const SERVICE_IMPORT_COLUMNS = [
+  { key: 'service_name', label: 'Service Name', required: true, example: 'CNC Precision Milling Job Work' },
+  { key: 'service_code', label: 'Service Code', required: false, example: 'SRV-CNC-01' },
+  { key: 'category', label: 'Service Category', required: false, example: 'Fabrication & Machining Services' },
+  { key: 'billing_type', label: 'Billing Type', required: false, example: 'Per Hour' },
+  { key: 'unit_of_measure', label: 'UOM', required: false, example: 'HRS' },
+  { key: 'service_charge', label: 'Service Charge / Price (₹)', required: true, example: 850 },
+  { key: 'cost_estimate', label: 'Estimated Cost (₹)', required: false, example: 400 },
+  { key: 'sac_code', label: 'SAC Code', required: false, example: '9988' },
+  { key: 'gst_rate', label: 'GST Rate (%)', required: false, example: 18 },
+  { key: 'service_duration_hours', label: 'Standard Duration (Hrs)', required: false, example: 2 },
+  { key: 'service_description', label: 'Description', required: false, example: 'High precision 4-axis milling service for steel castings' },
+  { key: 'branch', label: 'Branch Name or Code', required: false, example: 'Main Plant' }
+];
+
+const SERVICE_IMPORT_SAMPLES = [
+  {
+    'Service Name': 'CNC Precision Milling Job Work',
+    'Service Code': 'SRV-CNC-01',
+    'Service Category': 'Fabrication & Machining Services',
+    'Billing Type': 'Per Hour',
+    'UOM': 'HRS',
+    'Service Charge / Price (₹)': 850,
+    'Estimated Cost (₹)': 400,
+    'SAC Code': '9988',
+    'GST Rate (%)': 18,
+    'Standard Duration (Hrs)': 2,
+    'Description': 'High precision 4-axis milling service for steel castings',
+    'Branch Name or Code': 'Main Plant'
+  },
+  {
+    'Service Name': 'Annual Maintenance Contract - Boiler Units',
+    'Service Code': 'SRV-AMC-02',
+    'Service Category': 'Maintenance & AMC',
+    'Billing Type': 'Fixed Package',
+    'UOM': 'ANN',
+    'Service Charge / Price (₹)': 45000,
+    'Estimated Cost (₹)': 15000,
+    'SAC Code': '9987',
+    'GST Rate (%)': 18,
+    'Standard Duration (Hrs)': 40,
+    'Description': 'Comprehensive quarterly preventive maintenance and breakdown coverage',
+    'Branch Name or Code': 'Main Plant'
+  }
+];
 
 const API_BASE_URL = import.meta.env.VITE_API_URL ? import.meta.env.VITE_API_URL.replace('/api', '') : 'http://localhost:5000';
 
@@ -103,9 +151,30 @@ const ServiceMaster = () => {
 
   // Modals
   const [showAddModal, setShowAddModal] = useState(false);
+  const [showImportModal, setShowImportModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [showDetailsModal, setShowDetailsModal] = useState(false);
   const [activeService, setActiveService] = useState(null);
+
+  const handleBulkImportServices = async (rows) => {
+    const payload = {
+      items: rows,
+      company_id: selectedCompanyId || user?.company_id,
+      branch_id: selectedBranchId || user?.branch_id
+    };
+    const res = await servicesApi.bulkImport(payload);
+    if (res?.data?.success) {
+      await fetchServices();
+      return {
+        success: true,
+        message: res.data.message || `Successfully imported ${rows.length} services!`
+      };
+    }
+    return {
+      success: false,
+      message: res?.data?.message || 'Failed to import services.'
+    };
+  };
 
   // Active form modal tab: 'basic' | 'pricing' | 'sla'
   const [activeModalTab, setActiveModalTab] = useState('basic');
@@ -460,6 +529,15 @@ const ServiceMaster = () => {
           </button>
 
           <button
+            type="button"
+            onClick={() => setShowImportModal(true)}
+            className="px-3.5 py-2 bg-emerald-50 border border-emerald-200 hover:bg-emerald-100 text-emerald-700 text-xs font-semibold rounded-lg shadow-xs flex items-center gap-1.5 transition-all cursor-pointer"
+          >
+            <FileSpreadsheet size={15} className="text-emerald-600" />
+            <span>Import Data</span>
+          </button>
+
+          <button
             onClick={handleOpenAddModal}
             className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-lg shadow-md flex items-center gap-1.5 transition-all"
           >
@@ -621,6 +699,15 @@ const ServiceMaster = () => {
           <p className="text-xs text-slate-500 max-w-sm mx-auto mt-1 mb-4">
             No service records matching your search or filters. Click below to add your first service.
           </p>
+          <button
+            type="button"
+            onClick={() => setShowImportModal(true)}
+            className="px-3.5 py-2 bg-emerald-50 border border-emerald-200 hover:bg-emerald-100 text-emerald-700 text-xs font-semibold rounded-lg shadow-xs flex items-center gap-1.5 transition-all cursor-pointer"
+          >
+            <FileSpreadsheet size={15} className="text-emerald-600" />
+            <span>Import Data</span>
+          </button>
+
           <button
             onClick={handleOpenAddModal}
             className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-lg shadow-sm inline-flex items-center gap-1.5"
@@ -1717,6 +1804,17 @@ const ServiceMaster = () => {
           </div>
         </div>
       )}
+      {/* Excel Import Modal */}
+      <ExcelImportModal
+        isOpen={showImportModal}
+        onClose={() => setShowImportModal(false)}
+        title="Import Services"
+        moduleName="Services Master"
+        columns={SERVICE_IMPORT_COLUMNS}
+        sampleData={SERVICE_IMPORT_SAMPLES}
+        onImport={handleBulkImportServices}
+      />
+
     </div>
   );
 };

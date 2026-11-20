@@ -6,7 +6,8 @@ import {
     updateRawMaterial,
     softDeleteRawMaterial,
     restoreRawMaterial,
-    getRawMaterialCategories
+    getRawMaterialCategories,
+    bulkImportRawMaterials
 } from '../controllers/RawMaterial.Controller.js';
 import { authenticate } from '../middleware/auth.js';
 
@@ -16,6 +17,7 @@ router.use(authenticate);
 
 router.get('/categories', getRawMaterialCategories);
 router.get('/', getAllRawMaterials);
+router.post('/bulk-import', bulkImportRawMaterials);
 router.post('/', createRawMaterial);
 router.get('/:material_id', getRawMaterialById);
 router.put('/:material_id', updateRawMaterial);

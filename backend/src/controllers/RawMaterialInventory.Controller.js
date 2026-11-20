@@ -1,4 +1,5 @@
 import pool from '../config/database.js';
+import { resolveBranchId, resolveRawMaterialId, resolveVendorId } from '../services/ForeignKeyResolver.js';
 
 // 1. Get Live Inventory Overview by branch/company
 export const getInventoryOverview = async (req, res) => {
@@ -909,5 +910,140 @@ export const getInventoryBatches = async (req, res) => {
             message: 'Failed to fetch inventory batches',
             error: error.message
         });
+    }
+};
+
+// Bulk Import Raw Material Inventory / Stock Openings from Excel / CSV
+export const bulkImportInventory = async (req, res) => {
+    const client = await pool.connect();
+    try {
+        const { items, company_id, branch_id } = req.body;
+        const effectiveCompanyId = company_id || req.user?.company_id;
+        const defaultBranchId = branch_id || req.user?.branch_id || null;
+        const performedBy = req.user?.employee_id || null;
+
+        if (!effectiveCompanyId) {
+            return res.status(400).json({ success: false, message: 'Company ID is required.' });
+        }
+
+        if (!Array.isArray(items) || items.length === 0) {
+            return res.status(400).json({ success: false, message: 'No inventory items provided for import.' });
+        }
+
+        await client.query('BEGIN');
+
+        let insertedCount = 0;
+        let updatedCount = 0;
+        const errors = [];
+
+        for (let i = 0; i < items.length; i++) {
+            const row = items[i];
+            const rowNum = i + 1;
+
+            const rawMaterialIdent = row.raw_material || row.material || row.material_code || row.material_name || row.material_id;
+            if (!rawMaterialIdent) {
+                errors.push(`Row ${rowNum}: Raw Material is required.`);
+                continue;
+            }
+
+            const resolvedMaterialId = await resolveRawMaterialId(client, effectiveCompanyId, rawMaterialIdent);
+            if (!resolvedMaterialId) {
+                errors.push(`Row ${rowNum}: Raw Material "${rawMaterialIdent}" could not be resolved.`);
+                continue;
+            }
+
+            const resolvedBranchId = await resolveBranchId(client, effectiveCompanyId, row.branch || row.branch_id || defaultBranchId) || defaultBranchId;
+            if (!resolvedBranchId) {
+                errors.push(`Row ${rowNum}: Valid Branch could not be resolved.`);
+                continue;
+            }
+
+            const resolvedVendorId = await resolveVendorId(client, effectiveCompanyId, row.vendor || row.vendor_name || row.gstin || row.pan || row.vendor_id);
+
+            const qty = parseFloat(row.quantity || row.stock || row.current_stock) || 0;
+            if (qty <= 0) {
+                errors.push(`Row ${rowNum}: Quantity must be greater than 0.`);
+                continue;
+            }
+
+            const unitCost = parseFloat(row.unit_cost || row.cost || row.unit_price) || 0;
+            const warehouseLocation = (row.warehouse_location || row.location || 'Main Storage').trim();
+            const batchNo = (row.batch_number || row.batch_no || `BATCH-${Date.now().toString().slice(-6)}`).trim();
+            const notes = (row.notes || 'Imported via Excel Stock Opening').trim();
+
+            // Look up existing inventory record
+            const invCheck = await client.query(
+                `SELECT inventory_id, current_stock, average_unit_cost FROM raw_material_inventory WHERE branch_id = $1 AND material_id = $2 FOR UPDATE`,
+                [resolvedBranchId, resolvedMaterialId]
+            );
+
+            if (invCheck.rows.length === 0) {
+                const totalVal = qty * unitCost;
+                await client.query(`
+                    INSERT INTO raw_material_inventory (
+                        company_id, branch_id, material_id, warehouse_location,
+                        current_stock, allocated_stock, available_stock,
+                        average_unit_cost, total_value, last_stock_update
+                    ) VALUES ($1, $2, $3, $4, $5, 0, $5, $6, $7, CURRENT_TIMESTAMP)
+                `, [
+                    effectiveCompanyId, resolvedBranchId, resolvedMaterialId,
+                    warehouseLocation, qty, unitCost, totalVal
+                ]);
+                insertedCount++;
+            } else {
+                const curStock = parseFloat(invCheck.rows[0].current_stock) || 0;
+                const curCost = parseFloat(invCheck.rows[0].average_unit_cost) || 0;
+                const newStock = curStock + qty;
+                const newAvgCost = newStock > 0 ? ((curStock * curCost) + (qty * unitCost)) / newStock : unitCost;
+                const newTotalVal = newStock * newAvgCost;
+
+                await client.query(`
+                    UPDATE raw_material_inventory
+                    SET current_stock = $1,
+                        available_stock = $1 - allocated_stock,
+                        average_unit_cost = $2,
+                        total_value = $3,
+                        warehouse_location = COALESCE($4, warehouse_location),
+                        last_stock_update = CURRENT_TIMESTAMP
+                    WHERE branch_id = $5 AND material_id = $6
+                `, [
+                    newStock, newAvgCost, newTotalVal, warehouseLocation,
+                    resolvedBranchId, resolvedMaterialId
+                ]);
+                updatedCount++;
+            }
+
+            // Insert stock movement record
+            await client.query(`
+                INSERT INTO raw_material_stock_movements (
+                    company_id, branch_id, material_id, vendor_id,
+                    movement_type, item_type, quantity, unit_cost, total_cost,
+                    batch_no, notes, performed_by
+                ) VALUES ($1, $2, $3, $4, 'Stock In / GRN', 'Raw Material', $5, $6, $7, $8, $9, $10)
+            `, [
+                effectiveCompanyId, resolvedBranchId, resolvedMaterialId, resolvedVendorId,
+                qty, unitCost, qty * unitCost, batchNo, notes, performedBy
+            ]);
+        }
+
+        if (errors.length > 0 && insertedCount === 0 && updatedCount === 0) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({ success: false, message: 'Import failed.', errors });
+        }
+
+        await client.query('COMMIT');
+        return res.status(200).json({
+            success: true,
+            message: `Successfully processed ${insertedCount + updatedCount} stock entries (${insertedCount} new materials stocked, ${updatedCount} existing updated).`,
+            insertedCount,
+            updatedCount,
+            errors
+        });
+    } catch (error) {
+        await client.query('ROLLBACK');
+        console.error('Error in bulkImportInventory:', error);
+        return res.status(500).json({ success: false, message: 'Internal server error', error: error.message });
+    } finally {
+        client.release();
     }
 };

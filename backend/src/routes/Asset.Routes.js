@@ -1,6 +1,7 @@
 import express from 'express';
 import {
     createAsset,
+    bulkImportAssets,
     getAllAssets,
     getAssetById,
     updateAsset,
@@ -18,6 +19,7 @@ router.use(authenticate);
 
 router.get('/stats/summary', getAssetSummaryStats);
 router.get('/damage-returns', getAllAssetDamageReturns);
+router.post('/bulk-import', bulkImportAssets);
 router.get('/', getAllAssets);
 router.post('/', createAsset);
 router.get('/:asset_id', getAssetById);

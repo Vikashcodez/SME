@@ -1,6 +1,7 @@
 import express from 'express';
 import {
     createService,
+    bulkImportServices,
     getAllServices,
     getServiceById,
     updateService,
@@ -15,6 +16,7 @@ const router = express.Router();
 
 router.use(authenticate);
 
+router.post('/bulk-import', bulkImportServices);
 router.get('/categories', getServiceCategories);
 router.get('/', getAllServices);
 router.get('/:id', getServiceById);

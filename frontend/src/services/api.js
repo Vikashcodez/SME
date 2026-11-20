@@ -54,6 +54,7 @@ export const branches = {
   getAll: (params) => api.get('/branches', { params }),
   getByCompany: (companyId) => api.get('/branches/company', { params: { company_id: companyId } }),
   getById: (id) => api.get(`/branches/${id}`),
+  bulkImport: (data) => api.post('/branches/bulk-import', data),
   create: (data) => api.post('/branches', data),
   update: (id, data) => api.put(`/branches/${id}`, data),
   delete: (id) => api.delete(`/branches/${id}`),
@@ -61,6 +62,7 @@ export const branches = {
 
 export const roles = {
   create: (data) => api.post('/roles/createRole', data),
+  bulkImport: (data) => api.post('/roles/bulk-import', data),
   update: (id, data) => api.put(`/roles/updateRole/${id}`, data),
   getByBranch: (branchId, params) => api.get(`/roles/getRolesByBranch/${branchId}`, { params }),
   getById: (id) => api.get(`/roles/getRoleById/${id}`),
@@ -70,6 +72,7 @@ export const roles = {
 
 export const departments = {
   create: (data) => api.post('/departments', data),
+  bulkImport: (data) => api.post('/departments/bulk-import', data),
   update: (id, data) => api.put(`/departments/${id}`, data),
   getByBranch: (branchId, params) => api.get(`/departments/branch/${branchId}`, { params }),
   getByBranchWithCount: (branchId, params) => api.get(`/departments/branch/${branchId}/with-count`, { params }),
@@ -82,6 +85,7 @@ export const departments = {
 export const employees = {
   getAll: (params) => api.get('/employees', { params }),
   getById: (id) => api.get(`/employees/${id}`),
+  bulkImport: (data) => api.post('/employees/bulk-import', data),
   create: (data) => api.post('/employees', data),
   update: (id, data) => api.put(`/employees/${id}`, data),
   delete: (id) => api.delete(`/employees/${id}`),
@@ -92,6 +96,7 @@ export const employees = {
 export const vendors = {
   getAll: (params) => api.get('/vendors', { params }),
   getById: (id) => api.get(`/vendors/${id}`),
+  bulkImport: (data) => api.post('/vendors/bulk-import', data),
   create: (data) => api.post('/vendors', data),
   update: (id, data) => api.put(`/vendors/${id}`, data),
   delete: (id) => api.delete(`/vendors/${id}`),
@@ -102,6 +107,7 @@ export const vendors = {
 export const rawMaterials = {
   getAll: (params) => api.get('/raw-materials', { params }),
   getById: (id) => api.get(`/raw-materials/${id}`),
+  bulkImport: (data) => api.post('/raw-materials/bulk-import', data),
   create: (data) => api.post('/raw-materials', data),
   update: (id, data) => api.put(`/raw-materials/${id}`, data),
   delete: (id) => api.delete(`/raw-materials/${id}`),
@@ -112,6 +118,7 @@ export const rawMaterials = {
 export const rawMaterialInventory = {
   getOverview: (params) => api.get('/raw-material-inventory', { params }),
   getBatches: (params) => api.get('/raw-material-inventory/batches', { params }),
+  bulkImport: (data) => api.post('/raw-material-inventory/bulk-import', data),
   recordMovement: (data) => {
     if (data instanceof FormData) {
       return api.post('/raw-material-inventory/movement', data, {
@@ -133,6 +140,7 @@ export const rawMaterialInventory = {
 export const assets = {
   getAll: (params) => api.get('/assets', { params }),
   getById: (id) => api.get(`/assets/${id}`),
+  bulkImport: (data) => api.post('/assets/bulk-import', data),
   create: (data) => api.post('/assets', data),
   update: (id, data) => api.put(`/assets/${id}`, data),
   delete: (id) => api.delete(`/assets/${id}`),
@@ -145,6 +153,7 @@ export const assets = {
 export const products = {
   getAll: (params) => api.get('/products', { params }),
   getById: (id) => api.get(`/products/${id}`),
+  bulkImport: (data) => api.post('/products/bulk-import', data),
   create: (data) => {
     if (data instanceof FormData) {
       return api.post('/products', data, {
@@ -169,6 +178,7 @@ export const products = {
 export const services = {
   getAll: (params) => api.get('/services', { params }),
   getById: (id) => api.get(`/services/${id}`),
+  bulkImport: (data) => api.post('/services/bulk-import', data),
   create: (data) => {
     if (data instanceof FormData) {
       return api.post('/services', data, {
@@ -271,6 +281,7 @@ export const productInventory = {
 export const customers = {
   getAll: (params) => api.get('/customers', { params }),
   getById: (id) => api.get(`/customers/${id}`),
+  bulkImport: (data) => api.post('/customers/bulk-import', data),
   create: (data) => api.post('/customers', data),
   update: (id, data) => api.put(`/customers/${id}`, data),
 };
@@ -281,6 +292,7 @@ export const accounting = {
   createGroup: (data) => api.post('/accounting/groups', data),
   getLedgers: (params) => api.get('/accounting/ledgers', { params }),
   getLedgerById: (ledgerId) => api.get(`/accounting/ledgers/${ledgerId}`),
+  bulkImportLedgers: (data) => api.post('/accounting/ledgers/bulk-import', data),
   createLedger: (data) => api.post('/accounting/ledgers', data),
   updateLedger: (ledgerId, data) => api.put(`/accounting/ledgers/${ledgerId}`, data),
   deleteLedger: (ledgerId) => api.delete(`/accounting/ledgers/${ledgerId}`),
@@ -341,6 +353,7 @@ export const compliance = {
 
 export const taxes = {
   getAll: (params) => api.get('/taxes', { params }),
+  bulkImport: (data) => api.post('/taxes/bulk-import', data),
   create: (data) => api.post('/taxes', data),
   update: (taxId, data) => api.put(`/taxes/${taxId}`, data),
   remove: (taxId, params) => api.delete(`/taxes/${taxId}`, { params }),
@@ -350,6 +363,7 @@ export const parties = {
   getAll: (params) => api.get('/parties', { params }),
   getById: (partyId, params) => api.get(`/parties/${partyId}`, { params }),
   create: (data) => api.post('/parties', data),
+  bulkImport: (data) => api.post('/parties/bulk-import', data),
   update: (partyId, data) => api.put(`/parties/${partyId}`, data),
   remove: (partyId, params) => api.delete(`/parties/${partyId}`, { params }),
 };

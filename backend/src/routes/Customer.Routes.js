@@ -1,6 +1,7 @@
 import express from 'express';
 import {
     createCustomer,
+    bulkImportCustomers,
     getCustomers,
     getCustomerById,
     updateCustomer
@@ -11,6 +12,7 @@ const router = express.Router();
 
 router.use(authenticate);
 
+router.post('/bulk-import', bulkImportCustomers);
 router.post('/', createCustomer);
 router.get('/', getCustomers);
 router.get('/:id', getCustomerById);

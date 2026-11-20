@@ -31,8 +31,38 @@ import {
   CheckSquare,
   Square,
   Tag,
-  ShieldCheck
+  ShieldCheck,
+  FileSpreadsheet
 } from 'lucide-react';
+import ExcelImportModal from '../../components/ExcelImportModal';
+
+const DEPARTMENT_IMPORT_COLUMNS = [
+  { key: 'department_name', label: 'Department Name', required: true, example: 'Production & Manufacturing' },
+  { key: 'department_description', label: 'Description', required: false, example: 'Plant assembly lines, tool maintenance and scheduling' },
+  { key: 'branch', label: 'Branch Name or Code', required: false, example: 'Main Plant' },
+  { key: 'is_active', label: 'Is Active (TRUE/FALSE)', required: false, example: 'TRUE' }
+];
+
+const DEPARTMENT_IMPORT_SAMPLES = [
+  {
+    'Department Name': 'Production & Manufacturing',
+    'Description': 'Plant assembly lines, tool maintenance and scheduling',
+    'Branch Name or Code': 'Main Plant',
+    'Is Active (TRUE/FALSE)': 'TRUE'
+  },
+  {
+    'Department Name': 'Quality Assurance & QC',
+    'Description': 'Inward inspection, batch calibration and testing reports',
+    'Branch Name or Code': 'Main Plant',
+    'Is Active (TRUE/FALSE)': 'TRUE'
+  },
+  {
+    'Department Name': 'Stores & Inventory Logistics',
+    'Description': 'Raw material warehouse, bin dispatch and store reconciliation',
+    'Branch Name or Code': 'Main Plant',
+    'Is Active (TRUE/FALSE)': 'TRUE'
+  }
+];
 
 const COMMON_DEPARTMENT_PRESETS = [
   { name: 'Human Resources (HR)', desc: 'Talent acquisition, employee relations, payroll support, and HR policies' },
@@ -74,11 +104,32 @@ const DepartmentsMaster = () => {
 
   // Modals state
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [showImportModal, setShowImportModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [showDetailsModal, setShowDetailsModal] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [showBulkDeleteModal, setShowBulkDeleteModal] = useState(false);
   const [activeDepartment, setActiveDepartment] = useState(null);
+
+  const handleBulkImportDepartments = async (rows) => {
+    const payload = {
+      items: rows,
+      company_id: selectedCompanyId || user?.company_id,
+      branch_id: selectedBranchId || user?.branch_id
+    };
+    const res = await departmentsApi.bulkImport(payload);
+    if (res?.data?.success) {
+      if (selectedBranchId) await fetchDepartments(selectedBranchId);
+      return {
+        success: true,
+        message: res.data.message || `Successfully imported ${rows.length} departments!`
+      };
+    }
+    return {
+      success: false,
+      message: res?.data?.message || 'Failed to import departments.'
+    };
+  };
 
   // Form states
   const [formData, setFormData] = useState({
@@ -464,6 +515,16 @@ const DepartmentsMaster = () => {
                 <span>Deactivate ({selectedIds.length})</span>
               </button>
             )}
+
+            <button
+              type="button"
+              onClick={() => setShowImportModal(true)}
+              disabled={!selectedBranchId}
+              className="px-3.5 py-2 bg-emerald-50 border border-emerald-200 hover:bg-emerald-100 text-emerald-700 rounded-lg text-sm font-semibold flex items-center gap-2 transition-all shadow-xs disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+            >
+              <FileSpreadsheet size={16} className="text-emerald-600" />
+              <span>Import Data</span>
+            </button>
 
             <button
               onClick={openCreateModal}
@@ -1391,6 +1452,17 @@ const DepartmentsMaster = () => {
           </div>
         </div>
       )}
+
+      {/* Excel Import Modal */}
+      <ExcelImportModal
+        isOpen={showImportModal}
+        onClose={() => setShowImportModal(false)}
+        title="Import Departments"
+        moduleName="Departments Master"
+        columns={DEPARTMENT_IMPORT_COLUMNS}
+        sampleData={DEPARTMENT_IMPORT_SAMPLES}
+        onImport={handleBulkImportDepartments}
+      />
 
     </div>
   );

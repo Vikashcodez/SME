@@ -1,4 +1,5 @@
 import pool from '../config/database.js';
+import { resolveVendorId } from '../services/ForeignKeyResolver.js';
 
 // Helper to generate a unique material code if none provided
 const generateMaterialCode = async (companyId) => {
@@ -516,5 +517,125 @@ export const getRawMaterialCategories = async (req, res) => {
             message: 'Internal server error',
             error: error.message
         });
+    }
+};
+
+// 8. Bulk Import Raw Materials with Smart Foreign Key Resolution (Vendor PAN, GST, Name, Code)
+export const bulkImportRawMaterials = async (req, res) => {
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        const { raw_materials: rawMaterials = [], company_id, branch_id } = req.body;
+        const effectiveCompanyId = company_id || req.user?.company_id;
+        const effectiveBranchId = branch_id || req.user?.branch_id || null;
+        const createdBy = req.user?.employee_id || null;
+
+        if (!effectiveCompanyId) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({ success: false, message: 'Company ID is required.' });
+        }
+
+        if (!Array.isArray(rawMaterials) || rawMaterials.length === 0) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({ success: false, message: 'No raw material records provided for import.' });
+        }
+
+        const inserted = [];
+        const skipped = [];
+
+        for (let i = 0; i < rawMaterials.length; i++) {
+            const row = rawMaterials[i];
+            const rowNum = i + 1;
+            const name = (row.material_name || row['Material Name'] || row.name || '').toString().trim();
+            if (!name) {
+                skipped.push({ row: rowNum, reason: 'Missing Material Name' });
+                continue;
+            }
+
+            let code = (row.material_code || row['Material Code'] || row.code || '').toString().trim().toUpperCase();
+            if (code) {
+                const existing = await client.query(
+                    `SELECT material_id FROM raw_materials WHERE company_id = $1 AND material_code = $2`,
+                    [effectiveCompanyId, code]
+                );
+                if (existing.rows.length > 0) {
+                    code = `${code}-${Math.floor(100 + Math.random() * 900)}`;
+                }
+            } else {
+                code = `RM-${effectiveCompanyId || 'GEN'}-${Math.floor(1000 + Math.random() * 9000)}`;
+            }
+
+            const category = (row.category || row['Category'] || 'General').toString().trim();
+            const uom = (row.unit_of_measure || row.uom || row['Unit of Measure'] || row['UOM'] || 'PCS').toString().trim();
+            const hsn = (row.hsn_code || row['HSN Code'] || '').toString().trim() || null;
+            const gstRate = parseFloat(row.gst_rate || row['GST Rate'] || row['GST Rate (%)'] || 0) || 0;
+            const unitPrice = parseFloat(row.unit_price || row['Unit Price'] || row.standard_cost || 0) || 0;
+            const minStock = parseFloat(row.minimum_stock_level || row['Min Stock Level'] || row.minimum_stock || 0) || 0;
+            const reorderQty = parseFloat(row.reorder_quantity || row['Reorder Quantity'] || 0) || 0;
+            const leadTime = parseInt(row.lead_time_days || row['Lead Time (Days)'] || 0, 10) || 0;
+            const desc = (row.description || row['Description'] || '').toString().trim() || null;
+
+            // Smart Vendor Foreign Key resolution by Vendor Name, Code, GSTIN, or PAN
+            const vendorIdentifier = row.preferred_vendor || row.vendor || row.vendor_name || row.vendor_code || row.gstin || row.pan || row['Preferred Vendor'];
+            const vendorId = await resolveVendorId(client, effectiveCompanyId, vendorIdentifier);
+
+            const insertQuery = `
+                INSERT INTO raw_materials (
+                    company_id, branch_id, material_code, material_name,
+                    category, unit_of_measure, hsn_code, gst_rate,
+                    unit_price, minimum_stock_level, reorder_quantity,
+                    lead_time_days, preferred_vendor_id, description,
+                    status, is_active, created_by, updated_by,
+                    code, name, unit, standard_cost, minimum_stock
+                ) VALUES (
+                    $1, $2, $3, $4,
+                    $5, $6, $7, $8,
+                    $9, $10, $11,
+                    $12, $13, $14,
+                    'Active', true, $15, $15,
+                    $3, $4, $6, $9, $10
+                ) RETURNING material_id, material_code, material_name, preferred_vendor_id
+            `;
+
+            const resMat = await client.query(insertQuery, [
+                effectiveCompanyId,
+                effectiveBranchId,
+                code,
+                name,
+                category,
+                uom,
+                hsn,
+                gstRate,
+                unitPrice,
+                minStock,
+                reorderQty,
+                leadTime,
+                vendorId,
+                desc,
+                createdBy
+            ]);
+
+            inserted.push(resMat.rows[0]);
+        }
+
+        await client.query('COMMIT');
+
+        return res.status(201).json({
+            success: true,
+            message: `Successfully imported ${inserted.length} raw material(s).${skipped.length > 0 ? ` (${skipped.length} skipped)` : ''}`,
+            count: inserted.length,
+            skippedCount: skipped.length,
+            data: inserted,
+            skipped
+        });
+    } catch (error) {
+        await client.query('ROLLBACK');
+        console.error('Error in bulkImportRawMaterials:', error);
+        return res.status(500).json({
+            success: false,
+            message: error.message || 'Failed to bulk import raw materials.'
+        });
+    } finally {
+        client.release();
     }
 };

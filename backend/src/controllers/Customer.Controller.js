@@ -465,3 +465,187 @@ export const updateCustomer = async (req, res) => {
         client.release();
     }
 };
+
+// Bulk Import Customers from Excel / CSV
+export const bulkImportCustomers = async (req, res) => {
+    const client = await pool.connect();
+    try {
+        const { items, company_id } = req.body;
+        const effectiveCompanyId = company_id || req.user?.company_id;
+
+        if (!effectiveCompanyId) {
+            return res.status(400).json({ success: false, message: 'Company ID is required.' });
+        }
+
+        if (!Array.isArray(items) || items.length === 0) {
+            return res.status(400).json({ success: false, message: 'No customer items provided for import.' });
+        }
+
+        await client.query('BEGIN');
+
+        // Locate or create Sundry Debtors account group
+        const groupRes = await client.query(
+            `SELECT group_id FROM account_groups WHERE (company_id = $1 OR company_id IS NULL) AND (group_code = 'GRP-DEBTORS' OR group_code = 'SUNDRY_DEBTORS') LIMIT 1`,
+            [effectiveCompanyId]
+        );
+        let debtorGroupId;
+        if (groupRes.rows.length === 0) {
+            const assetRes = await client.query(
+                `SELECT group_id FROM account_groups WHERE company_id = $1 AND group_code = 'ASSETS'`,
+                [effectiveCompanyId]
+            );
+            const parentId = assetRes.rows.length > 0 ? assetRes.rows[0].group_id : null;
+            const newGroup = await client.query(`
+                INSERT INTO account_groups (company_id, parent_group_id, group_name, group_code, nature, is_system_group)
+                VALUES ($1, $2, 'Sundry Debtors', 'SUNDRY_DEBTORS', 'ASSET', TRUE)
+                RETURNING group_id
+            `, [effectiveCompanyId, parentId]);
+            debtorGroupId = newGroup.rows[0].group_id;
+        } else {
+            debtorGroupId = groupRes.rows[0].group_id;
+        }
+
+        let insertedCount = 0;
+        let updatedCount = 0;
+        const errors = [];
+
+        for (let i = 0; i < items.length; i++) {
+            const row = items[i];
+            const rowNum = i + 1;
+
+            const tradeName = (row.trade_name || row.customer_name || '').trim();
+            if (!tradeName) {
+                errors.push(`Row ${rowNum}: Customer / Trade Name is required.`);
+                continue;
+            }
+
+            const rawGstin = (row.gstin || '').trim().replace(/\s+/g, '').toUpperCase().slice(0, 30) || null;
+            let rawPan = (row.pan || '').trim().replace(/\s+/g, '').toUpperCase().slice(0, 30) || null;
+            if (!rawPan && rawGstin && rawGstin.length >= 12) {
+                rawPan = rawGstin.substring(2, 12);
+            }
+
+            let custCode = (row.customer_code || '').trim().toUpperCase();
+            if (!custCode) {
+                custCode = await generateCustomerCode(effectiveCompanyId);
+            }
+
+            const legalName = (row.legal_name || tradeName).trim();
+            const contactName = (row.primary_contact_name || row.contact_person || '').trim() || null;
+            const email = (row.email || '').trim().toLowerCase() || null;
+            const phone = (row.phone || row.mobile || '').trim() || null;
+            const billingAddress1 = (row.billing_address_line1 || row.address || 'Standard Address').trim();
+            const billingCity = (row.billing_city || row.city || 'Standard City').trim();
+            const billingStateCode = (row.billing_state_code || row.state || '33').trim();
+            const billingPostalCode = (row.billing_postal_code || row.pincode || '600001').trim();
+            const creditLimit = parseFloat(row.credit_limit) || 0;
+            const creditPeriod = parseInt(row.credit_period_days) || 30;
+            const openingBal = parseFloat(row.opening_balance) || 0;
+            const openingType = (row.opening_balance_type || 'DR').toUpperCase() === 'CR' ? 'CR' : 'DR';
+
+            // Check if customer already exists by code, GSTIN, or PAN
+            let existing = null;
+            if (rawGstin || rawPan || custCode) {
+                const checkRes = await client.query(`
+                    SELECT customer_id, ledger_id FROM customer_profiles
+                    WHERE company_id = $1 AND (
+                        customer_code = $2
+                        OR ($3::TEXT IS NOT NULL AND gstin = $3)
+                        OR ($4::TEXT IS NOT NULL AND pan = $4)
+                    ) LIMIT 1
+                `, [effectiveCompanyId, custCode, rawGstin, rawPan]);
+                if (checkRes.rows.length > 0) {
+                    existing = checkRes.rows[0];
+                }
+            }
+
+            if (existing) {
+                // Update customer profile
+                await client.query(`
+                    UPDATE customer_profiles SET
+                        trade_name = $1, legal_name = $2, gstin = COALESCE($3, gstin), pan = COALESCE($4, pan),
+                        primary_contact_name = COALESCE($5, primary_contact_name),
+                        email = COALESCE($6, email), phone = COALESCE($7, phone),
+                        billing_address_line1 = $8, billing_city = $9,
+                        billing_state_code = $10, billing_postal_code = $11, updated_at = CURRENT_TIMESTAMP
+                    WHERE customer_id = $12
+                `, [
+                    tradeName, legalName, rawGstin, rawPan, contactName, email, phone,
+                    billingAddress1, billingCity, billingStateCode, billingPostalCode,
+                    existing.customer_id
+                ]);
+
+                // Update ledger
+                if (existing.ledger_id) {
+                    await client.query(`
+                        UPDATE ledgers SET
+                            ledger_name = $1, credit_limit = $2, default_credit_period_days = $3, updated_at = CURRENT_TIMESTAMP
+                        WHERE ledger_id = $4
+                    `, [tradeName, creditLimit, creditPeriod, existing.ledger_id]);
+                }
+                updatedCount++;
+            } else {
+                // Create double-entry ledger
+                const ledgerRes = await client.query(`
+                    INSERT INTO ledgers (
+                        company_id, group_id, ledger_name, ledger_code, currency_code,
+                        opening_balance, opening_balance_type,
+                        current_balance, current_balance_type,
+                        maintain_bill_by_bill, default_credit_period_days, credit_limit,
+                        is_active
+                    ) VALUES (
+                        $1, $2, $3, $4, 'INR',
+                        $5, $6,
+                        $5, $6,
+                        TRUE, $7, $8,
+                        TRUE
+                    ) RETURNING ledger_id
+                `, [effectiveCompanyId, debtorGroupId, tradeName, custCode, openingBal, openingType, creditPeriod, creditLimit]);
+
+                const newLedgerId = ledgerRes.rows[0].ledger_id;
+
+                // Create customer profile
+                await client.query(`
+                    INSERT INTO customer_profiles (
+                        company_id, ledger_id, customer_code, trade_name, legal_name,
+                        gstin, gst_registration_type, pan, primary_contact_name, email, phone,
+                        billing_address_line1, billing_city, billing_state_code, billing_postal_code,
+                        shipping_address_line1, shipping_city, shipping_state_code, shipping_postal_code,
+                        is_active
+                    ) VALUES (
+                        $1, $2, $3, $4, $5,
+                        $6, 'REGISTERED', $7, $8, $9, $10,
+                        $11, $12, $13, $14,
+                        $11, $12, $13, $14,
+                        TRUE
+                    )
+                `, [
+                    effectiveCompanyId, newLedgerId, custCode, tradeName, legalName,
+                    rawGstin, rawPan, contactName, email, phone,
+                    billingAddress1, billingCity, billingStateCode, billingPostalCode
+                ]);
+                insertedCount++;
+            }
+        }
+
+        if (errors.length > 0 && insertedCount === 0 && updatedCount === 0) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({ success: false, message: 'Import failed.', errors });
+        }
+
+        await client.query('COMMIT');
+        return res.status(200).json({
+            success: true,
+            message: `Successfully processed ${insertedCount + updatedCount} customers (${insertedCount} added, ${updatedCount} updated).`,
+            insertedCount,
+            updatedCount,
+            errors
+        });
+    } catch (error) {
+        await client.query('ROLLBACK');
+        console.error('Error in bulkImportCustomers:', error);
+        return res.status(500).json({ success: false, message: 'Internal server error', error: error.message });
+    } finally {
+        client.release();
+    }
+};

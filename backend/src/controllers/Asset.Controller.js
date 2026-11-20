@@ -1,4 +1,5 @@
 import pool from '../config/database.js';
+import { resolveBranchId, resolveDepartmentId, resolveEmployeeId, resolveVendorId } from '../services/ForeignKeyResolver.js';
 
 // Helper to generate a unique asset tag if none provided
 const generateAssetTag = async (companyId, category) => {
@@ -711,5 +712,133 @@ export const getAssetSummaryStats = async (req, res) => {
             message: 'Internal server error',
             error: error.message
         });
+    }
+};
+
+// Bulk Import Assets from Excel / CSV
+export const bulkImportAssets = async (req, res) => {
+    const client = await pool.connect();
+    try {
+        const { items, company_id, branch_id } = req.body;
+        const effectiveCompanyId = company_id || req.user?.company_id;
+        const defaultBranchId = branch_id || req.user?.branch_id || null;
+        const createdBy = req.user?.employee_id || null;
+
+        if (!effectiveCompanyId) {
+            return res.status(400).json({ success: false, message: 'Company ID is required.' });
+        }
+
+        if (!Array.isArray(items) || items.length === 0) {
+            return res.status(400).json({ success: false, message: 'No asset items provided for import.' });
+        }
+
+        await client.query('BEGIN');
+
+        let insertedCount = 0;
+        let updatedCount = 0;
+        const errors = [];
+
+        for (let i = 0; i < items.length; i++) {
+            const row = items[i];
+            const rowNum = i + 1;
+
+            const assetName = (row.asset_name || row.name || '').trim();
+            const category = (row.asset_category || row.category || 'Machinery').trim();
+
+            if (!assetName) {
+                errors.push(`Row ${rowNum}: Asset Name is required.`);
+                continue;
+            }
+
+            let assetTag = (row.asset_tag || row.tag || '').trim().toUpperCase();
+            if (!assetTag) {
+                assetTag = await generateAssetTag(effectiveCompanyId, category);
+            }
+
+            const brandModel = (row.brand_model || row.brand || '').trim() || null;
+            const serialNum = (row.serial_number || row.serial_no || '').trim() || null;
+            const purchaseDate = row.purchase_date || null;
+            const purchaseCost = parseFloat(row.purchase_cost || row.cost) || 0;
+            const currentValue = parseFloat(row.current_value || row.value) || purchaseCost;
+            const depreciationRate = parseFloat(row.depreciation_rate) || 10.0;
+            const location = (row.location || 'Main Plant').trim();
+            const assetStatus = (row.asset_status || row.status || 'In Use').trim();
+            const condition = (row.condition || 'Good').trim();
+            const notes = (row.notes || '').trim() || null;
+
+            // Smart foreign key lookups
+            const resolvedBranchId = await resolveBranchId(client, effectiveCompanyId, row.branch || row.branch_id || defaultBranchId) || defaultBranchId;
+            const resolvedDeptId = await resolveDepartmentId(client, effectiveCompanyId, row.department || row.department_id);
+            const resolvedEmpId = await resolveEmployeeId(client, effectiveCompanyId, row.assigned_employee || row.employee_code || row.employee || row.assigned_employee_id);
+            const resolvedVendorId = await resolveVendorId(client, effectiveCompanyId, row.vendor || row.vendor_name || row.gstin || row.pan || row.vendor_id);
+
+            const existing = await client.query(
+                `SELECT asset_id FROM assets WHERE company_id = $1 AND (asset_tag = $2 OR (serial_number IS NOT NULL AND serial_number = $3))`,
+                [effectiveCompanyId, assetTag, serialNum]
+            );
+
+            if (existing.rows.length > 0) {
+                await client.query(`
+                    UPDATE assets SET
+                        asset_name = $1, asset_category = $2, brand_model = $3, serial_number = $4,
+                        purchase_date = COALESCE($5, purchase_date), purchase_cost = $6, current_value = $7,
+                        depreciation_rate = $8, location = $9, asset_status = $10, condition = $11,
+                        department_id = COALESCE($12, department_id), assigned_employee_id = COALESCE($13, assigned_employee_id),
+                        vendor_id = COALESCE($14, vendor_id), branch_id = COALESCE($15, branch_id),
+                        notes = COALESCE($16, notes), updated_by = $17, updated_at = CURRENT_TIMESTAMP
+                    WHERE asset_id = $18
+                `, [
+                    assetName, category, brandModel, serialNum,
+                    purchaseDate, purchaseCost, currentValue,
+                    depreciationRate, location, assetStatus, condition,
+                    resolvedDeptId, resolvedEmpId, resolvedVendorId, resolvedBranchId,
+                    notes, createdBy, existing.rows[0].asset_id
+                ]);
+                updatedCount++;
+            } else {
+                await client.query(`
+                    INSERT INTO assets (
+                        company_id, branch_id, department_id, assigned_employee_id, vendor_id,
+                        asset_tag, asset_name, asset_category, brand_model, serial_number,
+                        purchase_date, purchase_cost, current_value, depreciation_rate,
+                        location, asset_status, condition, notes, is_active,
+                        created_by, updated_by
+                    ) VALUES (
+                        $1, $2, $3, $4, $5,
+                        $6, $7, $8, $9, $10,
+                        $11, $12, $13, $14,
+                        $15, $16, $17, $18, TRUE,
+                        $19, $19
+                    )
+                `, [
+                    effectiveCompanyId, resolvedBranchId, resolvedDeptId, resolvedEmpId, resolvedVendorId,
+                    assetTag, assetName, category, brandModel, serialNum,
+                    purchaseDate, purchaseCost, currentValue, depreciationRate,
+                    location, assetStatus, condition, notes,
+                    createdBy
+                ]);
+                insertedCount++;
+            }
+        }
+
+        if (errors.length > 0 && insertedCount === 0 && updatedCount === 0) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({ success: false, message: 'Import failed.', errors });
+        }
+
+        await client.query('COMMIT');
+        return res.status(200).json({
+            success: true,
+            message: `Successfully processed ${insertedCount + updatedCount} assets (${insertedCount} added, ${updatedCount} updated).`,
+            insertedCount,
+            updatedCount,
+            errors
+        });
+    } catch (error) {
+        await client.query('ROLLBACK');
+        console.error('Error in bulkImportAssets:', error);
+        return res.status(500).json({ success: false, message: 'Internal server error', error: error.message });
+    } finally {
+        client.release();
     }
 };

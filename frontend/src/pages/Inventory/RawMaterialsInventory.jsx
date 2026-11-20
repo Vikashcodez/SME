@@ -59,6 +59,41 @@ import {
   User,
   Cpu
 } from 'lucide-react';
+import ExcelImportModal from '../../components/ExcelImportModal';
+
+const INVENTORY_IMPORT_COLUMNS = [
+  { key: 'raw_material', label: 'Raw Material (Name or Code)', required: true, example: 'Stainless Steel Rod 20mm' },
+  { key: 'quantity', label: 'Stock Quantity', required: true, example: 500 },
+  { key: 'unit_cost', label: 'Unit Cost (₹)', required: false, example: 145 },
+  { key: 'warehouse_location', label: 'Warehouse / Bin Location', required: false, example: 'Main Store - Rack A1' },
+  { key: 'batch_number', label: 'Batch / Lot Number', required: false, example: 'BATCH-2023-1102' },
+  { key: 'vendor', label: 'Supplier (Name/GSTIN/Code)', required: false, example: 'Tata Steel Processing Ltd' },
+  { key: 'branch', label: 'Branch Name or Code', required: false, example: 'Main Plant' },
+  { key: 'notes', label: 'Notes / Remarks', required: false, example: 'Opening stock count verified by warehouse team' }
+];
+
+const INVENTORY_IMPORT_SAMPLES = [
+  {
+    'Raw Material (Name or Code)': 'Stainless Steel Rod 20mm',
+    'Stock Quantity': 500,
+    'Unit Cost (₹)': 145,
+    'Warehouse / Bin Location': 'Main Store - Rack A1',
+    'Batch / Lot Number': 'BATCH-2023-1102',
+    'Supplier (Name/GSTIN/Code)': 'Tata Steel Processing Ltd',
+    'Branch Name or Code': 'Main Plant',
+    'Notes / Remarks': 'Opening stock count verified by warehouse team'
+  },
+  {
+    'Raw Material (Name or Code)': 'Aluminium Ingot Grade A',
+    'Stock Quantity': 250,
+    'Unit Cost (₹)': 220,
+    'Warehouse / Bin Location': 'Raw Store - Section C',
+    'Batch / Lot Number': 'BATCH-2023-0988',
+    'Supplier (Name/GSTIN/Code)': 'Jindal Aluminium Supplies',
+    'Branch Name or Code': 'Main Plant',
+    'Notes / Remarks': 'Direct factory delivery batch'
+  }
+];
 
 const API_BASE_URL = import.meta.env.VITE_API_URL ? import.meta.env.VITE_API_URL.replace('/api', '') : 'http://localhost:5000';
 
@@ -163,10 +198,31 @@ const RawMaterialsInventory = () => {
 
   // Modals state
   const [showMovementModal, setShowMovementModal] = useState(false);
+  const [showImportModal, setShowImportModal] = useState(false);
   const [showReturnModal, setShowReturnModal] = useState(false);
   const [showHistoryModal, setShowHistoryModal] = useState(false);
   const [activeMaterial, setActiveMaterial] = useState(null);
   const [itemHistoryList, setItemHistoryList] = useState([]);
+
+  const handleBulkImportInventory = async (rows) => {
+    const payload = {
+      items: rows,
+      company_id: selectedCompanyId || user?.company_id,
+      branch_id: selectedBranchId || user?.branch_id
+    };
+    const res = await rawMaterialInventoryApi.bulkImport(payload);
+    if (res?.data?.success) {
+      await fetchAllData();
+      return {
+        success: true,
+        message: res.data.message || `Successfully imported ${rows.length} inventory records!`
+      };
+    }
+    return {
+      success: false,
+      message: res?.data?.message || 'Failed to import inventory.'
+    };
+  };
 
   // File upload state for GRN Invoice
   const [invoiceFile, setInvoiceFile] = useState(null);
@@ -736,6 +792,15 @@ const RawMaterialsInventory = () => {
           >
             <FileSpreadsheet size={14} className="text-emerald-600" />
             <span>Export CSV</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setShowImportModal(true)}
+            className="px-3.5 py-2 bg-emerald-50 border border-emerald-200 hover:bg-emerald-100 text-emerald-700 text-xs font-semibold rounded-lg shadow-xs flex items-center gap-1.5 transition-all cursor-pointer"
+          >
+            <FileSpreadsheet size={14} className="text-emerald-600" />
+            <span>Import Data</span>
           </button>
 
           <Link
@@ -2027,6 +2092,17 @@ const RawMaterialsInventory = () => {
           </div>
         </div>
       )}
+      {/* Excel Import Modal */}
+      <ExcelImportModal
+        isOpen={showImportModal}
+        onClose={() => setShowImportModal(false)}
+        title="Import Stock Opening / Inventory"
+        moduleName="Raw Material Inventory"
+        columns={INVENTORY_IMPORT_COLUMNS}
+        sampleData={INVENTORY_IMPORT_SAMPLES}
+        onImport={handleBulkImportInventory}
+      />
+
     </div>
   );
 };

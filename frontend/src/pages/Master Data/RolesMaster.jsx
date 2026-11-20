@@ -27,8 +27,38 @@ import {
   CheckCircle2,
   FileText,
   Sparkles,
-  Info
+  Info,
+  FileSpreadsheet
 } from 'lucide-react';
+import ExcelImportModal from '../../components/ExcelImportModal';
+
+const ROLE_IMPORT_COLUMNS = [
+  { key: 'role_name', label: 'Role / Designation Name', required: true, example: 'Senior Production Engineer' },
+  { key: 'role_description', label: 'Description', required: false, example: 'Supervises machining floor, CNC tooling and output cycle optimization' },
+  { key: 'branch', label: 'Branch Name or Code', required: false, example: 'Main Plant' },
+  { key: 'is_active', label: 'Is Active (TRUE/FALSE)', required: false, example: 'TRUE' }
+];
+
+const ROLE_IMPORT_SAMPLES = [
+  {
+    'Role / Designation Name': 'Senior Production Engineer',
+    'Description': 'Supervises machining floor, CNC tooling and output cycle optimization',
+    'Branch Name or Code': 'Main Plant',
+    'Is Active (TRUE/FALSE)': 'TRUE'
+  },
+  {
+    'Role / Designation Name': 'Quality Inspector',
+    'Description': 'Verifies dimensional tolerances, surface finish and test certifications',
+    'Branch Name or Code': 'Main Plant',
+    'Is Active (TRUE/FALSE)': 'TRUE'
+  },
+  {
+    'Role / Designation Name': 'Warehouse Storekeeper',
+    'Description': 'Maintains raw material inward logs, bin cards and physical stock counts',
+    'Branch Name or Code': 'Main Plant',
+    'Is Active (TRUE/FALSE)': 'TRUE'
+  }
+];
 
 const COMMON_ROLE_PRESETS = [
   { name: 'Store Manager', desc: 'Overall branch supervision, inventory approvals, and team management' },
@@ -64,10 +94,31 @@ const RolesMaster = () => {
 
   // Modals state
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [showImportModal, setShowImportModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [showDetailsModal, setShowDetailsModal] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [activeRole, setActiveRole] = useState(null);
+
+  const handleBulkImportRoles = async (rows) => {
+    const payload = {
+      items: rows,
+      company_id: selectedCompanyId || user?.company_id,
+      branch_id: selectedBranchId || user?.branch_id
+    };
+    const res = await rolesApi.bulkImport(payload);
+    if (res?.data?.success) {
+      if (selectedBranchId) await fetchRoles(selectedBranchId);
+      return {
+        success: true,
+        message: res.data.message || `Successfully imported ${rows.length} roles!`
+      };
+    }
+    return {
+      success: false,
+      message: res?.data?.message || 'Failed to import roles.'
+    };
+  };
 
   // Form states
   const [formData, setFormData] = useState({
@@ -406,6 +457,16 @@ const RolesMaster = () => {
             >
               <RefreshCw size={15} className={loadingRoles ? 'animate-spin text-blue-600' : 'text-gray-500'} />
               <span>Refresh</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setShowImportModal(true)}
+              disabled={!selectedBranchId}
+              className="px-3.5 py-2 bg-emerald-50 border border-emerald-200 hover:bg-emerald-100 text-emerald-700 rounded-lg text-sm font-semibold flex items-center gap-2 transition-all shadow-xs disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+            >
+              <FileSpreadsheet size={16} className="text-emerald-600" />
+              <span>Import Data</span>
             </button>
 
             <button
@@ -1188,6 +1249,17 @@ const RolesMaster = () => {
           </div>
         </Modal>
       )}
+
+      {/* Excel Import Modal */}
+      <ExcelImportModal
+        isOpen={showImportModal}
+        onClose={() => setShowImportModal(false)}
+        title="Import Roles"
+        moduleName="Roles Master"
+        columns={ROLE_IMPORT_COLUMNS}
+        sampleData={ROLE_IMPORT_SAMPLES}
+        onImport={handleBulkImportRoles}
+      />
 
     </div>
   );

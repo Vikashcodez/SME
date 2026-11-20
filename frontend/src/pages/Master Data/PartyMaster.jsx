@@ -1,8 +1,67 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
-import { Plus, RefreshCw, Users, UserRound, Eye, Edit3, Trash2, X } from 'lucide-react';
+import { Plus, RefreshCw, Users, UserRound, Eye, Edit3, Trash2, X, FileSpreadsheet } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { parties as partyApi } from '../../services/api';
+import ExcelImportModal from '../../components/ExcelImportModal';
+
+const PARTY_IMPORT_COLUMNS = [
+  { key: 'party_code', label: 'Party Code', required: false, sample: 'PTY-1001', description: 'Auto-generated if empty' },
+  { key: 'party_name', label: 'Party Name', required: true, sample: 'Apex Precision Engineering' },
+  { key: 'party_type', label: 'Party Type', required: false, default: 'BOTH', sample: 'CUSTOMER (or SUPPLIER / BOTH)' },
+  { key: 'gstin', label: 'GSTIN', required: false, sample: '27AABCU9603R1ZM', description: 'Auto-derives PAN & State Code' },
+  { key: 'pan', label: 'PAN', required: false, sample: 'AABCU9603R' },
+  { key: 'phone', label: 'Phone', required: false, sample: '9876543210' },
+  { key: 'email', label: 'Email', required: false, sample: 'accounts@apexeng.com' },
+  { key: 'address_line1', label: 'Address', required: false, sample: 'Plot 45, MIDC Industrial Area' },
+  { key: 'city', label: 'City', required: false, default: 'Mumbai', sample: 'Mumbai' },
+  { key: 'state_code', label: 'State Code', required: false, default: '27', sample: '27' },
+  { key: 'postal_code', label: 'Pincode', required: false, default: '400001', sample: '400093' },
+  { key: 'payment_terms', label: 'Payment Terms', required: false, default: 'Net 30', sample: 'Net 30' },
+  { key: 'credit_limit', label: 'Credit Limit', required: false, type: 'number', default: 0, sample: 500000 },
+  { key: 'credit_period_days', label: 'Credit Period (Days)', required: false, type: 'number', default: 30, sample: 30 },
+  { key: 'opening_balance', label: 'Opening Balance', required: false, type: 'number', default: 0, sample: 25000 },
+  { key: 'opening_balance_type', label: 'Bal. Type (DR/CR)', required: false, default: 'DR', sample: 'DR' }
+];
+
+const PARTY_IMPORT_SAMPLES = [
+  {
+    'Party Code': 'PTY-1001',
+    'Party Name': 'Apex Precision Tools Pvt Ltd',
+    'Party Type': 'CUSTOMER',
+    'GSTIN': '27AABCU9603R1ZM',
+    'PAN': 'AABCU9603R',
+    'Phone': '9820123456',
+    'Email': 'billing@apexprecision.com',
+    'Address': 'Plot 42, MIDC Industrial Area, Andheri East',
+    'City': 'Mumbai',
+    'State Code': '27',
+    'Pincode': '400093',
+    'Payment Terms': 'Net 30',
+    'Credit Limit': 500000,
+    'Credit Period (Days)': 30,
+    'Opening Balance': 45000,
+    'Bal. Type (DR/CR)': 'DR'
+  },
+  {
+    'Party Code': 'PTY-1002',
+    'Party Name': 'National Industrial Fasteners',
+    'Party Type': 'SUPPLIER',
+    'GSTIN': '27AAECN1234F1ZQ',
+    'PAN': 'AAECN1234F',
+    'Phone': '9819234567',
+    'Email': 'sales@nationalfasteners.com',
+    'Address': 'Sector 10, Rabale Industrial Estate',
+    'City': 'Navi Mumbai',
+    'State Code': '27',
+    'Pincode': '400701',
+    'Payment Terms': 'Net 15',
+    'Credit Limit': 200000,
+    'Credit Period (Days)': 15,
+    'Opening Balance': 12500,
+    'Bal. Type (DR/CR)': 'CR'
+  }
+];
 
 const emptyForm = {
   party_code: '',
@@ -36,6 +95,26 @@ const PartyMaster = () => {
   const [saving, setSaving] = useState(false);
   const [editingPartyId, setEditingPartyId] = useState(null);
   const [viewParty, setViewParty] = useState(null);
+  const [showImportModal, setShowImportModal] = useState(false);
+
+  const handleBulkImportParties = async (rows) => {
+    const payload = {
+      parties: rows,
+      company_id: user?.company_id
+    };
+    const res = await partyApi.bulkImport(payload);
+    if (res?.data?.success) {
+      await load();
+      return {
+        success: true,
+        message: res.data.message || `Successfully imported ${res.data.count} party records!`
+      };
+    }
+    return {
+      success: false,
+      message: res?.data?.message || 'Failed to import parties.'
+    };
+  };
 
   const load = async () => {
     if (!user?.company_id) return;
@@ -162,6 +241,13 @@ const PartyMaster = () => {
           </div>
           <div className="flex gap-2">
             <button onClick={load} className="rounded-lg border border-slate-200 p-2 text-slate-500"><RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} /></button>
+            <button
+              onClick={() => setShowImportModal(true)}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-3.5 py-2 text-sm font-bold text-emerald-700 hover:bg-emerald-100 transition-all cursor-pointer"
+            >
+              <FileSpreadsheet className="h-4 w-4 text-emerald-600" />
+              Import Data
+            </button>
             <button onClick={openCreate} className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-bold text-white"><Plus className="h-4 w-4" /> Add Party</button>
           </div>
         </header>
@@ -319,6 +405,16 @@ const PartyMaster = () => {
           </div>
         </div>
       )}
+      {/* Excel / Google Sheets Import Modal */}
+      <ExcelImportModal
+        isOpen={showImportModal}
+        onClose={() => setShowImportModal(false)}
+        title="Import Parties / Customers / Suppliers"
+        entityName="Party"
+        columns={PARTY_IMPORT_COLUMNS}
+        sampleRows={PARTY_IMPORT_SAMPLES}
+        onImport={handleBulkImportParties}
+      />
     </main>
   );
 };

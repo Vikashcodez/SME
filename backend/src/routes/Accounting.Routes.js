@@ -6,6 +6,7 @@ import {
     getLedgers,
     getLedgerById,
     createLedger,
+    bulkImportLedgers,
     updateLedger,
     deleteLedger,
     getBankAccounts,
@@ -39,6 +40,7 @@ router.post('/groups', createAccountGroup);
 
 // Ledgers
 router.get('/ledgers', getLedgers);
+router.post('/ledgers/bulk-import', bulkImportLedgers);
 router.post('/ledgers', createLedger);
 router.get('/ledgers/:ledger_id', getLedgerById);
 router.put('/ledgers/:ledger_id', updateLedger);

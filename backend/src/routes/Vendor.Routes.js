@@ -1,6 +1,7 @@
 import express from 'express';
 import {
     createVendor,
+    bulkImportVendors,
     getAllVendors,
     getVendorById,
     updateVendor,
@@ -15,6 +16,7 @@ const router = express.Router();
 router.use(authenticate);
 
 router.get('/stats/summary', getVendorStats);
+router.post('/bulk-import', bulkImportVendors);
 router.get('/', getAllVendors);
 router.post('/', createVendor);
 router.get('/:vendor_id', getVendorById);

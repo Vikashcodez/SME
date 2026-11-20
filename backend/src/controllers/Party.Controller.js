@@ -397,3 +397,196 @@ export const deleteParty = async (req, res) => {
         return res.status(400).json({ success: false, message: error.message });
     }
 };
+
+// Bulk Import Parties from Excel / Google Sheets
+export const bulkImportParties = async (req, res) => {
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        const companyId = companyIdOf(req);
+        const { parties = [] } = req.body;
+
+        if (!companyId) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({ success: false, message: 'Company ID is required.' });
+        }
+
+        if (!Array.isArray(parties) || parties.length === 0) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({ success: false, message: 'No party records provided for import.' });
+        }
+
+        const inserted = [];
+        const skipped = [];
+
+        for (let i = 0; i < parties.length; i++) {
+            const row = parties[i];
+            const rowNum = i + 1;
+            const name = (row.party_name || row['Party Name'] || row.name || '').toString().trim();
+            if (!name) {
+                skipped.push({ row: rowNum, reason: 'Missing Party Name' });
+                continue;
+            }
+
+            let type = (row.party_type || row['Party Type'] || row.type || 'BOTH').toString().trim().toUpperCase();
+            if (!['CUSTOMER', 'SUPPLIER', 'BOTH'].includes(type)) {
+                if (type.includes('CUST')) type = 'CUSTOMER';
+                else if (type.includes('SUPP') || type.includes('VEND')) type = 'SUPPLIER';
+                else type = 'BOTH';
+            }
+
+            const rawGstin = (row.gstin || row['GSTIN'] || row['GST Number'] || '').toString().trim();
+            const normalizedGstin = rawGstin ? rawGstin.replace(/[^a-zA-Z0-9]/g, '').toUpperCase().slice(0, 15) : '';
+            
+            let rawPan = (row.pan || row['PAN'] || row['PAN Number'] || '').toString().trim();
+            let normalizedPan = normalizedGstin.length >= 12
+                ? normalizedGstin.substring(2, 12)
+                : (rawPan ? rawPan.replace(/[^a-zA-Z0-9]/g, '').toUpperCase().slice(0, 10) : '');
+
+            const stateCode = normalizedGstin.length >= 2
+                ? normalizedGstin.substring(0, 2)
+                : String(row.state_code || row['State Code'] || '27').trim().padStart(2, '0');
+
+            let code = (row.party_code || row['Party Code'] || row.code || '').toString().trim().toUpperCase();
+            if (!code) {
+                code = `PTY-${companyId}-${Date.now().toString().slice(-6)}-${i + 1}`;
+            }
+
+            // Check if code exists, append random if needed
+            const existingCode = await client.query(`SELECT party_id FROM party_master WHERE company_id = $1 AND party_code = $2`, [companyId, code]);
+            if (existingCode.rows.length > 0) {
+                code = `${code}-${Math.floor(100 + Math.random() * 900)}`;
+            }
+
+            const email = (row.email || row['Email'] || '').toString().trim() || null;
+            const phone = (row.phone || row['Phone'] || row['Mobile'] || '').toString().trim() || null;
+            const address1 = (row.address_line1 || row['Address'] || row['Address Line 1'] || 'Main Road').toString().trim();
+            const address2 = (row.address_line2 || row['Address Line 2'] || '').toString().trim() || null;
+            const city = (row.city || row['City'] || 'City').toString().trim();
+            const postalCode = (row.postal_code || row['Postal Code'] || row['Pincode'] || '400001').toString().trim();
+            const country = (row.country || row['Country'] || 'India').toString().trim();
+            const paymentTerms = (row.payment_terms || row['Payment Terms'] || 'Net 30').toString().trim();
+            const creditLimit = Math.max(0, parseFloat(row.credit_limit || row['Credit Limit'] || 0) || 0);
+            const creditPeriod = Math.max(0, parseInt(row.credit_period_days || row['Credit Period (Days)'] || 30, 10) || 30);
+            const balance = Math.max(0, parseFloat(row.opening_balance || row['Opening Balance'] || 0) || 0);
+            const openingType = (row.opening_balance_type || row['Opening Balance Type'] || 'DR').toString().trim().toUpperCase() === 'CR' ? 'CR' : 'DR';
+
+            let customerProfileId = null;
+            let vendorProfileId = null;
+            let customerLedgerId = null;
+            let supplierLedgerId = null;
+
+            if (type === 'CUSTOMER' || type === 'BOTH') {
+                const debtorGroupId = await resolveGroup(client, companyId, 'GRP-DEBTORS', 'Sundry Debtors', 'ASSET');
+                const customerLedger = await client.query(`
+                    INSERT INTO ledgers (
+                        company_id, group_id, ledger_name, ledger_code, opening_balance,
+                        opening_balance_type, current_balance, current_balance_type,
+                        maintain_bill_by_bill, default_credit_period_days, credit_limit, is_active
+                    ) VALUES ($1,$2,$3,$4,$5,$6,$5,$6,TRUE,$7,$8,TRUE)
+                    ON CONFLICT (company_id, ledger_code) DO UPDATE SET ledger_name = EXCLUDED.ledger_name
+                    RETURNING ledger_id
+                `, [companyId, debtorGroupId, name, code, balance, openingType, creditPeriod, creditLimit]);
+                customerLedgerId = customerLedger.rows[0].ledger_id;
+
+                const customer = await client.query(`
+                    INSERT INTO customer_profiles (
+                        company_id, ledger_id, customer_code, trade_name, legal_name, gstin,
+                        gst_registration_type, pan, primary_contact_name, email, phone,
+                        billing_address_line1, billing_address_line2, billing_city, billing_state_code,
+                        billing_postal_code, billing_country, shipping_address_line1, shipping_address_line2,
+                        shipping_city, shipping_state_code, shipping_postal_code, shipping_country,
+                        is_composition, is_tds_applicable, is_tcs_applicable, is_active
+                    ) VALUES (
+                        $1,$2,$3,$4,$4,$5,'REGULAR',$6,$7,$8,$9,
+                        $10,$11,$12,$13,$14,$15,$10,$11,$12,$13,$14,$15,
+                        FALSE,FALSE,FALSE,TRUE
+                    ) RETURNING customer_id
+                `, [
+                    companyId, customerLedgerId, code, name, normalizedGstin || null, normalizedPan || null,
+                    name, email, phone, address1, address2, city, stateCode, postalCode, country
+                ]);
+                customerProfileId = customer.rows[0].customer_id;
+            }
+
+            if (type === 'SUPPLIER' || type === 'BOTH') {
+                const creditorGroupId = await resolveGroup(client, companyId, 'GRP-CREDITORS', 'Sundry Creditors', 'LIABILITY');
+                const supplierLedgerCode = `${code}-SUP`;
+                const supplierLedger = await client.query(`
+                    INSERT INTO ledgers (
+                        company_id, group_id, ledger_name, ledger_code, opening_balance,
+                        opening_balance_type, current_balance, current_balance_type,
+                        maintain_bill_by_bill, default_credit_period_days, credit_limit, is_active
+                    ) VALUES ($1,$2,$3,$4,$5,$6,$5,$6,TRUE,$7,$8,TRUE)
+                    ON CONFLICT (company_id, ledger_code) DO UPDATE SET ledger_name = EXCLUDED.ledger_name
+                    RETURNING ledger_id
+                `, [companyId, creditorGroupId, `${name} (Supplier)`, supplierLedgerCode, balance, openingType, creditPeriod, creditLimit]);
+                supplierLedgerId = supplierLedger.rows[0].ledger_id;
+
+                const directVendor = await client.query(`
+                    INSERT INTO vendors (
+                        company_id, vendor_code, vendor_name, gstin, pan,
+                        address, city, state, pincode, phone, email,
+                        payment_terms, opening_balance, status, is_active
+                    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'Active',TRUE)
+                    RETURNING vendor_id
+                `, [
+                    companyId, code, name, normalizedGstin || null, normalizedPan || null,
+                    address1, city, stateCode, postalCode, phone, email, paymentTerms, balance
+                ]);
+
+                const vendor = await client.query(`
+                    INSERT INTO vendor_profiles (
+                        company_id, ledger_id, existing_vendor_id, vendor_code, vendor_trade_name,
+                        vendor_legal_name, gstin, pan, address_line1, address_line2,
+                        city, state_code, postal_code, country, is_active
+                    ) VALUES (
+                        $1,$2,$3,$4,$5,$5,$6,$7,$8,$9,$10,$11,$12,$13,TRUE
+                    ) RETURNING vendor_profile_id
+                `, [
+                    companyId, supplierLedgerId, directVendor.rows[0].vendor_id, code, name,
+                    normalizedGstin || null, normalizedPan || null, address1, address2, city, stateCode, postalCode, country
+                ]);
+                vendorProfileId = vendor.rows[0].vendor_profile_id;
+            }
+
+            const partyRes = await client.query(`
+                INSERT INTO party_master (
+                    company_id, party_code, party_name, party_type, gstin, pan,
+                    email, phone, address_line1, address_line2, city, state_code,
+                    postal_code, country, payment_terms, credit_limit, credit_period_days,
+                    customer_profile_id, vendor_profile_id, customer_ledger_id, supplier_ledger_id, is_active
+                ) VALUES (
+                    $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,TRUE
+                ) RETURNING party_id, party_code, party_name, party_type
+            `, [
+                companyId, code, name, type, normalizedGstin || null, normalizedPan || null,
+                email, phone, address1, address2, city, stateCode, postalCode, country,
+                paymentTerms, creditLimit, creditPeriod, customerProfileId, vendorProfileId,
+                customerLedgerId, supplierLedgerId
+            ]);
+
+            inserted.push(partyRes.rows[0]);
+        }
+
+        await client.query('COMMIT');
+
+        return res.status(201).json({
+            success: true,
+            message: `Successfully imported ${inserted.length} party/customer/supplier record(s).${skipped.length > 0 ? ` (${skipped.length} skipped)` : ''}`,
+            count: inserted.length,
+            skippedCount: skipped.length,
+            data: inserted,
+            skipped
+        });
+    } catch (error) {
+        await client.query('ROLLBACK');
+        console.error('Error in bulkImportParties:', error);
+        return res.status(500).json({
+            success: false,
+            message: error.message || 'Failed to bulk import parties.'
+        });
+    } finally {
+        client.release();
+    }
+};

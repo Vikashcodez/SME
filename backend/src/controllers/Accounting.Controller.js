@@ -1,4 +1,5 @@
 import pool from '../config/database.js';
+import { resolveAccountGroupId } from '../services/ForeignKeyResolver.js';
 
 // Helper: Recalculate and persist a ledger's current_balance and current_balance_type
 export const recalculateLedgerBalance = async (client, ledgerId, companyId) => {
@@ -2581,6 +2582,120 @@ export const reverseVoucher = async (req, res) => {
     } catch (error) {
         await client.query('ROLLBACK');
         return res.status(400).json({ success: false, message: error.message });
+    } finally {
+        client.release();
+    }
+};
+
+// Bulk Import Ledgers from Excel / CSV
+export const bulkImportLedgers = async (req, res) => {
+    const client = await pool.connect();
+    try {
+        const companyId = req.scopeCompanyId || req.body.company_id || req.user?.company_id;
+        if (!companyId) {
+            return res.status(400).json({ success: false, message: 'Company ID is required.' });
+        }
+
+        const { items } = req.body;
+        if (!Array.isArray(items) || items.length === 0) {
+            return res.status(400).json({ success: false, message: 'No ledger items provided for import.' });
+        }
+
+        await client.query('BEGIN');
+
+        let insertedCount = 0;
+        let updatedCount = 0;
+        const errors = [];
+
+        for (let i = 0; i < items.length; i++) {
+            const row = items[i];
+            const rowNum = i + 1;
+
+            const ledgerName = (row.ledger_name || row.name || '').trim();
+            if (!ledgerName) {
+                errors.push(`Row ${rowNum}: Ledger Name is required.`);
+                continue;
+            }
+
+            let ledgerCode = (row.ledger_code || row.code || '').trim().toUpperCase();
+            if (!ledgerCode) {
+                ledgerCode = `LED-${Math.floor(1000 + Math.random() * 9000)}`;
+            }
+
+            // Resolve Account Group
+            const groupId = await resolveAccountGroupId(client, companyId, row.account_group || row.group_name || row.group_code || row.group_id);
+            if (!groupId) {
+                errors.push(`Row ${rowNum}: Valid Account Group could not be resolved for "${row.account_group || 'blank'}".`);
+                continue;
+            }
+
+            const openingBal = parseFloat(row.opening_balance || row.balance) || 0;
+            const opType = (row.opening_balance_type || row.balance_type || 'DR').toUpperCase() === 'CR' ? 'CR' : 'DR';
+            const notes = (row.notes || row.description || '').trim() || null;
+            const creditLimit = parseFloat(row.credit_limit) || 0;
+            const creditPeriod = parseInt(row.credit_period_days || row.credit_period) || 0;
+            const taxType = (row.tax_type || 'NONE').toUpperCase().trim();
+            const maintainBill = Boolean(row.maintain_bill_by_bill);
+
+            const existing = await client.query(
+                `SELECT ledger_id FROM ledgers WHERE company_id = $1 AND (ledger_code = $2 OR ledger_name ILIKE $3)`,
+                [companyId, ledgerCode, ledgerName]
+            );
+
+            if (existing.rows.length > 0) {
+                await client.query(`
+                    UPDATE ledgers SET
+                        ledger_name = $1, group_id = $2, notes = COALESCE($3, notes),
+                        credit_limit = $4, default_credit_period_days = $5,
+                        tax_type = $6, maintain_bill_by_bill = $7, updated_at = CURRENT_TIMESTAMP
+                    WHERE ledger_id = $8
+                `, [
+                    ledgerName, groupId, notes, creditLimit, creditPeriod,
+                    taxType, maintainBill, existing.rows[0].ledger_id
+                ]);
+                updatedCount++;
+            } else {
+                await client.query(`
+                    INSERT INTO ledgers (
+                        company_id, group_id, ledger_name, ledger_code, currency_code,
+                        opening_balance, opening_balance_type, opening_balance_date, notes,
+                        current_balance, current_balance_type,
+                        maintain_bill_by_bill, default_credit_period_days, credit_limit,
+                        tax_type, is_active, is_system_defined
+                    ) VALUES (
+                        $1, $2, $3, $4, 'INR',
+                        $5, $6, CURRENT_DATE, $7,
+                        $5, $6,
+                        $8, $9, $10,
+                        $11, TRUE, FALSE
+                    )
+                `, [
+                    companyId, groupId, ledgerName, ledgerCode,
+                    openingBal, opType, notes,
+                    maintainBill, creditPeriod, creditLimit,
+                    taxType
+                ]);
+                insertedCount++;
+            }
+        }
+
+        if (errors.length > 0 && insertedCount === 0 && updatedCount === 0) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({ success: false, message: 'Import failed.', errors });
+        }
+
+        await client.query('COMMIT');
+        return res.status(200).json({
+            success: true,
+            message: `Successfully processed ${insertedCount + updatedCount} ledgers (${insertedCount} added, ${updatedCount} updated).`,
+            insertedCount,
+            updatedCount,
+            errors
+        });
+    } catch (error) {
+        await client.query('ROLLBACK');
+        console.error('Error in bulkImportLedgers:', error);
+        return res.status(500).json({ success: false, message: 'Internal server error', error: error.message });
     } finally {
         client.release();
     }

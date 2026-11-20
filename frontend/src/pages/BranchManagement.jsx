@@ -16,8 +16,35 @@ import {
   Calendar,
   Key,
   AlertCircle,
-  RefreshCw
+  RefreshCw,
+  FileSpreadsheet
 } from 'lucide-react';
+import ExcelImportModal from '../components/ExcelImportModal';
+
+const BRANCH_IMPORT_COLUMNS = [
+  { key: 'branch_name', label: 'Branch Name', required: true, example: 'Hosur Manufacturing Plant' },
+  { key: 'branch_code', label: 'Branch Code', required: false, example: 'BR-HSR-01' },
+  { key: 'address', label: 'Address', required: false, example: 'Plot 88, SIPCOT Phase 1, Industrial Area' },
+  { key: 'phone_number', label: 'Phone Number', required: false, example: '04344278910' },
+  { key: 'email_id', label: 'Email Address', required: false, example: 'hosur.plant@sme-corp.com' }
+];
+
+const BRANCH_IMPORT_SAMPLES = [
+  {
+    'Branch Name': 'Hosur Manufacturing Plant',
+    'Branch Code': 'BR-HSR-01',
+    'Address': 'Plot 88, SIPCOT Phase 1, Industrial Area',
+    'Phone Number': '04344278910',
+    'Email Address': 'hosur.plant@sme-corp.com'
+  },
+  {
+    'Branch Name': 'Pune Assembly & Warehouse',
+    'Branch Code': 'BR-PUN-02',
+    'Address': 'Sector 10, MIDC Bhosari',
+    'Phone Number': '02027123456',
+    'Email Address': 'pune.branch@sme-corp.com'
+  }
+];
 
 // API base URL
 const API_BASE_URL = import.meta.env.VITE_API_URL;
@@ -51,9 +78,37 @@ const BranchManagement = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
+  const [showImportModal, setShowImportModal] = useState(false);
   const [showDetailsModal, setShowDetailsModal] = useState(false);
   const [selectedBranch, setSelectedBranch] = useState(null);
   const [toast, setToast] = useState(null);
+
+  const handleBulkImportBranches = async (rows) => {
+    try {
+      const payload = {
+        items: rows,
+        company_id: companyId
+      };
+      const response = await api.post('/branches/bulk-import', payload);
+      if (response.data.success) {
+        showToast('success', response.data.message || `Successfully imported ${rows.length} branches!`);
+        await fetchBranches();
+        return {
+          success: true,
+          message: response.data.message || `Successfully imported ${rows.length} branches!`
+        };
+      }
+      return {
+        success: false,
+        message: response.data.message || 'Failed to import branches.'
+      };
+    } catch (err) {
+      return {
+        success: false,
+        message: err.response?.data?.message || 'Error importing branches.'
+      };
+    }
+  };
 
   // Form state for create
   const [formData, setFormData] = useState({
@@ -258,6 +313,14 @@ const BranchManagement = () => {
           />
         </div>
         <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={() => setShowImportModal(true)}
+            className="px-3 py-2 bg-emerald-50 border border-emerald-200 hover:bg-emerald-100 text-emerald-700 rounded-md font-semibold flex items-center gap-1.5 transition-all text-sm cursor-pointer shadow-xs"
+          >
+            <FileSpreadsheet size={15} className="text-emerald-600" />
+            Import Data
+          </button>
           <button
             onClick={fetchBranches}
             className="px-3 py-2 bg-white border border-[#f0f0f0] hover:bg-gray-50 text-gray-600 rounded-md font-medium flex items-center gap-2 transition-all text-sm"
@@ -581,6 +644,17 @@ const BranchManagement = () => {
           </div>
         </Modal>
       )}
+
+      {/* Excel Import Modal */}
+      <ExcelImportModal
+        isOpen={showImportModal}
+        onClose={() => setShowImportModal(false)}
+        title="Import Branches"
+        moduleName="Branch Management"
+        columns={BRANCH_IMPORT_COLUMNS}
+        sampleData={BRANCH_IMPORT_SAMPLES}
+        onImport={handleBulkImportBranches}
+      />
     </div>
   );
 };

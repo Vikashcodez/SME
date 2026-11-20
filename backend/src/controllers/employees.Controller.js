@@ -1,5 +1,6 @@
 import pool from '../config/database.js'; 
 import bcrypt from 'bcrypt'; 
+import { resolveBranchId, resolveDepartmentId, resolveRoleId } from '../services/ForeignKeyResolver.js'; 
 
 // Default password for new employees
 const DEFAULT_PASSWORD = 'welcome';
@@ -559,5 +560,124 @@ export const changeEmployeePassword = async (req, res) => {
             message: 'Internal server error',
             error: error.message
         });
+    }
+};
+
+// Bulk Import Employees from Excel / CSV
+export const bulkImportEmployees = async (req, res) => {
+    const client = await pool.connect();
+    try {
+        const { items, company_id, branch_id } = req.body;
+        const effectiveCompanyId = company_id || req.user?.company_id;
+        const defaultBranchId = branch_id || req.user?.branch_id || null;
+
+        if (!effectiveCompanyId) {
+            return res.status(400).json({ success: false, message: 'Company ID is required.' });
+        }
+
+        if (!Array.isArray(items) || items.length === 0) {
+            return res.status(400).json({ success: false, message: 'No employee items provided for import.' });
+        }
+
+        await client.query('BEGIN');
+
+        const hashedPassword = await bcrypt.hash(DEFAULT_PASSWORD, 10);
+        let insertedCount = 0;
+        let updatedCount = 0;
+        const errors = [];
+
+        for (let i = 0; i < items.length; i++) {
+            const row = items[i];
+            const rowNum = i + 1;
+
+            const firstName = (row.first_name || '').trim();
+            const lastName = (row.last_name || '').trim();
+            const email = (row.email || '').trim().toLowerCase();
+            const phone = (row.phone_number || row.phone || '').trim();
+            let empCode = (row.employee_code || '').trim();
+
+            if (!firstName || !email || !phone) {
+                errors.push(`Row ${rowNum}: First Name, Email, and Phone Number are required.`);
+                continue;
+            }
+
+            if (!empCode) {
+                empCode = `EMP-${effectiveCompanyId}-${Math.floor(1000 + Math.random() * 9000)}`;
+            }
+
+            // Smart foreign key resolution
+            const resolvedBranchId = await resolveBranchId(client, effectiveCompanyId, row.branch || row.branch_id || defaultBranchId) || defaultBranchId;
+            if (!resolvedBranchId) {
+                errors.push(`Row ${rowNum}: Valid Branch could not be resolved.`);
+                continue;
+            }
+
+            // Ensure Department exists and get name/id
+            let deptName = (row.department || '').trim() || null;
+            if (deptName) {
+                await resolveDepartmentId(client, effectiveCompanyId, deptName);
+            }
+
+            // Ensure Role exists and get name/id
+            let roleName = (row.role || '').trim() || null;
+            if (roleName) {
+                await resolveRoleId(client, effectiveCompanyId, roleName);
+            }
+
+            // Check if existing by employee_code or email
+            const existing = await client.query(
+                `SELECT employee_id FROM employees WHERE (employee_code = $1 OR email = $2) AND company_id = $3`,
+                [empCode, email, effectiveCompanyId]
+            );
+
+            if (existing.rows.length > 0) {
+                await client.query(`
+                    UPDATE employees SET
+                        branch_id = $1, first_name = $2, last_name = $3, phone_number = $4,
+                        dob = $5, gender = $6, department = $7, role = $8,
+                        date_of_joining = $9, address = $10
+                    WHERE employee_id = $11
+                `, [
+                    resolvedBranchId, firstName, lastName || null, phone,
+                    row.dob || null, row.gender || null, deptName, roleName,
+                    row.date_of_joining || null, row.address || null,
+                    existing.rows[0].employee_id
+                ]);
+                updatedCount++;
+            } else {
+                await client.query(`
+                    INSERT INTO employees (
+                        company_id, branch_id, first_name, last_name, employee_code,
+                        email, phone_number, dob, gender, department, role,
+                        date_of_joining, address, password
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+                `, [
+                    effectiveCompanyId, resolvedBranchId, firstName, lastName || null, empCode,
+                    email, phone, row.dob || null, row.gender || null, deptName, roleName,
+                    row.date_of_joining || null, row.address || null, hashedPassword
+                ]);
+                insertedCount++;
+            }
+        }
+
+        if (errors.length > 0 && insertedCount === 0 && updatedCount === 0) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({ success: false, message: 'Import failed.', errors });
+        }
+
+        await client.query('COMMIT');
+        return res.status(200).json({
+            success: true,
+            message: `Successfully processed ${insertedCount + updatedCount} employees (${insertedCount} added, ${updatedCount} updated).`,
+            insertedCount,
+            updatedCount,
+            errors
+        });
+    } catch (error) {
+        await client.query('ROLLBACK');
+        console.error('Error in bulkImportEmployees:', error);
+        return res.status(500).json({ success: false, message: 'Internal server error', error: error.message });
+    } finally {
+        client.release();
     }
 };

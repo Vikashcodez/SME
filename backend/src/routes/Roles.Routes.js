@@ -1,6 +1,7 @@
 import express from 'express';
 import {
     createRole,
+    bulkImportRoles,
     updateRole,
     getRolesByBranch,
     getRoleById,
@@ -10,6 +11,7 @@ import {
 
 const RolesRouter = express.Router();
 
+RolesRouter.post('/bulk-import', bulkImportRoles);
 RolesRouter.post('/createRole', createRole);
 RolesRouter.put('/updateRole/:role_id', updateRole);
 RolesRouter.get('/getRolesByBranch/:branch_id', getRolesByBranch);

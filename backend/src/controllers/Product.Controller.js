@@ -1,5 +1,14 @@
 import pool from '../config/database.js';
 
+// Helper: Ensure employee ID exists to avoid foreign key violations
+const getValidEmployeeId = async (client, employeeId) => {
+    if (!employeeId) return null;
+    const cleanId = String(employeeId).trim();
+    if (!cleanId || cleanId === 'null' || cleanId === 'undefined') return null;
+    const res = await client.query('SELECT employee_id FROM employees WHERE employee_id = $1 LIMIT 1', [cleanId]);
+    return res.rows.length > 0 ? res.rows[0].employee_id : null;
+};
+
 // 1. Create Product Master with Bill of Materials (BOM) & Photos
 export const createProduct = async (req, res) => {
     const client = await pool.connect();
@@ -676,5 +685,133 @@ export const getProductCategories = async (req, res) => {
             message: 'Internal server error while fetching categories',
             error: error.message
         });
+    }
+};
+
+// 8. Bulk Import Products from Excel / Google Sheets
+export const bulkImportProducts = async (req, res) => {
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        const { products: rawProducts = [], company_id, branch_id } = req.body;
+        const effectiveCompanyId = company_id || req.user?.company_id;
+        const effectiveBranchId = branch_id || req.user?.branch_id || null;
+        const performedBy = await getValidEmployeeId(client, req.user?.employee_id);
+
+        if (!effectiveCompanyId) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({ success: false, message: 'Company ID is required.' });
+        }
+
+        if (!Array.isArray(rawProducts) || rawProducts.length === 0) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({ success: false, message: 'No product records provided for import.' });
+        }
+
+        const insertedProducts = [];
+        const skippedProducts = [];
+
+        for (let i = 0; i < rawProducts.length; i++) {
+            const row = rawProducts[i];
+            const rowNum = i + 1;
+            const productName = (row.product_name || row['Product Name'] || '').toString().trim();
+            if (!productName) {
+                skippedProducts.push({ row: rowNum, reason: 'Missing Product Name' });
+                continue;
+            }
+
+            const price = Math.max(0, parseFloat(row.selling_price || row['Selling Price'] || 0) || 0);
+            const cost = Math.max(0, parseFloat(row.cost_price || row['Cost Price'] || row.estimated_bom_cost || row['Est. Material Cost'] || 0) || 0);
+            const gstRate = parseFloat(row.gst_rate || row['GST Rate'] || row['GST Rate (%)'] || 18) || 18;
+            const uom = (row.unit_of_measure || row.uom || row['UOM'] || row['Unit of Measure'] || 'PCS').toString().trim().toUpperCase() || 'PCS';
+            const category = (row.category || row['Category'] || 'Finished Goods').toString().trim() || 'Finished Goods';
+            const hsn = (row.hsn_code || row['HSN Code'] || '').toString().trim() || null;
+            const spec = (row.product_specification || row.specification || row['Product Specification'] || '').toString().trim() || null;
+            const minStock = Math.max(0, parseFloat(row.min_stock_level || row['Min Stock Level'] || 0) || 0);
+            const workforce = Math.max(1, parseInt(row.workforce_required || row['Workforce Needed'] || row['Workforce Required'] || 1, 10) || 1);
+
+            // Production Time calculation
+            const pDays = Math.max(0, parseFloat(row.production_time_days || row['Production Time Days'] || 0) || 0);
+            const pHours = Math.max(0, parseFloat(row.production_time_hours || row['Production Time Hours'] || 0) || 0);
+            const pMins = Math.max(0, parseFloat(row.production_time_minutes || row['Production Time Minutes'] || row['Prod. Time (Mins)'] || 0) || 0);
+            const totalMins = +(pDays * 1440 + pHours * 60 + pMins).toFixed(2);
+            const finalDays = pDays > 0 ? pDays : Math.floor(totalMins / 1440);
+            const finalHours = pHours > 0 ? pHours : Math.floor((totalMins % 1440) / 60);
+
+            // Product Code (if provided, check uniqueness or generate)
+            let rawCode = (row.product_code || row['Product Code'] || '').toString().trim().toUpperCase();
+            if (rawCode) {
+                const existing = await client.query(
+                    `SELECT product_id FROM products WHERE company_id = $1 AND product_code = $2`,
+                    [effectiveCompanyId, rawCode]
+                );
+                if (existing.rows.length > 0) {
+                    rawCode = `${rawCode}-${Math.floor(100 + Math.random() * 900)}`;
+                }
+            } else {
+                rawCode = `PRD-${Math.floor(1000 + Math.random() * 9000)}`;
+            }
+
+            const insertQuery = `
+                INSERT INTO products (
+                    company_id, branch_id, product_code, product_name, category,
+                    unit_of_measure, selling_price, cost_price, hsn_code, gst_rate,
+                    product_specification, min_stock_level,
+                    production_time_days, production_time_hours, production_time_minutes,
+                    production_time_value, production_time_unit, workforce_required,
+                    status, is_active, created_by, updated_by
+                ) VALUES (
+                    $1, $2, $3, $4, $5,
+                    $6, $7, $8, $9, $10,
+                    $11, $12,
+                    $13, $14, $15,
+                    $16, 'Minutes', $17,
+                    'Active', true, $18, $18
+                ) RETURNING product_id, product_code, product_name, selling_price
+            `;
+
+            const result = await client.query(insertQuery, [
+                effectiveCompanyId,
+                effectiveBranchId,
+                rawCode,
+                productName,
+                category,
+                uom,
+                price,
+                cost,
+                hsn,
+                gstRate,
+                spec,
+                minStock,
+                finalDays,
+                finalHours,
+                totalMins,
+                totalMins,
+                workforce,
+                performedBy
+            ]);
+
+            insertedProducts.push(result.rows[0]);
+        }
+
+        await client.query('COMMIT');
+
+        return res.status(201).json({
+            success: true,
+            message: `Successfully imported ${insertedProducts.length} product(s).${skippedProducts.length > 0 ? ` (${skippedProducts.length} skipped)` : ''}`,
+            count: insertedProducts.length,
+            skippedCount: skippedProducts.length,
+            data: insertedProducts,
+            skipped: skippedProducts
+        });
+    } catch (error) {
+        await client.query('ROLLBACK');
+        console.error('Error in bulkImportProducts:', error);
+        return res.status(500).json({
+            success: false,
+            message: error.message || 'Failed to bulk import products.'
+        });
+    } finally {
+        client.release();
     }
 };

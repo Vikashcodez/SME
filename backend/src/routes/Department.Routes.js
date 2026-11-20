@@ -2,6 +2,7 @@
 import express from 'express';
 import {
     createDepartment,
+    bulkImportDepartments,
     updateDepartment,
     getDepartmentsByBranch,
     getDepartmentById,
@@ -13,7 +14,7 @@ import {
 
 const departmentRouter = express.Router();
 
-
+departmentRouter.post('/bulk-import', bulkImportDepartments);
 departmentRouter.post('/', createDepartment);
 departmentRouter.put('/:department_id', updateDepartment);
 departmentRouter.get('/branch/:branch_id', getDepartmentsByBranch);

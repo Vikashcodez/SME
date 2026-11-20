@@ -19,8 +19,62 @@ import {
   Filter,
   ArrowUpRight,
   ArrowDownLeft,
-  Info
+  Info,
+  FileSpreadsheet
 } from 'lucide-react';
+import ExcelImportModal from '../../components/ExcelImportModal';
+
+const LEDGER_IMPORT_COLUMNS = [
+  { key: 'ledger_name', label: 'Ledger Name', required: true, example: 'Electricity & Utilities Expense' },
+  { key: 'ledger_code', label: 'Ledger Code', required: false, example: 'LED-UTIL-01' },
+  { key: 'account_group', label: 'Account Group (Name or Code)', required: true, example: 'Indirect Expenses' },
+  { key: 'opening_balance', label: 'Opening Balance (₹)', required: false, example: 0 },
+  { key: 'opening_balance_type', label: 'Bal. Type (DR/CR)', required: false, example: 'DR' },
+  { key: 'credit_limit', label: 'Credit Limit (₹)', required: false, example: 0 },
+  { key: 'credit_period_days', label: 'Credit Period (Days)', required: false, example: 0 },
+  { key: 'tax_type', label: 'Tax Type (GST/TDS/NONE)', required: false, example: 'NONE' },
+  { key: 'maintain_bill_by_bill', label: 'Bill-by-Bill (TRUE/FALSE)', required: false, example: 'FALSE' },
+  { key: 'notes', label: 'Notes / Remarks', required: false, example: 'Monthly plant power and utility consumption' }
+];
+
+const LEDGER_IMPORT_SAMPLES = [
+  {
+    'Ledger Name': 'Electricity & Utilities Expense',
+    'Ledger Code': 'LED-UTIL-01',
+    'Account Group (Name or Code)': 'Indirect Expenses',
+    'Opening Balance (₹)': 0,
+    'Bal. Type (DR/CR)': 'DR',
+    'Credit Limit (₹)': 0,
+    'Credit Period (Days)': 0,
+    'Tax Type (GST/TDS/NONE)': 'NONE',
+    'Bill-by-Bill (TRUE/FALSE)': 'FALSE',
+    'Notes / Remarks': 'Monthly plant power and utility consumption'
+  },
+  {
+    'Ledger Name': 'Factory Rent & Rates',
+    'Ledger Code': 'LED-RENT-02',
+    'Account Group (Name or Code)': 'Indirect Expenses',
+    'Opening Balance (₹)': 0,
+    'Bal. Type (DR/CR)': 'DR',
+    'Credit Limit (₹)': 0,
+    'Credit Period (Days)': 0,
+    'Tax Type (GST/TDS/NONE)': 'NONE',
+    'Bill-by-Bill (TRUE/FALSE)': 'FALSE',
+    'Notes / Remarks': 'Industrial shed lease payments'
+  },
+  {
+    'Ledger Name': 'HDFC Bank Operational A/c',
+    'Ledger Code': 'LED-HDFC-OP',
+    'Account Group (Name or Code)': 'Bank Accounts',
+    'Opening Balance (₹)': 250000,
+    'Bal. Type (DR/CR)': 'DR',
+    'Credit Limit (₹)': 0,
+    'Credit Period (Days)': 0,
+    'Tax Type (GST/TDS/NONE)': 'NONE',
+    'Bill-by-Bill (TRUE/FALSE)': 'FALSE',
+    'Notes / Remarks': 'Primary current account for vendor payouts'
+  }
+];
 
 const emptyLedger = {
   group_id: '',
@@ -77,10 +131,30 @@ const LedgerManagement = () => {
 
   // Modals state
   const [showLedgerForm, setShowLedgerForm] = useState(false);
+  const [showImportModal, setShowImportModal] = useState(false);
   const [showBankForm, setShowBankForm] = useState(false);
   const [editingLedger, setEditingLedger] = useState(null);
   const [ledgerForm, setLedgerForm] = useState(emptyLedger);
   const [bankForm, setBankForm] = useState(emptyBank);
+
+  const handleBulkImportLedgers = async (rows) => {
+    const payload = {
+      items: rows,
+      company_id: companyId
+    };
+    const res = await accountingApi.bulkImportLedgers(payload);
+    if (res?.data?.success) {
+      await loadData();
+      return {
+        success: true,
+        message: res.data.message || `Successfully imported ${rows.length} ledgers!`
+      };
+    }
+    return {
+      success: false,
+      message: res?.data?.message || 'Failed to import ledgers.'
+    };
+  };
 
   // Statement Drawer state
   const [statementLedger, setStatementLedger] = useState(null);
@@ -342,6 +416,13 @@ const LedgerManagement = () => {
           </div>
         </div>
         <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setShowImportModal(true)}
+            className="px-3.5 py-2 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 text-xs font-semibold flex items-center gap-1.5 shadow-xs transition cursor-pointer"
+          >
+            <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-600" /> Import Data
+          </button>
           <button
             onClick={() => {
               setLedgerForm(emptyLedger);
@@ -1154,6 +1235,17 @@ const LedgerManagement = () => {
           </form>
         </div>
       )}
+      {/* Excel Import Modal */}
+      <ExcelImportModal
+        isOpen={showImportModal}
+        onClose={() => setShowImportModal(false)}
+        title="Import Ledgers"
+        moduleName="Ledgers"
+        columns={LEDGER_IMPORT_COLUMNS}
+        sampleData={LEDGER_IMPORT_SAMPLES}
+        onImport={handleBulkImportLedgers}
+      />
+
     </div>
   );
 };

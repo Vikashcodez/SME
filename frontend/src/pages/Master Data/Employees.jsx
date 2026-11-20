@@ -46,8 +46,56 @@ import {
   ShieldCheck,
   Layers,
   Clock,
-  ArrowUpDown
+  ArrowUpDown,
+  FileSpreadsheet
 } from 'lucide-react';
+import ExcelImportModal from '../../components/ExcelImportModal';
+
+const EMPLOYEE_IMPORT_COLUMNS = [
+  { key: 'first_name', label: 'First Name', required: true, example: 'Rahul' },
+  { key: 'last_name', label: 'Last Name', required: false, example: 'Sharma' },
+  { key: 'employee_code', label: 'Employee Code', required: false, example: 'EMP-1001' },
+  { key: 'email', label: 'Email Address', required: true, example: 'rahul.sharma@sme-corp.com' },
+  { key: 'phone_number', label: 'Phone Number', required: true, example: '9876543210' },
+  { key: 'department', label: 'Department', required: false, example: 'Production' },
+  { key: 'role', label: 'Role / Designation', required: false, example: 'Production Supervisor' },
+  { key: 'branch', label: 'Branch Name or Code', required: false, example: 'Main Plant' },
+  { key: 'gender', label: 'Gender', required: false, example: 'Male' },
+  { key: 'dob', label: 'Date of Birth (YYYY-MM-DD)', required: false, example: '1992-05-15' },
+  { key: 'date_of_joining', label: 'Joining Date (YYYY-MM-DD)', required: false, example: '2023-01-10' },
+  { key: 'address', label: 'Residential Address', required: false, example: 'Plot 42, Sector 18, Industrial Area' }
+];
+
+const EMPLOYEE_IMPORT_SAMPLES = [
+  {
+    'First Name': 'Rahul',
+    'Last Name': 'Sharma',
+    'Employee Code': 'EMP-1001',
+    'Email Address': 'rahul.sharma@sme-corp.com',
+    'Phone Number': '9876543210',
+    'Department': 'Production',
+    'Role / Designation': 'Production Supervisor',
+    'Branch Name or Code': 'Main Plant',
+    'Gender': 'Male',
+    'Date of Birth (YYYY-MM-DD)': '1992-05-15',
+    'Joining Date (YYYY-MM-DD)': '2023-01-10',
+    'Residential Address': 'Plot 42, Sector 18, Industrial Area'
+  },
+  {
+    'First Name': 'Pooja',
+    'Last Name': 'Verma',
+    'Employee Code': 'EMP-1002',
+    'Email Address': 'pooja.verma@sme-corp.com',
+    'Phone Number': '9812345678',
+    'Department': 'Quality Control',
+    'Role / Designation': 'QC Engineer',
+    'Branch Name or Code': 'Main Plant',
+    'Gender': 'Female',
+    'Date of Birth (YYYY-MM-DD)': '1995-08-20',
+    'Joining Date (YYYY-MM-DD)': '2023-03-01',
+    'Residential Address': 'Flat 304, Skyline Towers, Sector 12'
+  }
+];
 
 const Employees = () => {
   const { user, isSuperAdmin, isCompanyAdmin, isBranchAdmin } = useAuth();
@@ -92,7 +140,28 @@ const Employees = () => {
   const [showDetailsModal, setShowDetailsModal] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [showResetPasswordModal, setShowResetPasswordModal] = useState(false);
+  const [showImportModal, setShowImportModal] = useState(false);
   const [activeEmployee, setActiveEmployee] = useState(null);
+
+  const handleBulkImportEmployees = async (rows) => {
+    const payload = {
+      items: rows,
+      company_id: selectedCompanyId || user?.company_id,
+      branch_id: selectedBranchId || user?.branch_id
+    };
+    const res = await employeesApi.bulkImport(payload);
+    if (res?.data?.success) {
+      await fetchEmployeesData(selectedBranchId, selectedCompanyId || user?.company_id);
+      return {
+        success: true,
+        message: res.data.message || `Successfully imported ${rows.length} employee records!`
+      };
+    }
+    return {
+      success: false,
+      message: res?.data?.message || 'Failed to import employees.'
+    };
+  };
 
   // Form State for Create
   const [formData, setFormData] = useState({
@@ -713,6 +782,16 @@ const Employees = () => {
           >
             <Download className="w-4 h-4 text-slate-500" />
             <span className="hidden sm:inline">Export CSV</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setShowImportModal(true)}
+            title="Import Employees from Excel or Google Sheets"
+            className="inline-flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 text-xs font-semibold shadow-xs transition-all active:scale-95 cursor-pointer"
+          >
+            <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
+            <span>Import Data</span>
           </button>
 
           <button
@@ -2181,6 +2260,17 @@ const Employees = () => {
           </div>
         </div>
       )}
+
+      {/* Excel Import Modal */}
+      <ExcelImportModal
+        isOpen={showImportModal}
+        onClose={() => setShowImportModal(false)}
+        title="Import Employees"
+        moduleName="Employees"
+        columns={EMPLOYEE_IMPORT_COLUMNS}
+        sampleData={EMPLOYEE_IMPORT_SAMPLES}
+        onImport={handleBulkImportEmployees}
+      />
 
     </div>
   );

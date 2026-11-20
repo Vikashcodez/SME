@@ -47,6 +47,68 @@ import {
   Car,
   Settings2
 } from 'lucide-react';
+import ExcelImportModal from '../../components/ExcelImportModal';
+
+const ASSET_IMPORT_COLUMNS = [
+  { key: 'asset_name', label: 'Asset Name', required: true, example: 'Hydraulic Press Machine 50T' },
+  { key: 'asset_category', label: 'Asset Category', required: true, example: 'Heavy Machinery & Production Line' },
+  { key: 'asset_tag', label: 'Asset Tag', required: false, example: 'AST-HPR-1001' },
+  { key: 'brand_model', label: 'Brand & Model', required: false, example: 'LMW Precision Press Series 5' },
+  { key: 'serial_number', label: 'Serial Number', required: false, example: 'SN-2023-889912' },
+  { key: 'purchase_date', label: 'Purchase Date (YYYY-MM-DD)', required: false, example: '2023-04-12' },
+  { key: 'purchase_cost', label: 'Purchase Cost (₹)', required: false, example: 450000 },
+  { key: 'current_value', label: 'Current Value (₹)', required: false, example: 405000 },
+  { key: 'depreciation_rate', label: 'Depreciation Rate (%)', required: false, example: 10 },
+  { key: 'location', label: 'Plant / Shopfloor Location', required: false, example: 'Bay 2 - Press Shop' },
+  { key: 'department', label: 'Department Name', required: false, example: 'Production' },
+  { key: 'assigned_employee', label: 'Assigned Custodian (Name/Code/Email)', required: false, example: 'Rahul Sharma' },
+  { key: 'vendor', label: 'Vendor (Name/GSTIN/PAN)', required: false, example: 'Tata Steel Processing Ltd' },
+  { key: 'branch', label: 'Branch Name or Code', required: false, example: 'Main Plant' },
+  { key: 'asset_status', label: 'Status (In Use/Under Maintenance/Standby)', required: false, example: 'In Use' },
+  { key: 'condition', label: 'Condition (Excellent/Good/Needs Repair)', required: false, example: 'Good' },
+  { key: 'notes', label: 'Notes', required: false, example: 'Scheduled for annual hydraulic calibration in Dec' }
+];
+
+const ASSET_IMPORT_SAMPLES = [
+  {
+    'Asset Name': 'Hydraulic Press Machine 50T',
+    'Asset Category': 'Heavy Machinery & Production Line',
+    'Asset Tag': 'AST-HPR-1001',
+    'Brand & Model': 'LMW Precision Press Series 5',
+    'Serial Number': 'SN-2023-889912',
+    'Purchase Date (YYYY-MM-DD)': '2023-04-12',
+    'Purchase Cost (₹)': 450000,
+    'Current Value (₹)': 405000,
+    'Depreciation Rate (%)': 10,
+    'Plant / Shopfloor Location': 'Bay 2 - Press Shop',
+    'Department Name': 'Production',
+    'Assigned Custodian (Name/Code/Email)': 'Rahul Sharma',
+    'Vendor (Name/GSTIN/PAN)': 'Tata Steel Processing Ltd',
+    'Branch Name or Code': 'Main Plant',
+    'Status (In Use/Under Maintenance/Standby)': 'In Use',
+    'Condition (Excellent/Good/Needs Repair)': 'Good',
+    'Notes': 'Scheduled for annual hydraulic calibration in Dec'
+  },
+  {
+    'Asset Name': 'Industrial Air Compressor 15HP',
+    'Asset Category': 'Heavy Machinery & Production Line',
+    'Asset Tag': 'AST-CMP-1002',
+    'Brand & Model': 'Atlas Copco GX11',
+    'Serial Number': 'AC-77621-B',
+    'Purchase Date (YYYY-MM-DD)': '2023-06-18',
+    'Purchase Cost (₹)': 180000,
+    'Current Value (₹)': 162000,
+    'Depreciation Rate (%)': 10,
+    'Plant / Shopfloor Location': 'Utility Shed A',
+    'Department Name': 'Maintenance',
+    'Assigned Custodian (Name/Code/Email)': 'EMP-1001',
+    'Vendor (Name/GSTIN/PAN)': '27AABCT1234A1Z1',
+    'Branch Name or Code': 'Main Plant',
+    'Status (In Use/Under Maintenance/Standby)': 'In Use',
+    'Condition (Excellent/Good/Needs Repair)': 'Excellent',
+    'Notes': 'Oil filter replaced during previous PM'
+  }
+];
 
 const ASSET_CATEGORIES = [
   'Heavy Machinery & Production Line',
@@ -121,11 +183,32 @@ const AssetsInventory = () => {
 
   // Modals
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [showImportModal, setShowImportModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [showDetailsModal, setShowDetailsModal] = useState(false);
   const [showMaintenanceModal, setShowMaintenanceModal] = useState(false);
   const [showDamageModal, setShowDamageModal] = useState(false);
   const [activeAsset, setActiveAsset] = useState(null);
+
+  const handleBulkImportAssets = async (rows) => {
+    const payload = {
+      items: rows,
+      company_id: selectedCompanyId || user?.company_id,
+      branch_id: selectedBranchId || user?.branch_id
+    };
+    const res = await assetsApi.bulkImport(payload);
+    if (res?.data?.success) {
+      await refreshAllData();
+      return {
+        success: true,
+        message: res.data.message || `Successfully imported ${rows.length} assets!`
+      };
+    }
+    return {
+      success: false,
+      message: res?.data?.message || 'Failed to import assets.'
+    };
+  };
 
   // Initial Forms
   const initialAssetForm = {
@@ -533,6 +616,15 @@ const AssetsInventory = () => {
           >
             <FileSpreadsheet size={14} className="text-emerald-600" />
             <span>Export CSV</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setShowImportModal(true)}
+            className="px-3.5 py-2 bg-emerald-50 border border-emerald-200 hover:bg-emerald-100 text-emerald-700 text-xs font-semibold rounded-lg shadow-xs flex items-center gap-1.5 cursor-pointer"
+          >
+            <FileSpreadsheet size={14} className="text-emerald-600" />
+            <span>Import Data</span>
           </button>
 
           <button
@@ -1426,6 +1518,17 @@ const AssetsInventory = () => {
           </div>
         </div>
       )}
+      {/* Excel Import Modal */}
+      <ExcelImportModal
+        isOpen={showImportModal}
+        onClose={() => setShowImportModal(false)}
+        title="Import Assets"
+        moduleName="Fixed Assets Inventory"
+        columns={ASSET_IMPORT_COLUMNS}
+        sampleData={ASSET_IMPORT_SAMPLES}
+        onImport={handleBulkImportAssets}
+      />
+
     </div>
   );
 };

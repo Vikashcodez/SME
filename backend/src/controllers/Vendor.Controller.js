@@ -1,4 +1,5 @@
 import pool from '../config/database.js';
+import { resolveBranchId } from '../services/ForeignKeyResolver.js';
 
 // Helper to generate a unique vendor code if none provided
 const generateVendorCode = async (companyId) => {
@@ -565,5 +566,181 @@ export const getVendorStats = async (req, res) => {
             message: 'Internal server error',
             error: error.message
         });
+    }
+};
+
+// Bulk Import Vendors from Excel / CSV
+export const bulkImportVendors = async (req, res) => {
+    const client = await pool.connect();
+    try {
+        const { items, company_id, branch_id } = req.body;
+        const effectiveCompanyId = company_id || req.user?.company_id;
+        const defaultBranchId = branch_id || req.user?.branch_id || null;
+        const createdBy = req.user?.employee_id || null;
+
+        if (!effectiveCompanyId) {
+            return res.status(400).json({ success: false, message: 'Company ID is required.' });
+        }
+
+        if (!Array.isArray(items) || items.length === 0) {
+            return res.status(400).json({ success: false, message: 'No vendor items provided for import.' });
+        }
+
+        await client.query('BEGIN');
+
+        // Locate or create Sundry Creditors account group
+        let credGrpRes = await client.query(
+            `SELECT group_id FROM account_groups WHERE (company_id = $1 OR company_id IS NULL) AND (group_code = 'GRP-CREDITORS' OR group_code = 'SUNDRY_CREDITORS') LIMIT 1`,
+            [effectiveCompanyId]
+        );
+        let creditorsGroupId = credGrpRes.rows[0]?.group_id;
+        if (!creditorsGroupId) {
+            let clRes = await client.query(`SELECT group_id FROM account_groups WHERE (company_id = $1 OR company_id IS NULL) AND group_code = 'GRP-CL' LIMIT 1`, [effectiveCompanyId]);
+            const parentId = clRes.rows[0]?.group_id;
+            const newG = await client.query(`
+                INSERT INTO account_groups (company_id, parent_group_id, group_name, group_code, nature, affects_gross_profit, is_system_group)
+                VALUES ($1, $2, 'Sundry Creditors (Suppliers)', 'GRP-CREDITORS', 'LIABILITY', FALSE, TRUE)
+                RETURNING group_id
+            `, [effectiveCompanyId, parentId]);
+            creditorsGroupId = newG.rows[0].group_id;
+        }
+
+        let insertedCount = 0;
+        let updatedCount = 0;
+        const errors = [];
+
+        for (let i = 0; i < items.length; i++) {
+            const row = items[i];
+            const rowNum = i + 1;
+
+            const vendorName = (row.vendor_name || row.name || '').trim();
+            if (!vendorName) {
+                errors.push(`Row ${rowNum}: Vendor Name is required.`);
+                continue;
+            }
+
+            const rawGstin = (row.gstin || '').trim().replace(/[^a-zA-Z0-9]/g, '').toUpperCase().slice(0, 30) || null;
+            let rawPan = (row.pan || '').trim().replace(/[^a-zA-Z0-9]/g, '').toUpperCase().slice(0, 30) || null;
+            if (!rawPan && rawGstin && rawGstin.length >= 12) {
+                rawPan = rawGstin.substring(2, 12);
+            }
+
+            let vendorCode = (row.vendor_code || '').trim().toUpperCase();
+            if (!vendorCode) {
+                vendorCode = await generateVendorCode(effectiveCompanyId);
+            }
+
+            const address = (row.address || 'Standard Address').trim();
+            const city = (row.city || 'Standard City').trim();
+            const state = (row.state || 'Standard State').trim().substring(0, 50);
+            const pincode = (row.pincode || row.postal_code || '').trim() || null;
+            const phone = (row.phone || row.mobile || '').trim() || null;
+            const email = (row.email || '').trim().toLowerCase() || null;
+            const bankAccNo = (row.bank_account_no || row.account_no || '').trim() || null;
+            const ifscCode = (row.ifsc_code || row.ifsc || '').trim().toUpperCase() || null;
+            const bankName = (row.bank_name || '').trim() || null;
+            const paymentTerms = (row.payment_terms || 'Net 30').trim();
+            const openingBal = parseFloat(row.opening_balance) || 0;
+            const status = (row.status || 'Active').trim();
+
+            // Resolve branch
+            const resolvedBranchId = await resolveBranchId(client, effectiveCompanyId, row.branch || row.branch_id || defaultBranchId) || defaultBranchId;
+
+            // Check if vendor exists by code, GSTIN, or PAN
+            let existingVendor = null;
+            if (rawGstin || rawPan || vendorCode) {
+                const checkRes = await client.query(`
+                    SELECT vendor_id FROM vendors
+                    WHERE company_id = $1 AND (
+                        vendor_code = $2
+                        OR ($3::TEXT IS NOT NULL AND gstin = $3)
+                        OR ($4::TEXT IS NOT NULL AND pan = $4)
+                    ) LIMIT 1
+                `, [effectiveCompanyId, vendorCode, rawGstin, rawPan]);
+                if (checkRes.rows.length > 0) {
+                    existingVendor = checkRes.rows[0];
+                }
+            }
+
+            if (existingVendor) {
+                await client.query(`
+                    UPDATE vendors SET
+                        vendor_name = $1, gstin = COALESCE($2, gstin), pan = COALESCE($3, pan),
+                        address = $4, city = $5, state = $6, pincode = COALESCE($7, pincode),
+                        phone = COALESCE($8, phone), email = COALESCE($9, email),
+                        bank_account_no = COALESCE($10, bank_account_no), ifsc_code = COALESCE($11, ifsc_code),
+                        bank_name = COALESCE($12, bank_name), payment_terms = $13,
+                        status = $14, branch_id = COALESCE($15, branch_id), updated_at = CURRENT_TIMESTAMP
+                    WHERE vendor_id = $16
+                `, [
+                    vendorName, rawGstin, rawPan, address, city, state, pincode,
+                    phone, email, bankAccNo, ifscCode, bankName, paymentTerms,
+                    status, resolvedBranchId, existingVendor.vendor_id
+                ]);
+                updatedCount++;
+            } else {
+                const insRes = await client.query(`
+                    INSERT INTO vendors (
+                        company_id, branch_id, vendor_code, vendor_name,
+                        gstin, pan, address, city, state, pincode,
+                        phone, email, bank_account_no, ifsc_code, bank_name,
+                        payment_terms, opening_balance, status, is_active,
+                        created_by, updated_by
+                    ) VALUES (
+                        $1, $2, $3, $4,
+                        $5, $6, $7, $8, $9, $10,
+                        $11, $12, $13, $14, $15,
+                        $16, $17, $18, TRUE,
+                        $19, $19
+                    ) RETURNING vendor_id
+                `, [
+                    effectiveCompanyId, resolvedBranchId, vendorCode, vendorName,
+                    rawGstin, rawPan, address, city, state, pincode,
+                    phone, email, bankAccNo, ifscCode, bankName,
+                    paymentTerms, openingBal, status, createdBy
+                ]);
+
+                // Create ledger under Sundry Creditors
+                if (creditorsGroupId) {
+                    await client.query(`
+                        INSERT INTO ledgers (
+                            company_id, group_id, ledger_name, ledger_code,
+                            opening_balance, opening_balance_type,
+                            current_balance, current_balance_type,
+                            maintain_bill_by_bill, is_active
+                        ) VALUES (
+                            $1, $2, $3, $4,
+                            $5, 'CR',
+                            $5, 'CR',
+                            TRUE, TRUE
+                        )
+                        ON CONFLICT (company_id, ledger_code)
+                        DO UPDATE SET ledger_name = EXCLUDED.ledger_name
+                    `, [effectiveCompanyId, creditorsGroupId, vendorName, vendorCode, openingBal]);
+                }
+
+                insertedCount++;
+            }
+        }
+
+        if (errors.length > 0 && insertedCount === 0 && updatedCount === 0) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({ success: false, message: 'Import failed.', errors });
+        }
+
+        await client.query('COMMIT');
+        return res.status(200).json({
+            success: true,
+            message: `Successfully processed ${insertedCount + updatedCount} vendors (${insertedCount} added, ${updatedCount} updated).`,
+            insertedCount,
+            updatedCount,
+            errors
+        });
+    } catch (error) {
+        await client.query('ROLLBACK');
+        console.error('Error in bulkImportVendors:', error);
+        return res.status(500).json({ success: false, message: 'Internal server error', error: error.message });
+    } finally {
+        client.release();
     }
 };

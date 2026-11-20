@@ -8,6 +8,7 @@ import {
   hsn as hsnApi
 } from '../../services/api';
 import toast from 'react-hot-toast';
+import ExcelImportModal from '../../components/ExcelImportModal';
 import { 
   Boxes, 
   Plus, 
@@ -54,6 +55,52 @@ const COMMON_CATEGORIES = [
   'Paints & Coatings',
   'Rubber & Elastomers',
   'General Supplies'
+];
+
+const RAW_MATERIAL_IMPORT_COLUMNS = [
+  { key: 'material_code', label: 'Material Code', required: false, sample: 'RM-STL-01', description: 'Auto-generated if empty' },
+  { key: 'material_name', label: 'Material Name', required: true, sample: 'Stainless Steel Sheet 2mm' },
+  { key: 'category', label: 'Category', required: false, default: 'Metals & Alloys', sample: 'Metals & Alloys' },
+  { key: 'unit_of_measure', label: 'Unit of Measure', required: false, default: 'PCS', sample: 'PCS' },
+  { key: 'hsn_code', label: 'HSN Code', required: false, sample: '72199000' },
+  { key: 'gst_rate', label: 'GST Rate (%)', required: false, type: 'number', default: 18, sample: 18 },
+  { key: 'unit_price', label: 'Unit Price', required: false, type: 'number', default: 0, sample: 450.00 },
+  { key: 'minimum_stock_level', label: 'Min Stock Level', required: false, type: 'number', default: 0, sample: 100 },
+  { key: 'reorder_quantity', label: 'Reorder Quantity', required: false, type: 'number', default: 0, sample: 250 },
+  { key: 'lead_time_days', label: 'Lead Time (Days)', required: false, type: 'number', default: 0, sample: 7 },
+  { key: 'preferred_vendor', label: 'Preferred Vendor', required: false, sample: 'Tata Steel (or GSTIN / PAN)', description: 'Resolves vendor automatically by Name, Code, GSTIN, or PAN' },
+  { key: 'description', label: 'Description', required: false, sample: 'SS304 industrial cold rolled sheet' }
+];
+
+const RAW_MATERIAL_IMPORT_SAMPLES = [
+  {
+    'Material Code': 'RM-STL-01',
+    'Material Name': 'Stainless Steel Sheet 2mm (SS304)',
+    'Category': 'Metals & Alloys',
+    'Unit of Measure': 'PCS',
+    'HSN Code': '72199000',
+    'GST Rate (%)': 18,
+    'Unit Price': 450.00,
+    'Min Stock Level': 100,
+    'Reorder Quantity': 250,
+    'Lead Time (Days)': 7,
+    'Preferred Vendor': 'Tata Steel Ltd',
+    'Description': 'Cold rolled finish 2B grade 304'
+  },
+  {
+    'Material Code': 'RM-PLST-02',
+    'Material Name': 'HDPE Granules Injection Grade',
+    'Category': 'Polymers & Plastics',
+    'Unit of Measure': 'KG',
+    'HSN Code': '39012000',
+    'GST Rate (%)': 18,
+    'Unit Price': 115.50,
+    'Min Stock Level': 500,
+    'Reorder Quantity': 1000,
+    'Lead Time (Days)': 5,
+    'Preferred Vendor': 'Reliance Polymers',
+    'Description': 'High density polyethylene prime virgin'
+  }
 ];
 
 const COMMON_UOMS = [
@@ -108,6 +155,7 @@ const RawMaterialMaster = () => {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [showDetailsModal, setShowDetailsModal] = useState(false);
+  const [showImportModal, setShowImportModal] = useState(false);
   const [activeMaterial, setActiveMaterial] = useState(null);
   const [hsnList, setHsnList] = useState([]);
   const [showHsnAdd, setShowHsnAdd] = useState(false);
@@ -424,6 +472,27 @@ const RawMaterialMaster = () => {
     toast.success('Raw material catalog exported');
   };
 
+  // Bulk Import Raw Materials Handler
+  const handleBulkImportMaterials = async (rows) => {
+    const payload = {
+      raw_materials: rows,
+      company_id: selectedCompanyId || user?.company_id,
+      branch_id: selectedBranchId || user?.branch_id || null
+    };
+    const res = await rawMaterialsApi.bulkImport(payload);
+    if (res?.data?.success) {
+      await fetchMaterials();
+      return {
+        success: true,
+        message: res.data.message || `Successfully imported ${res.data.count} raw material(s)!`
+      };
+    }
+    return {
+      success: false,
+      message: res?.data?.message || 'Failed to import materials.'
+    };
+  };
+
   // Filtered materials
   const filteredMaterials = useMemo(() => {
     return materialsList.filter(m => {
@@ -475,6 +544,14 @@ const RawMaterialMaster = () => {
           >
             <FileSpreadsheet size={14} className="text-emerald-600" />
             <span>Export CSV</span>
+          </button>
+
+          <button
+            onClick={() => setShowImportModal(true)}
+            className="px-3.5 py-2 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-700 text-xs font-bold rounded-lg shadow-xs flex items-center gap-1.5 transition-all cursor-pointer"
+          >
+            <FileSpreadsheet size={15} className="text-emerald-600" />
+            <span>Import Data</span>
           </button>
 
           <button
@@ -1288,6 +1365,16 @@ const RawMaterialMaster = () => {
           </div>
         </div>
       )}
+      {/* Excel / Google Sheets Import Modal */}
+      <ExcelImportModal
+        isOpen={showImportModal}
+        onClose={() => setShowImportModal(false)}
+        title="Import Raw Materials from Excel / Google Sheets"
+        entityName="Raw Material"
+        columns={RAW_MATERIAL_IMPORT_COLUMNS}
+        sampleRows={RAW_MATERIAL_IMPORT_SAMPLES}
+        onImport={handleBulkImportMaterials}
+      />
     </div>
   );
 };

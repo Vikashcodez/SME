@@ -1,6 +1,7 @@
 import express from 'express';
 import {
     createBranch,
+    bulkImportBranches,
     getBranches,
     getBranchById,
     updateBranch,
@@ -11,6 +12,7 @@ import {
 const BranchRouter = express.Router();
 
 // Routes
+BranchRouter.post('/bulk-import', bulkImportBranches);
 BranchRouter.post('/', createBranch);
 BranchRouter.get('/', getBranches); // Optional company_id filter
 BranchRouter.get('/company', getBranchesByCompany); // REQUIRED company_id

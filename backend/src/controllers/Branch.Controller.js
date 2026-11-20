@@ -386,3 +386,86 @@ export const getBranchesByCompany = async (req, res) => {
         });
     }
 };
+
+// Bulk Import Branches from Excel / CSV
+export const bulkImportBranches = async (req, res) => {
+    const client = await pool.connect();
+    try {
+        const companyId = req.scopeCompanyId || req.body.company_id || req.user?.company_id;
+        if (!companyId) {
+            return res.status(400).json({ success: false, message: 'Company ID is required.' });
+        }
+
+        const { items } = req.body;
+        if (!Array.isArray(items) || items.length === 0) {
+            return res.status(400).json({ success: false, message: 'No branch items provided for import.' });
+        }
+
+        await client.query('BEGIN');
+
+        let insertedCount = 0;
+        let updatedCount = 0;
+        const errors = [];
+
+        for (let i = 0; i < items.length; i++) {
+            const row = items[i];
+            const rowNum = i + 1;
+
+            const branchName = (row.branch_name || row.name || '').trim();
+            if (!branchName) {
+                errors.push(`Row ${rowNum}: Branch Name is required.`);
+                continue;
+            }
+
+            let branchCode = (row.branch_code || row.code || '').trim().toUpperCase();
+            if (!branchCode) {
+                branchCode = `BR-${Math.floor(1000 + Math.random() * 9000)}`;
+            }
+
+            const address = (row.address || '').trim() || null;
+            const phone = (row.phone_number || row.phone || '').trim() || null;
+            const email = (row.email_id || row.email || '').trim().toLowerCase() || null;
+
+            const existing = await client.query(
+                `SELECT branch_id FROM branches WHERE company_id = $1 AND (branch_code = $2 OR branch_name ILIKE $3)`,
+                [companyId, branchCode, branchName]
+            );
+
+            if (existing.rows.length > 0) {
+                await client.query(`
+                    UPDATE branches SET
+                        branch_name = $1, address = COALESCE($2, address),
+                        phone_number = COALESCE($3, phone_number), email_id = COALESCE($4, email_id)
+                    WHERE branch_id = $5
+                `, [branchName, address, phone, email, existing.rows[0].branch_id]);
+                updatedCount++;
+            } else {
+                await client.query(`
+                    INSERT INTO branches (company_id, branch_name, branch_code, address, phone_number, email_id)
+                    VALUES ($1, $2, $3, $4, $5, $6)
+                `, [companyId, branchName, branchCode, address, phone, email]);
+                insertedCount++;
+            }
+        }
+
+        if (errors.length > 0 && insertedCount === 0 && updatedCount === 0) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({ success: false, message: 'Import failed.', errors });
+        }
+
+        await client.query('COMMIT');
+        return res.status(200).json({
+            success: true,
+            message: `Successfully processed ${insertedCount + updatedCount} branches (${insertedCount} added, ${updatedCount} updated).`,
+            insertedCount,
+            updatedCount,
+            errors
+        });
+    } catch (error) {
+        await client.query('ROLLBACK');
+        console.error('Error in bulkImportBranches:', error);
+        return res.status(500).json({ success: false, message: 'Internal server error', error: error.message });
+    } finally {
+        client.release();
+    }
+};

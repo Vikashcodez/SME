@@ -1,6 +1,7 @@
 import express from 'express';
 import {
     createEmployee,
+    bulkImportEmployees,
     updateEmployee,
     getEmployees,
     getEmployeeById,
@@ -11,7 +12,7 @@ import {
 
 const employeesRouter = express.Router();
 
-
+employeesRouter.post('/bulk-import', bulkImportEmployees);
 employeesRouter.post('/', createEmployee);
 employeesRouter.get('/', getEmployees);
 employeesRouter.get('/:employee_id', getEmployeeById);

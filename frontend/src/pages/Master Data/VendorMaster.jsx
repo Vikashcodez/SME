@@ -41,6 +41,65 @@ import {
   XCircle,
   FileSpreadsheet
 } from 'lucide-react';
+import ExcelImportModal from '../../components/ExcelImportModal';
+
+const VENDOR_IMPORT_COLUMNS = [
+  { key: 'vendor_name', label: 'Vendor / Supplier Name', required: true, example: 'Tata Steel Processing Ltd' },
+  { key: 'vendor_code', label: 'Vendor Code', required: false, example: 'VND-TATA-01' },
+  { key: 'gstin', label: 'GSTIN', required: false, example: '27AABCT1234A1Z1' },
+  { key: 'pan', label: 'PAN Number', required: false, example: 'AABCT1234A' },
+  { key: 'phone', label: 'Phone / Mobile', required: false, example: '9820011223' },
+  { key: 'email', label: 'Email Address', required: false, example: 'sales@tatasteel.com' },
+  { key: 'address', label: 'Street Address', required: false, example: 'Tata Centre, 43 Jawaharlal Nehru Road' },
+  { key: 'city', label: 'City', required: false, example: 'Kolkata' },
+  { key: 'state', label: 'State', required: false, example: 'West Bengal' },
+  { key: 'pincode', label: 'Pincode', required: false, example: '700071' },
+  { key: 'bank_name', label: 'Bank Name', required: false, example: 'State Bank of India' },
+  { key: 'bank_account_no', label: 'Bank Account Number', required: false, example: '30982341234' },
+  { key: 'ifsc_code', label: 'IFSC Code', required: false, example: 'SBIN0000001' },
+  { key: 'payment_terms', label: 'Payment Terms', required: false, example: 'Net 30 Days' },
+  { key: 'opening_balance', label: 'Opening Balance', required: false, example: 50000 },
+  { key: 'branch', label: 'Branch Name or Code', required: false, example: 'Main Plant' }
+];
+
+const VENDOR_IMPORT_SAMPLES = [
+  {
+    'Vendor / Supplier Name': 'Tata Steel Processing Ltd',
+    'Vendor Code': 'VND-TATA-01',
+    'GSTIN': '27AABCT1234A1Z1',
+    'PAN Number': 'AABCT1234A',
+    'Phone / Mobile': '9820011223',
+    'Email Address': 'sales@tatasteel.com',
+    'Street Address': 'Tata Centre, 43 Jawaharlal Nehru Road',
+    'City': 'Kolkata',
+    'State': 'West Bengal',
+    'Pincode': '700071',
+    'Bank Name': 'State Bank of India',
+    'Bank Account Number': '30982341234',
+    'IFSC Code': 'SBIN0000001',
+    'Payment Terms': 'Net 30 Days',
+    'Opening Balance': 50000,
+    'Branch Name or Code': 'Main Plant'
+  },
+  {
+    'Vendor / Supplier Name': 'Jindal Aluminium Supplies',
+    'Vendor Code': 'VND-JIND-02',
+    'GSTIN': '29AABCJ5678C1Z4',
+    'PAN Number': 'AABCJ5678C',
+    'Phone / Mobile': '9845012345',
+    'Email Address': 'orders@jindalalum.com',
+    'Street Address': '16th Km, Tumkur Road',
+    'City': 'Bengaluru',
+    'State': 'Karnataka',
+    'Pincode': '560073',
+    'Bank Name': 'HDFC Bank',
+    'Bank Account Number': '50200012345678',
+    'IFSC Code': 'HDFC0000123',
+    'Payment Terms': 'Net 15 Days',
+    'Opening Balance': 12000,
+    'Branch Name or Code': 'Main Plant'
+  }
+];
 
 const STATUS_COLORS = {
   'Active': 'bg-emerald-50 text-emerald-700 border-emerald-200',
@@ -101,10 +160,31 @@ const VendorMaster = () => {
 
   // Modals state
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [showImportModal, setShowImportModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [showDetailsModal, setShowDetailsModal] = useState(false);
   const [showDeactivateModal, setShowDeactivateModal] = useState(false);
   const [activeVendor, setActiveVendor] = useState(null);
+
+  const handleBulkImportVendors = async (rows) => {
+    const payload = {
+      items: rows,
+      company_id: selectedCompanyId || user?.company_id,
+      branch_id: selectedBranchId || user?.branch_id
+    };
+    const res = await vendorsApi.bulkImport(payload);
+    if (res?.data?.success) {
+      await fetchVendorsData(selectedBranchId, selectedCompanyId || user?.company_id);
+      return {
+        success: true,
+        message: res.data.message || `Successfully processed ${rows.length} vendor records!`
+      };
+    }
+    return {
+      success: false,
+      message: res?.data?.message || 'Failed to import vendors.'
+    };
+  };
 
   // Form states
   const initialFormData = {
@@ -441,6 +521,15 @@ const VendorMaster = () => {
           >
             <FileSpreadsheet size={14} className="text-emerald-600" />
             <span>Export CSV</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setShowImportModal(true)}
+            className="px-3.5 py-2 bg-emerald-50 border border-emerald-200 hover:bg-emerald-100 text-emerald-700 text-xs font-semibold rounded-lg shadow-xs flex items-center gap-1.5 transition-all cursor-pointer"
+          >
+            <FileSpreadsheet size={14} className="text-emerald-600" />
+            <span>Import Data</span>
           </button>
 
           <button
@@ -1604,6 +1693,17 @@ const VendorMaster = () => {
           </div>
         </div>
       )}
+      {/* Excel Import Modal */}
+      <ExcelImportModal
+        isOpen={showImportModal}
+        onClose={() => setShowImportModal(false)}
+        title="Import Vendors"
+        moduleName="Vendor Master"
+        columns={VENDOR_IMPORT_COLUMNS}
+        sampleData={VENDOR_IMPORT_SAMPLES}
+        onImport={handleBulkImportVendors}
+      />
+
     </div>
   );
 };

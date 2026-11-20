@@ -2,6 +2,7 @@ import express from 'express';
 import {
     getInventoryOverview,
     getInventoryBatches,
+    bulkImportInventory,
     recordStockMovement,
     getStockMovements,
     recordRawMaterialReturn,
@@ -16,6 +17,7 @@ const router = express.Router();
 
 router.use(authenticate);
 
+router.post('/bulk-import', bulkImportInventory);
 router.get('/stats/summary', getInventorySummaryStats);
 router.get('/batches', getInventoryBatches);
 router.get('/', getInventoryOverview);

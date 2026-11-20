@@ -19,8 +19,68 @@ import {
   TrendingUp,
   FileText,
   DollarSign,
-  X
+  X,
+  FileSpreadsheet
 } from 'lucide-react';
+import ExcelImportModal from '../../components/ExcelImportModal';
+
+const CUSTOMER_IMPORT_COLUMNS = [
+  { key: 'trade_name', label: 'Customer / Trade Name', required: true, example: 'Apex Industrial Systems' },
+  { key: 'legal_name', label: 'Legal Entity Name', required: false, example: 'Apex Industrial Systems Pvt Ltd' },
+  { key: 'customer_code', label: 'Customer Code', required: false, example: 'CUST-APEX-01' },
+  { key: 'gstin', label: 'GSTIN', required: false, example: '27AABCA1234A1Z5' },
+  { key: 'pan', label: 'PAN Number', required: false, example: 'AABCA1234A' },
+  { key: 'primary_contact_name', label: 'Contact Person', required: false, example: 'Suresh Patil' },
+  { key: 'phone', label: 'Phone / Mobile', required: false, example: '9820123456' },
+  { key: 'email', label: 'Email Address', required: false, example: 'procurement@apexind.com' },
+  { key: 'billing_address_line1', label: 'Billing Address', required: false, example: 'Plot 104, MIDC Industrial Area' },
+  { key: 'billing_city', label: 'City', required: false, example: 'Pune' },
+  { key: 'billing_state_code', label: 'State Code', required: false, example: '27' },
+  { key: 'billing_postal_code', label: 'Pincode', required: false, example: '411018' },
+  { key: 'credit_limit', label: 'Credit Limit', required: false, example: 500000 },
+  { key: 'credit_period_days', label: 'Credit Period (Days)', required: false, example: 30 },
+  { key: 'opening_balance', label: 'Opening Balance', required: false, example: 25000 },
+  { key: 'opening_balance_type', label: 'Bal. Type (DR/CR)', required: false, example: 'DR' }
+];
+
+const CUSTOMER_IMPORT_SAMPLES = [
+  {
+    'Customer / Trade Name': 'Apex Industrial Systems',
+    'Legal Entity Name': 'Apex Industrial Systems Pvt Ltd',
+    'Customer Code': 'CUST-APEX-01',
+    'GSTIN': '27AABCA1234A1Z5',
+    'PAN Number': 'AABCA1234A',
+    'Contact Person': 'Suresh Patil',
+    'Phone / Mobile': '9820123456',
+    'Email Address': 'procurement@apexind.com',
+    'Billing Address': 'Plot 104, MIDC Industrial Area',
+    'City': 'Pune',
+    'State Code': '27',
+    'Pincode': '411018',
+    'Credit Limit': 500000,
+    'Credit Period (Days)': 30,
+    'Opening Balance': 25000,
+    'Bal. Type (DR/CR)': 'DR'
+  },
+  {
+    'Customer / Trade Name': 'Kaveri Heavy Engineering',
+    'Legal Entity Name': 'Kaveri Heavy Engineering Works',
+    'Customer Code': 'CUST-KAV-02',
+    'GSTIN': '33AABCK5678B1ZP',
+    'PAN Number': 'AABCK5678B',
+    'Contact Person': 'K. Ramanathan',
+    'Phone / Mobile': '9444123890',
+    'Email Address': 'accounts@kaveri-eng.com',
+    'Billing Address': '12 Foundry Road, Guindy Estate',
+    'City': 'Chennai',
+    'State Code': '33',
+    'Pincode': '600032',
+    'Credit Limit': 1000000,
+    'Credit Period (Days)': 45,
+    'Opening Balance': 0,
+    'Bal. Type (DR/CR)': 'DR'
+  }
+];
 
 const INDIAN_STATES = [
   { code: '01', name: 'Jammu & Kashmir' },
@@ -59,7 +119,27 @@ const CustomerMaster = () => {
 
   // Modals
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [showImportModal, setShowImportModal] = useState(false);
   const [viewCustomer, setViewCustomer] = useState(null);
+
+  const handleBulkImportCustomers = async (rows) => {
+    const payload = {
+      items: rows,
+      company_id: companyId
+    };
+    const res = await customersApi.bulkImport(payload);
+    if (res?.data?.success) {
+      await fetchCustomers();
+      return {
+        success: true,
+        message: res.data.message || `Successfully imported ${rows.length} customers!`
+      };
+    }
+    return {
+      success: false,
+      message: res?.data?.message || 'Failed to import customers.'
+    };
+  };
 
   // Form State
   const initialForm = {
@@ -148,13 +228,23 @@ const CustomerMaster = () => {
             Commercial customer profiles linked 1:1 with unified double-entry Chart of Accounts (Sundry Debtors).
           </p>
         </div>
-        <button
-          onClick={() => { setForm(initialForm); setIsModalOpen(true); }}
-          className="inline-flex items-center justify-center gap-2 px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-medium text-sm rounded-xl transition shadow-sm"
-        >
-          <Plus className="w-4 h-4" />
-          Add Customer
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setShowImportModal(true)}
+            className="inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 font-semibold text-sm rounded-xl border border-emerald-200 transition shadow-xs cursor-pointer"
+          >
+            <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
+            Import Data
+          </button>
+          <button
+            onClick={() => { setForm(initialForm); setIsModalOpen(true); }}
+            className="inline-flex items-center justify-center gap-2 px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-medium text-sm rounded-xl transition shadow-sm cursor-pointer"
+          >
+            <Plus className="w-4 h-4" />
+            Add Customer
+          </button>
+        </div>
       </div>
 
       {/* KPI Cards */}
@@ -643,6 +733,17 @@ const CustomerMaster = () => {
           </div>
         </div>
       )}
+      {/* Excel Import Modal */}
+      <ExcelImportModal
+        isOpen={showImportModal}
+        onClose={() => setShowImportModal(false)}
+        title="Import Customers"
+        moduleName="Customer Master"
+        columns={CUSTOMER_IMPORT_COLUMNS}
+        sampleData={CUSTOMER_IMPORT_SAMPLES}
+        onImport={handleBulkImportCustomers}
+      />
+
     </div>
   );
 };

@@ -1,4 +1,5 @@
 import pool from '../config/database.js';
+import { resolveBranchId } from '../services/ForeignKeyResolver.js';
 
 // Create a new department
 export const createDepartment = async (req, res) => {
@@ -438,5 +439,90 @@ export const bulkSoftDeleteDepartments = async (req, res) => {
             message: 'Internal server error',
             error: error.message
         });
+    }
+};
+
+// Bulk Import Departments from Excel / CSV
+export const bulkImportDepartments = async (req, res) => {
+    const client = await pool.connect();
+    try {
+        const { items, company_id, branch_id } = req.body;
+        const effectiveCompanyId = company_id || req.user?.company_id;
+        const defaultBranchId = branch_id || req.user?.branch_id || null;
+
+        if (!effectiveCompanyId) {
+            return res.status(400).json({ success: false, message: 'Company ID is required.' });
+        }
+
+        if (!Array.isArray(items) || items.length === 0) {
+            return res.status(400).json({ success: false, message: 'No department items provided for import.' });
+        }
+
+        await client.query('BEGIN');
+
+        let insertedCount = 0;
+        let updatedCount = 0;
+        const errors = [];
+
+        for (let i = 0; i < items.length; i++) {
+            const row = items[i];
+            const rowNum = i + 1;
+
+            const deptName = (row.department_name || row.name || '').trim();
+            if (!deptName) {
+                errors.push(`Row ${rowNum}: Department Name is required.`);
+                continue;
+            }
+
+            const deptDesc = (row.department_description || row.description || '').trim() || null;
+            const isActive = row.is_active !== undefined ? Boolean(row.is_active) : true;
+
+            const resolvedBranchId = await resolveBranchId(client, effectiveCompanyId, row.branch || row.branch_id || defaultBranchId) || defaultBranchId;
+            if (!resolvedBranchId) {
+                errors.push(`Row ${rowNum}: Valid Branch could not be resolved.`);
+                continue;
+            }
+
+            const existing = await client.query(
+                `SELECT department_id FROM departments WHERE company_id = $1 AND branch_id = $2 AND department_name ILIKE $3`,
+                [effectiveCompanyId, resolvedBranchId, deptName]
+            );
+
+            if (existing.rows.length > 0) {
+                await client.query(`
+                    UPDATE departments SET
+                        department_description = COALESCE($1, department_description),
+                        is_active = $2, updated_at = CURRENT_TIMESTAMP
+                    WHERE department_id = $3
+                `, [deptDesc, isActive, existing.rows[0].department_id]);
+                updatedCount++;
+            } else {
+                await client.query(`
+                    INSERT INTO departments (company_id, branch_id, department_name, department_description, is_active)
+                    VALUES ($1, $2, $3, $4, $5)
+                `, [effectiveCompanyId, resolvedBranchId, deptName, deptDesc, isActive]);
+                insertedCount++;
+            }
+        }
+
+        if (errors.length > 0 && insertedCount === 0 && updatedCount === 0) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({ success: false, message: 'Import failed.', errors });
+        }
+
+        await client.query('COMMIT');
+        return res.status(200).json({
+            success: true,
+            message: `Successfully processed ${insertedCount + updatedCount} departments (${insertedCount} added, ${updatedCount} updated).`,
+            insertedCount,
+            updatedCount,
+            errors
+        });
+    } catch (error) {
+        await client.query('ROLLBACK');
+        console.error('Error in bulkImportDepartments:', error);
+        return res.status(500).json({ success: false, message: 'Internal server error', error: error.message });
+    } finally {
+        client.release();
     }
 };

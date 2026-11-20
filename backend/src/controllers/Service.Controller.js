@@ -1,4 +1,5 @@
 import pool from '../config/database.js';
+import { resolveBranchId } from '../services/ForeignKeyResolver.js';
 
 // Standard Service Categories
 export const SERVICE_CATEGORIES = [
@@ -496,5 +497,126 @@ export const getServiceCategories = async (req, res) => {
             message: 'Failed to fetch service categories',
             error: error.message
         });
+    }
+};
+
+// Bulk Import Services from Excel / CSV
+export const bulkImportServices = async (req, res) => {
+    const client = await pool.connect();
+    try {
+        const { items, company_id, branch_id } = req.body;
+        const effectiveCompanyId = company_id || req.user?.company_id;
+        const defaultBranchId = branch_id || req.user?.branch_id || null;
+        const performedBy = req.user?.employee_id || null;
+
+        if (!effectiveCompanyId) {
+            return res.status(400).json({ success: false, message: 'Company ID is required.' });
+        }
+
+        if (!Array.isArray(items) || items.length === 0) {
+            return res.status(400).json({ success: false, message: 'No service items provided for import.' });
+        }
+
+        await client.query('BEGIN');
+
+        let insertedCount = 0;
+        let updatedCount = 0;
+        const errors = [];
+
+        for (let i = 0; i < items.length; i++) {
+            const row = items[i];
+            const rowNum = i + 1;
+
+            const serviceName = (row.service_name || row.name || '').trim();
+            if (!serviceName) {
+                errors.push(`Row ${rowNum}: Service Name is required.`);
+                continue;
+            }
+
+            let serviceCode = (row.service_code || row.code || '').trim().toUpperCase();
+            if (!serviceCode) {
+                serviceCode = `SRV-${Math.floor(1000 + Math.random() * 9000)}`;
+            }
+
+            const category = (row.category || 'General Business Services').trim();
+            const billingType = (row.billing_type || 'Per Service').trim();
+            const uom = (row.unit_of_measure || row.uom || 'HRS').trim();
+            const serviceCharge = parseFloat(row.service_charge || row.price || row.selling_price) || 0;
+            const costEstimate = parseFloat(row.cost_estimate || row.cost_price) || 0;
+            const sacCode = (row.sac_code || row.hsn_code || '9983').trim();
+            const gstRate = parseFloat(row.gst_rate) || 18.00;
+            const duration = parseFloat(row.service_duration_hours || row.duration) || 1;
+            const description = (row.service_description || row.description || '').trim() || null;
+            const terms = (row.terms_and_conditions || row.terms || '').trim() || null;
+            const status = (row.status || 'Active').trim();
+
+            const resolvedBranchId = await resolveBranchId(client, effectiveCompanyId, row.branch || row.branch_id || defaultBranchId) || defaultBranchId;
+
+            const existing = await client.query(
+                `SELECT service_id FROM services WHERE company_id = $1 AND (service_code = $2 OR service_name ILIKE $3)`,
+                [effectiveCompanyId, serviceCode, serviceName]
+            );
+
+            if (existing.rows.length > 0) {
+                await client.query(`
+                    UPDATE services SET
+                        service_name = $1, category = $2, billing_type = $3,
+                        unit_of_measure = $4, service_charge = $5, selling_price = $5,
+                        cost_estimate = $6, cost_price = $6, sac_code = $7, hsn_code = $7,
+                        gst_rate = $8, service_description = $9, service_duration_hours = $10,
+                        terms_and_conditions = $11, status = $12, branch_id = COALESCE($13, branch_id),
+                        updated_by = $14, updated_at = CURRENT_TIMESTAMP
+                    WHERE service_id = $15
+                `, [
+                    serviceName, category, billingType, uom, serviceCharge,
+                    costEstimate, sacCode, gstRate, description, duration,
+                    terms, status, resolvedBranchId, performedBy, existing.rows[0].service_id
+                ]);
+                updatedCount++;
+            } else {
+                await client.query(`
+                    INSERT INTO services (
+                        company_id, branch_id, service_code, service_name, category,
+                        billing_type, unit_of_measure, service_charge, selling_price,
+                        cost_estimate, cost_price, sac_code, hsn_code, gst_rate,
+                        service_description, service_duration_hours, terms_and_conditions,
+                        status, is_active, created_by, updated_by
+                    ) VALUES (
+                        $1, $2, $3, $4, $5,
+                        $6, $7, $8, $8,
+                        $9, $9, $10, $10, $11,
+                        $12, $13, $14,
+                        $15, TRUE, $16, $16
+                    )
+                `, [
+                    effectiveCompanyId, resolvedBranchId, serviceCode, serviceName, category,
+                    billingType, uom, serviceCharge,
+                    costEstimate, sacCode, gstRate,
+                    description, duration, terms,
+                    status, performedBy
+                ]);
+                insertedCount++;
+            }
+        }
+
+        if (errors.length > 0 && insertedCount === 0 && updatedCount === 0) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({ success: false, message: 'Import failed.', errors });
+        }
+
+        await client.query('COMMIT');
+        return res.status(200).json({
+            success: true,
+            message: `Successfully processed ${insertedCount + updatedCount} services (${insertedCount} added, ${updatedCount} updated).`,
+            insertedCount,
+            updatedCount,
+            errors
+        });
+    } catch (error) {
+        await client.query('ROLLBACK');
+        console.error('Error in bulkImportServices:', error);
+        return res.status(500).json({ success: false, message: 'Internal server error', error: error.message });
+    } finally {
+        client.release();
     }
 };

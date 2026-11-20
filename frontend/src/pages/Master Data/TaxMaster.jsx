@@ -1,8 +1,53 @@
 import React, { useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
-import { Plus, RefreshCw, Trash2, Edit3, Percent } from 'lucide-react';
+import { Plus, RefreshCw, Trash2, Edit3, Percent, FileSpreadsheet } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { taxes as taxApi } from '../../services/api';
+import ExcelImportModal from '../../components/ExcelImportModal';
+
+const TAX_IMPORT_COLUMNS = [
+  { key: 'tax_name', label: 'Tax Name', required: true, example: 'GST 18%' },
+  { key: 'tax_type', label: 'Tax Type (GST/IGST/TDS/CESS/VAT/OTHER)', required: false, example: 'GST' },
+  { key: 'total_rate', label: 'Total Rate %', required: true, example: 18 },
+  { key: 'cgst_rate', label: 'CGST %', required: false, example: 9 },
+  { key: 'sgst_rate', label: 'SGST %', required: false, example: 9 },
+  { key: 'igst_rate', label: 'IGST %', required: false, example: 18 },
+  { key: 'cess_rate', label: 'CESS %', required: false, example: 0 },
+  { key: 'is_active', label: 'Is Active (TRUE/FALSE)', required: false, example: 'TRUE' }
+];
+
+const TAX_IMPORT_SAMPLES = [
+  {
+    'Tax Name': 'GST 18%',
+    'Tax Type (GST/IGST/TDS/CESS/VAT/OTHER)': 'GST',
+    'Total Rate %': 18,
+    'CGST %': 9,
+    'SGST %': 9,
+    'IGST %': 18,
+    'CESS %': 0,
+    'Is Active (TRUE/FALSE)': 'TRUE'
+  },
+  {
+    'Tax Name': 'GST 12%',
+    'Tax Type (GST/IGST/TDS/CESS/VAT/OTHER)': 'GST',
+    'Total Rate %': 12,
+    'CGST %': 6,
+    'SGST %': 6,
+    'IGST %': 12,
+    'CESS %': 0,
+    'Is Active (TRUE/FALSE)': 'TRUE'
+  },
+  {
+    'Tax Name': 'GST 5%',
+    'Tax Type (GST/IGST/TDS/CESS/VAT/OTHER)': 'GST',
+    'Total Rate %': 5,
+    'CGST %': 2.5,
+    'SGST %': 2.5,
+    'IGST %': 5,
+    'CESS %': 0,
+    'Is Active (TRUE/FALSE)': 'TRUE'
+  }
+];
 
 const emptyTax = {
   tax_name: '',
@@ -21,6 +66,26 @@ export default function TaxMaster() {
   const [form, setForm] = useState(emptyTax);
   const [editingId, setEditingId] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [showImportModal, setShowImportModal] = useState(false);
+
+  const handleBulkImportTaxes = async (rows) => {
+    const payload = {
+      items: rows,
+      company_id: user?.company_id
+    };
+    const res = await taxApi.bulkImport(payload);
+    if (res?.data?.success) {
+      await load();
+      return {
+        success: true,
+        message: res.data.message || `Successfully processed ${rows.length} tax records!`
+      };
+    }
+    return {
+      success: false,
+      message: res?.data?.message || 'Failed to import taxes.'
+    };
+  };
 
   const load = async () => {
     if (!user?.company_id) return;
@@ -91,7 +156,17 @@ export default function TaxMaster() {
             <div className="rounded-lg bg-indigo-600 p-2.5 text-white"><Percent className="h-5 w-5" /></div>
             <div><h1 className="text-xl font-bold">Tax Master</h1><p className="text-xs text-slate-500">Create GST and statutory tax classifications</p></div>
           </div>
-          <button onClick={load} className="rounded-lg border border-slate-200 p-2 text-slate-500"><RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} /></button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setShowImportModal(true)}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 text-xs font-semibold shadow-xs transition-all cursor-pointer"
+            >
+              <FileSpreadsheet className="h-4 w-4 text-emerald-600" />
+              <span>Import Data</span>
+            </button>
+            <button onClick={load} className="rounded-lg border border-slate-200 p-2 text-slate-500 hover:bg-slate-50"><RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} /></button>
+          </div>
         </header>
 
         <form onSubmit={submit} className="rounded-xl border border-slate-200 bg-white p-5">
@@ -156,6 +231,16 @@ export default function TaxMaster() {
           </table>
         </div>
       </div>
+      {/* Excel Import Modal */}
+      <ExcelImportModal
+        isOpen={showImportModal}
+        onClose={() => setShowImportModal(false)}
+        title="Import Taxes"
+        moduleName="Tax Master"
+        columns={TAX_IMPORT_COLUMNS}
+        sampleData={TAX_IMPORT_SAMPLES}
+        onImport={handleBulkImportTaxes}
+      />
     </main>
   );
 }

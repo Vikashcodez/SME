@@ -6,7 +6,8 @@ import {
     updateProduct,
     softDeleteProduct,
     restoreProduct,
-    getProductCategories
+    getProductCategories,
+    bulkImportProducts
 } from '../controllers/Product.Controller.js';
 import { authenticate } from '../middleware/auth.js';
 import { uploadProductImages } from '../middleware/upload.js';
@@ -17,6 +18,7 @@ router.use(authenticate);
 
 router.get('/categories', getProductCategories);
 router.get('/', getAllProducts);
+router.post('/bulk-import', bulkImportProducts);
 router.get('/:id', getProductById);
 router.post('/', uploadProductImages, createProduct);
 router.put('/:id', uploadProductImages, updateProduct);

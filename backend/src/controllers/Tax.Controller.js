@@ -86,3 +86,105 @@ export const deleteTax = async (req, res) => {
         return res.status(400).json({ success: false, message: error.message });
     }
 };
+
+// Bulk Import Taxes from Excel / CSV
+export const bulkImportTaxes = async (req, res) => {
+    const client = await pool.connect();
+    try {
+        const companyId = companyIdOf(req);
+        if (!companyId) return res.status(400).json({ success: false, message: 'Company ID is required.' });
+
+        const { items } = req.body;
+        if (!Array.isArray(items) || items.length === 0) {
+            return res.status(400).json({ success: false, message: 'No tax items provided for import.' });
+        }
+
+        await client.query('BEGIN');
+
+        let insertedCount = 0;
+        let updatedCount = 0;
+        const errors = [];
+
+        for (let i = 0; i < items.length; i++) {
+            const row = items[i];
+            const rowNum = i + 1;
+
+            const taxName = (row.tax_name || row.name || '').trim();
+            if (!taxName) {
+                errors.push(`Row ${rowNum}: Tax Name is required.`);
+                continue;
+            }
+
+            let taxType = (row.tax_type || 'GST').toUpperCase().trim();
+            if (!validTaxTypes.includes(taxType)) {
+                taxType = 'GST';
+            }
+
+            const totalRate = Math.min(100, Math.max(0, parseFloat(row.total_rate || row.rate) || 0));
+            let cgst = parseFloat(row.cgst_rate) || 0;
+            let sgst = parseFloat(row.sgst_rate) || 0;
+            let igst = parseFloat(row.igst_rate) || 0;
+            let cess = parseFloat(row.cess_rate) || 0;
+
+            // Auto-calculate split if GST and individual rates not provided
+            if (taxType === 'GST' && cgst === 0 && sgst === 0 && igst === 0 && totalRate > 0) {
+                cgst = totalRate / 2;
+                sgst = totalRate / 2;
+                igst = totalRate;
+            }
+
+            const isActive = row.is_active !== undefined ? Boolean(row.is_active) : true;
+
+            const existing = await client.query(
+                `SELECT tax_id FROM tax_master WHERE company_id = $1 AND (tax_name ILIKE $2 OR (tax_type = $3 AND total_rate = $4))`,
+                [companyId, taxName, taxType, totalRate]
+            );
+
+            if (existing.rows.length > 0) {
+                await client.query(`
+                    UPDATE tax_master SET
+                        tax_name = $1, tax_type = $2, total_rate = $3,
+                        cgst_rate = $4, sgst_rate = $5, igst_rate = $6,
+                        cess_rate = $7, is_active = $8, updated_at = CURRENT_TIMESTAMP
+                    WHERE tax_id = $9
+                `, [
+                    taxName, taxType, totalRate,
+                    cgst, sgst, igst,
+                    cess, isActive, existing.rows[0].tax_id
+                ]);
+                updatedCount++;
+            } else {
+                await client.query(`
+                    INSERT INTO tax_master (
+                        company_id, tax_name, tax_type, total_rate,
+                        cgst_rate, sgst_rate, igst_rate, cess_rate, is_active
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                `, [
+                    companyId, taxName, taxType, totalRate,
+                    cgst, sgst, igst, cess, isActive
+                ]);
+                insertedCount++;
+            }
+        }
+
+        if (errors.length > 0 && insertedCount === 0 && updatedCount === 0) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({ success: false, message: 'Import failed.', errors });
+        }
+
+        await client.query('COMMIT');
+        return res.status(200).json({
+            success: true,
+            message: `Successfully processed ${insertedCount + updatedCount} taxes (${insertedCount} added, ${updatedCount} updated).`,
+            insertedCount,
+            updatedCount,
+            errors
+        });
+    } catch (error) {
+        await client.query('ROLLBACK');
+        console.error('Error in bulkImportTaxes:', error);
+        return res.status(500).json({ success: false, message: 'Internal server error', error: error.message });
+    } finally {
+        client.release();
+    }
+};

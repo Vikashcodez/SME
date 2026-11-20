@@ -10,6 +10,7 @@ import {
 } from '../../services/api';
 import { formatProductionTime, calculateTotalMinutes, formatDuration, decomposeMinutes } from '../../utils/productionTime';
 import toast from 'react-hot-toast';
+import ExcelImportModal from '../../components/ExcelImportModal';
 import { 
   Package, 
   Plus, 
@@ -58,6 +59,58 @@ const PRODUCT_CATEGORIES = [
 
 const STANDARD_UOM = ['PCS', 'NOS', 'SET', 'BOX', 'UNIT', 'KG', 'MTR', 'PKT'];
 
+const PRODUCT_IMPORT_COLUMNS = [
+  { key: 'product_code', label: 'Product Code', required: false, sample: 'PRD-1001', description: 'Auto-generated if empty' },
+  { key: 'product_name', label: 'Product Name', required: true, sample: 'Industrial Valve 50mm' },
+  { key: 'category', label: 'Category', required: false, default: 'Finished Goods', sample: 'Finished Goods' },
+  { key: 'unit_of_measure', label: 'Unit of Measure', required: false, default: 'PCS', sample: 'PCS' },
+  { key: 'selling_price', label: 'Selling Price', required: true, type: 'number', sample: 1500 },
+  { key: 'cost_price', label: 'Cost Price', required: false, type: 'number', sample: 950 },
+  { key: 'hsn_code', label: 'HSN Code', required: false, sample: '84818030' },
+  { key: 'gst_rate', label: 'GST Rate (%)', required: false, type: 'number', default: 18, sample: 18 },
+  { key: 'min_stock_level', label: 'Min Stock Level', required: false, type: 'number', default: 0, sample: 10 },
+  { key: 'production_time_days', label: 'Prod. Days', required: false, type: 'number', default: 0, sample: 0 },
+  { key: 'production_time_hours', label: 'Prod. Hours', required: false, type: 'number', default: 0, sample: 3 },
+  { key: 'production_time_minutes', label: 'Prod. Minutes', required: false, type: 'number', default: 0, sample: 30 },
+  { key: 'workforce_required', label: 'Workforce Needed', required: false, type: 'number', default: 1, sample: 2 },
+  { key: 'product_specification', label: 'Specification', required: false, sample: 'High pressure stainless steel valve' }
+];
+
+const PRODUCT_IMPORT_SAMPLES = [
+  {
+    'Product Code': 'PRD-1001',
+    'Product Name': 'Industrial Ball Valve 50mm',
+    'Category': 'Finished Goods',
+    'Unit of Measure': 'PCS',
+    'Selling Price': 1450.00,
+    'Cost Price': 920.00,
+    'HSN Code': '84818030',
+    'GST Rate (%)': 18,
+    'Min Stock Level': 15,
+    'Prod. Days': 0,
+    'Prod. Hours': 3,
+    'Prod. Minutes': 45,
+    'Workforce Needed': 2,
+    'Specification': 'SS304 grade standard bore ball valve'
+  },
+  {
+    'Product Code': 'PRD-1002',
+    'Product Name': 'Flanged Check Valve 100mm',
+    'Category': 'Assembly & Sub-Assembly',
+    'Unit of Measure': 'PCS',
+    'Selling Price': 3200.00,
+    'Cost Price': 2100.00,
+    'HSN Code': '84813000',
+    'GST Rate (%)': 18,
+    'Min Stock Level': 10,
+    'Prod. Days': 1,
+    'Prod. Hours': 2,
+    'Prod. Minutes': 15,
+    'Workforce Needed': 3,
+    'Specification': 'Cast steel PN16 non-return check valve'
+  }
+];
+
 const ProductMaster = () => {
   const { user, isSuperAdmin, isCompanyAdmin, isBranchAdmin } = useAuth();
   const navigate = useNavigate();
@@ -86,6 +139,7 @@ const ProductMaster = () => {
   const [showAddModal, setShowAddModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [showDetailsModal, setShowDetailsModal] = useState(false);
+  const [showImportModal, setShowImportModal] = useState(false);
   const [activeProduct, setActiveProduct] = useState(null);
 
   // Photo uploads state for 3 images
@@ -697,6 +751,27 @@ const ProductMaster = () => {
     toast.success('Product catalog exported');
   };
 
+  // Bulk Import Products Handler
+  const handleBulkImportProducts = async (rows) => {
+    const payload = {
+      products: rows,
+      company_id: selectedCompanyId || user?.company_id,
+      branch_id: selectedBranchId || user?.branch_id || null
+    };
+    const res = await productsApi.bulkImport(payload);
+    if (res?.data?.success) {
+      await fetchProducts();
+      return {
+        success: true,
+        message: res.data.message || `Successfully imported ${res.data.count} product(s)!`
+      };
+    }
+    return {
+      success: false,
+      message: res?.data?.message || 'Failed to import products.'
+    };
+  };
+
   // Filtered Products
   const filteredProducts = useMemo(() => {
     return productsList.filter(p => {
@@ -748,6 +823,14 @@ const ProductMaster = () => {
           >
             <FileSpreadsheet size={14} className="text-emerald-600" />
             <span>Export CSV</span>
+          </button>
+
+          <button
+            onClick={() => setShowImportModal(true)}
+            className="px-3.5 py-2 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-700 text-xs font-bold rounded-lg shadow-xs flex items-center gap-1.5 transition-all cursor-pointer"
+          >
+            <FileSpreadsheet size={15} className="text-emerald-600" />
+            <span>Import Data</span>
           </button>
 
           <button
@@ -2399,6 +2482,16 @@ const ProductMaster = () => {
           </div>
         </div>
       )}
+      {/* Excel / Google Sheets Import Modal */}
+      <ExcelImportModal
+        isOpen={showImportModal}
+        onClose={() => setShowImportModal(false)}
+        title="Import Products from Excel / Google Sheets"
+        entityName="Product"
+        columns={PRODUCT_IMPORT_COLUMNS}
+        sampleRows={PRODUCT_IMPORT_SAMPLES}
+        onImport={handleBulkImportProducts}
+      />
     </div>
   );
 };
