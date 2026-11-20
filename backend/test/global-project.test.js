@@ -83,6 +83,11 @@ test('accounting Day Book preserves date-range filtering', () => {
 
 test('accounting Day Book excludes unpaid purchase invoices', () => {
     const controller = read(path.join(backendSourceRoot, 'controllers', 'Accounting.Controller.js'));
+    const getDayBookBody = controller.substring(
+        controller.indexOf('export const getDayBook'),
+        controller.indexOf('export const getProfitAndLoss')
+    );
+    assert.match(getDayBookBody, /source_module IS DISTINCT FROM 'PURCHASE_INVOICE'/);
     assert.match(controller, /source_module IS DISTINCT FROM 'PURCHASE_INVOICE'/);
 });
 

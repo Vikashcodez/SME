@@ -1,6 +1,7 @@
 import pool from '../config/database.js';
 import { applyLedgerBalance } from '../services/AccountingPosting.js';
 import { resolveTaxRates } from '../services/TaxMaster.js';
+import { recalculateLedgerBalance } from './Accounting.Controller.js';
 
 export const getPendingGrns = async (req, res) => {
     try {
@@ -668,6 +669,8 @@ export const recordVendorPayment = async (req, res) => {
             amount,
             payment_date = new Date().toISOString().split('T')[0],
             payment_mode = 'BANK', // BANK or CASH
+            bank_account_id,
+            payment_ledger_id,
             instrument_type = 'NEFT', // NEFT, RTGS, IMPS, CHEQUE, UPI, CASH
             instrument_reference_number,
             invoices_to_settle = [], // [{ purchase_invoice_id, amount }]
@@ -708,22 +711,115 @@ export const recordVendorPayment = async (req, res) => {
         const vendor = vendRes.rows[0];
         const vendorLedgerId = vendor.ledger_id;
 
-        // Fetch Payment Mode Ledger (Cash or Bank)
-        let payLedRes = await client.query(
-            `SELECT ledger_id FROM ledgers WHERE company_id = $1 AND ledger_code = $2`,
-            [companyId, payment_mode === 'CASH' ? 'LED-CASH-MAIN' : 'LED-BANK-MAIN']
-        );
-        let paymentLedgerId;
-        if (payLedRes.rows.length === 0) {
-            const fallbackRes = await client.query(`
-                SELECT l.ledger_id FROM ledgers l
-                JOIN account_groups ag ON l.group_id = ag.group_id
-                WHERE l.company_id = $1 AND ag.group_code IN ('GRP-BANK', 'GRP-CASH', 'BANK_ACCOUNTS', 'CASH_IN_HAND')
-                LIMIT 1
-            `, [companyId]);
-            paymentLedgerId = fallbackRes.rows[0]?.ledger_id;
+        // Fetch Payment Mode Ledger (Cash or Bank Account)
+        let paymentLedgerId = null;
+        let selectedBankDetails = null;
+
+        if (payment_mode === 'BANK') {
+            if (bank_account_id) {
+                const bankRes = await client.query(`
+                    SELECT ba.bank_account_id, ba.ledger_id, ba.bank_name, ba.account_number,
+                           l.ledger_name, l.current_balance, l.current_balance_type
+                    FROM bank_accounts ba
+                    JOIN ledgers l ON l.ledger_id = ba.ledger_id
+                    WHERE ba.bank_account_id = $1 AND ba.company_id = $2 AND ba.is_active = TRUE
+                `, [bank_account_id, companyId]);
+
+                if (bankRes.rows.length === 0) {
+                    await client.query('ROLLBACK');
+                    return res.status(400).json({
+                        success: false,
+                        message: 'Selected bank account not found or is inactive.'
+                    });
+                }
+                paymentLedgerId = bankRes.rows[0].ledger_id;
+                selectedBankDetails = bankRes.rows[0];
+            } else if (payment_ledger_id) {
+                const ledCheck = await client.query(`
+                    SELECT l.ledger_id FROM ledgers l
+                    JOIN account_groups ag ON ag.group_id = l.group_id
+                    WHERE l.ledger_id = $1 AND l.company_id = $2 AND ag.group_code IN ('GRP-BANK', 'BANK_ACCOUNTS')
+                `, [payment_ledger_id, companyId]);
+                if (ledCheck.rows.length > 0) {
+                    paymentLedgerId = ledCheck.rows[0].ledger_id;
+                }
+            }
+
+            if (!paymentLedgerId) {
+                // Fallback to first active bank account of the company
+                const defaultBankRes = await client.query(`
+                    SELECT ba.bank_account_id, ba.ledger_id, ba.bank_name, ba.account_number
+                    FROM bank_accounts ba
+                    WHERE ba.company_id = $1 AND ba.is_active = TRUE
+                    ORDER BY ba.bank_account_id ASC LIMIT 1
+                `, [companyId]);
+                if (defaultBankRes.rows.length > 0) {
+                    paymentLedgerId = defaultBankRes.rows[0].ledger_id;
+                    selectedBankDetails = defaultBankRes.rows[0];
+                } else {
+                    let payLedRes = await client.query(
+                        `SELECT ledger_id FROM ledgers WHERE company_id = $1 AND ledger_code = 'LED-BANK-MAIN'`,
+                        [companyId]
+                    );
+                    if (payLedRes.rows.length > 0) {
+                        paymentLedgerId = payLedRes.rows[0].ledger_id;
+                    } else {
+                        const fallbackRes = await client.query(`
+                            SELECT l.ledger_id FROM ledgers l
+                            JOIN account_groups ag ON l.group_id = ag.group_id
+                            WHERE l.company_id = $1 AND ag.group_code IN ('GRP-BANK', 'BANK_ACCOUNTS')
+                            LIMIT 1
+                        `, [companyId]);
+                        paymentLedgerId = fallbackRes.rows[0]?.ledger_id;
+                    }
+                }
+            }
+
+            if (!paymentLedgerId) {
+                await client.query('ROLLBACK');
+                return res.status(400).json({
+                    success: false,
+                    message: 'No bank account ledger found for this company. Please register a bank account first.'
+                });
+            }
         } else {
-            paymentLedgerId = payLedRes.rows[0].ledger_id;
+            // CASH mode
+            if (payment_ledger_id) {
+                const ledCheck = await client.query(`
+                    SELECT l.ledger_id FROM ledgers l
+                    JOIN account_groups ag ON ag.group_id = l.group_id
+                    WHERE l.ledger_id = $1 AND l.company_id = $2 AND ag.group_code IN ('GRP-CASH', 'CASH_IN_HAND')
+                `, [payment_ledger_id, companyId]);
+                if (ledCheck.rows.length > 0) {
+                    paymentLedgerId = ledCheck.rows[0].ledger_id;
+                }
+            }
+
+            if (!paymentLedgerId) {
+                let payLedRes = await client.query(
+                    `SELECT ledger_id FROM ledgers WHERE company_id = $1 AND ledger_code = 'LED-CASH-MAIN'`,
+                    [companyId]
+                );
+                if (payLedRes.rows.length > 0) {
+                    paymentLedgerId = payLedRes.rows[0].ledger_id;
+                } else {
+                    const fallbackRes = await client.query(`
+                        SELECT l.ledger_id FROM ledgers l
+                        JOIN account_groups ag ON l.group_id = ag.group_id
+                        WHERE l.company_id = $1 AND ag.group_code IN ('GRP-CASH', 'CASH_IN_HAND')
+                        LIMIT 1
+                    `, [companyId]);
+                    paymentLedgerId = fallbackRes.rows[0]?.ledger_id;
+                }
+            }
+
+            if (!paymentLedgerId) {
+                await client.query('ROLLBACK');
+                return res.status(400).json({
+                    success: false,
+                    message: 'No cash ledger found for this company.'
+                });
+            }
         }
 
         // Post Double-Entry Payment Voucher (VCH-PAYMENT)
@@ -732,6 +828,12 @@ export const recordVendorPayment = async (req, res) => {
 
         const countV = await client.query(`SELECT COUNT(*)::INT AS cnt FROM vouchers WHERE company_id = $1`, [companyId]);
         const vNum = `PAY-${new Date().getFullYear()}-${(countV.rows[0].cnt + 1).toString().padStart(4, '0')}`;
+
+        const paymentNarration = narration || (
+            payment_mode === 'BANK' && selectedBankDetails
+                ? `Payment of ₹${paymentAmount.toFixed(2)} to ${vendor.vendor_trade_name} via ${selectedBankDetails.bank_name} (${selectedBankDetails.account_number})`
+                : `Payment of ₹${paymentAmount.toFixed(2)} to ${vendor.vendor_trade_name} via ${payment_mode === 'CASH' ? 'Cash in Hand' : 'Bank'}`
+        );
 
         const voucherRes = await client.query(`
             INSERT INTO vouchers (
@@ -745,7 +847,7 @@ export const recordVendorPayment = async (req, res) => {
             ) RETURNING voucher_id, voucher_number
         `, [
             companyId, branchId, voucherTypeId, vNum, payment_date,
-            narration || `Payment of ₹${paymentAmount.toFixed(2)} to ${vendor.vendor_trade_name}`,
+            paymentNarration,
             instrument_reference_number || vNum, createdBy
         ]);
         const voucher = voucherRes.rows[0];
@@ -759,14 +861,22 @@ export const recordVendorPayment = async (req, res) => {
 
         await applyLedgerBalance(client, companyId, vendorLedgerId, paymentAmount, 0);
 
-        // Line 2: CREDIT Cash / Bank Ledger
+        // Line 2: CREDIT Cash / Bank Ledger (Reduces asset balance)
+        const line2Narration = payment_mode === 'BANK' && selectedBankDetails
+            ? `Paid from ${selectedBankDetails.bank_name} (${selectedBankDetails.account_number}) ref: ${instrument_reference_number || vNum}`
+            : `Paid via ${payment_mode} ref: ${instrument_reference_number || vNum}`;
+
         await client.query(`
             INSERT INTO voucher_lines (
                 voucher_id, line_number, ledger_id, debit_amount, credit_amount, narration
             ) VALUES ($1, 2, $2, 0.00, $3, $4)
-        `, [voucher.voucher_id, paymentLedgerId, paymentAmount, `Paid via ${payment_mode} ref: ${instrument_reference_number || vNum}`]);
+        `, [voucher.voucher_id, paymentLedgerId, paymentAmount, line2Narration]);
 
         await applyLedgerBalance(client, companyId, paymentLedgerId, 0, paymentAmount);
+
+        // Recalculate balances from audit lines to guarantee consistency
+        await recalculateLedgerBalance(client, paymentLedgerId, companyId);
+        await recalculateLedgerBalance(client, vendorLedgerId, companyId);
 
         // Bill Allocations: Settle Invoices (FIFO or Explicit)
         let remainingToAllocate = paymentAmount;

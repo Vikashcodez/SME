@@ -1190,7 +1190,7 @@ export const updateVoucher = async (req, res) => {
         }
         const existingVoucher = vRes.rows[0];
 
-        if (existingVoucher.source_module === 'SALES_INVOICE' || existingVoucher.source_module === 'PURCHASE_BILL') {
+        if (existingVoucher.source_module === 'SALES_INVOICE' || existingVoucher.source_module === 'PURCHASE_INVOICE' || existingVoucher.source_module === 'PURCHASE_BILL') {
             await client.query('ROLLBACK');
             return res.status(400).json({
                 success: false,
@@ -1311,7 +1311,7 @@ export const deleteVoucher = async (req, res) => {
         }
         const voucher = vRes.rows[0];
 
-        if (voucher.source_module === 'SALES_INVOICE' || voucher.source_module === 'PURCHASE_BILL') {
+        if (voucher.source_module === 'SALES_INVOICE' || voucher.source_module === 'PURCHASE_INVOICE' || voucher.source_module === 'PURCHASE_BILL') {
             await client.query('ROLLBACK');
             return res.status(400).json({
                 success: false,
@@ -1582,10 +1582,16 @@ export const getDayBook = async (req, res) => {
               AND v.voucher_date >= $2
               AND v.voucher_date <= $3
               AND v.source_module IS DISTINCT FROM 'SALES_INVOICE'
+              AND v.source_module IS DISTINCT FROM 'PURCHASE_INVOICE'
               AND NOT (
                   COALESCE(v.source_module, '') = ''
                   AND vt.base_category = 'SALES'
                   AND COALESCE(v.narration, '') LIKE 'Sales Invoice %'
+              )
+              AND NOT (
+                  COALESCE(v.source_module, '') = ''
+                  AND vt.base_category = 'PURCHASE'
+                  AND COALESCE(v.narration, '') LIKE 'Purchase from %'
               )
         `;
         const params = [companyId, fromDate, toDate];

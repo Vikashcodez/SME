@@ -209,7 +209,7 @@ const DayBook = () => {
       setLoading(true);
       const res = await accountingApi.getVoucherById(v.voucher_id);
       const voucherData = res.data.data;
-      if (voucherData.source_module === 'SALES_INVOICE' || voucherData.source_module === 'PURCHASE_BILL') {
+      if (voucherData.source_module === 'SALES_INVOICE' || voucherData.source_module === 'PURCHASE_INVOICE' || voucherData.source_module === 'PURCHASE_BILL') {
         toast.error(`This voucher was automatically posted by ${voucherData.source_module}. Please edit it via that module.`);
         return;
       }
@@ -786,7 +786,7 @@ const DayBook = () => {
             <div className="px-6 py-4 border-t border-slate-200 bg-slate-50 flex justify-between items-center">
               <p className="text-xs text-slate-500">Debit and credit totals must balance for a posted voucher.</p>
               <div className="flex items-center gap-2">
-                {selectedVoucher.source_module !== 'SALES_INVOICE' && selectedVoucher.source_module !== 'PURCHASE_BILL' && (
+                {selectedVoucher.source_module !== 'SALES_INVOICE' && selectedVoucher.source_module !== 'PURCHASE_INVOICE' && selectedVoucher.source_module !== 'PURCHASE_BILL' && (
                   <button
                     onClick={() => {
                       const v = selectedVoucher;
