@@ -356,7 +356,11 @@ export const createTables = async () => {
                 photo_2 VARCHAR(500),
                 photo_3 VARCHAR(500),
                 min_stock_level DECIMAL(14,2) DEFAULT 0.00,
+                production_time_days DECIMAL(10,2) DEFAULT 0.00,
+                production_time_hours DECIMAL(10,2) DEFAULT 0.00,
                 production_time_minutes DECIMAL(10,2) DEFAULT 0.00,
+                production_time_value DECIMAL(10,2) DEFAULT 0.00,
+                production_time_unit VARCHAR(20) DEFAULT 'Minutes',
                 workforce_required INTEGER DEFAULT 1,
                 status VARCHAR(20) DEFAULT 'Active',
                 is_active BOOLEAN DEFAULT TRUE,
@@ -565,7 +569,11 @@ export const createTables = async () => {
             ALTER TABLE products ADD COLUMN IF NOT EXISTS name VARCHAR(255);
             ALTER TABLE products ADD COLUMN IF NOT EXISTS unit VARCHAR(30);
             ALTER TABLE products ADD COLUMN IF NOT EXISTS standard_cost DECIMAL(14,2) DEFAULT 0.00;
+            ALTER TABLE products ADD COLUMN IF NOT EXISTS production_time_days DECIMAL(10,2) DEFAULT 0.00;
+            ALTER TABLE products ADD COLUMN IF NOT EXISTS production_time_hours DECIMAL(10,2) DEFAULT 0.00;
             ALTER TABLE products ADD COLUMN IF NOT EXISTS production_time_minutes DECIMAL(10,2) DEFAULT 0.00;
+            ALTER TABLE products ADD COLUMN IF NOT EXISTS production_time_value DECIMAL(10,2) DEFAULT 0.00;
+            ALTER TABLE products ADD COLUMN IF NOT EXISTS production_time_unit VARCHAR(20) DEFAULT 'Minutes';
             ALTER TABLE products ADD COLUMN IF NOT EXISTS workforce_required INTEGER DEFAULT 1;
             UPDATE products SET code = product_code WHERE code IS NULL;
             UPDATE products SET name = product_name WHERE name IS NULL;
@@ -592,7 +600,11 @@ export const createTables = async () => {
                 output_quantity DECIMAL(14,4) DEFAULT 1.0000,
                 output_unit VARCHAR(30) DEFAULT 'PCS',
                 workforce_count DECIMAL(10,2) DEFAULT 1,
+                production_time_days DECIMAL(10,2) DEFAULT 0,
+                production_time_hours DECIMAL(10,2) DEFAULT 0,
                 production_time_minutes DECIMAL(10,2) DEFAULT 0,
+                production_time_value DECIMAL(10,2) DEFAULT 0,
+                production_time_unit VARCHAR(20) DEFAULT 'Minutes',
                 labor_cost DECIMAL(14,2) DEFAULT 0.00,
                 overhead_cost DECIMAL(14,2) DEFAULT 0.00,
                 other_expense DECIMAL(14,2) DEFAULT 0.00,
@@ -751,8 +763,28 @@ export const createTables = async () => {
             ALTER TABLE production_batches ADD COLUMN IF NOT EXISTS workforce_cost DECIMAL(14,2) DEFAULT 0.00;
             ALTER TABLE production_batches ADD COLUMN IF NOT EXISTS total_production_cost DECIMAL(14,2) DEFAULT 0.00;
             ALTER TABLE production_batches ADD COLUMN IF NOT EXISTS unit_cost DECIMAL(14,4) DEFAULT 0.00;
+            ALTER TABLE production_batches ADD COLUMN IF NOT EXISTS physical_quantity DECIMAL(14,4);
+            ALTER TABLE production_batches ADD COLUMN IF NOT EXISTS wastage_quantity DECIMAL(14,4) DEFAULT 0.0000;
+            ALTER TABLE production_batches ADD COLUMN IF NOT EXISTS wastage_reason TEXT;
+            ALTER TABLE production_batches ADD COLUMN IF NOT EXISTS wastage_cost DECIMAL(14,2) DEFAULT 0.00;
+            ALTER TABLE production_batches ADD COLUMN IF NOT EXISTS accounting_voucher_id BIGINT;
+
+            ALTER TABLE raw_material_production ADD COLUMN IF NOT EXISTS physical_quantity DECIMAL(14,4);
+            ALTER TABLE raw_material_production ADD COLUMN IF NOT EXISTS wastage_quantity DECIMAL(14,4) DEFAULT 0.0000;
+            ALTER TABLE raw_material_production ADD COLUMN IF NOT EXISTS wastage_reason TEXT;
+            ALTER TABLE raw_material_production ADD COLUMN IF NOT EXISTS wastage_cost DECIMAL(14,2) DEFAULT 0.00;
+            ALTER TABLE raw_material_production ADD COLUMN IF NOT EXISTS accounting_voucher_id BIGINT;
+
             ALTER TABLE production_orders ADD COLUMN IF NOT EXISTS workforce_cost DECIMAL(14,2) DEFAULT 0.00;
             ALTER TABLE production_orders ADD COLUMN IF NOT EXISTS total_production_cost DECIMAL(14,2) DEFAULT 0.00;
+            ALTER TABLE production_orders ADD COLUMN IF NOT EXISTS physical_quantity DECIMAL(14,4);
+            ALTER TABLE production_orders ADD COLUMN IF NOT EXISTS wastage_quantity DECIMAL(14,4) DEFAULT 0.0000;
+            ALTER TABLE production_orders ADD COLUMN IF NOT EXISTS wastage_reason TEXT;
+            ALTER TABLE production_orders ADD COLUMN IF NOT EXISTS wastage_cost DECIMAL(14,2) DEFAULT 0.00;
+            ALTER TABLE production_orders ADD COLUMN IF NOT EXISTS accounting_voucher_id BIGINT;
+            ALTER TABLE production_masters ADD COLUMN IF NOT EXISTS production_time_value DECIMAL(10,2) DEFAULT 0.00;
+            ALTER TABLE production_masters ADD COLUMN IF NOT EXISTS production_time_unit VARCHAR(20) DEFAULT 'Minutes';
+
             ALTER TABLE quality_checks ADD COLUMN IF NOT EXISTS production_id BIGINT REFERENCES raw_material_production(production_id) ON DELETE CASCADE;
             ALTER TABLE quality_checks ADD COLUMN IF NOT EXISTS product_id BIGINT REFERENCES products(product_id) ON DELETE CASCADE;
             ALTER TABLE production_rework ADD COLUMN IF NOT EXISTS production_id BIGINT REFERENCES raw_material_production(production_id) ON DELETE CASCADE;

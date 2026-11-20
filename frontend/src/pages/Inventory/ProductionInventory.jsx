@@ -8,6 +8,7 @@ import {
   branches as branchesApi, 
   companies as companiesApi 
 } from '../../services/api';
+import { formatProductionTime, formatDuration, decomposeMinutes } from '../../utils/productionTime';
 import toast from 'react-hot-toast';
 import { 
   Factory, 
@@ -37,7 +38,8 @@ import {
   History,
   TrendingUp,
   MapPin,
-  ClipboardList
+  ClipboardList,
+  Info
 } from 'lucide-react';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL ? import.meta.env.VITE_API_URL.replace('/api', '') : 'http://localhost:5000';
@@ -89,6 +91,8 @@ const ProductionInventory = () => {
   const initialFormState = {
     product_id: '',
     production_quantity: '1',
+    physical_quantity: '',
+    wastage_reason: '',
     workforce_count: 1,
     workforce_cost: '',
     production_date: new Date().toISOString().split('T')[0],
@@ -288,10 +292,28 @@ const ProductionInventory = () => {
       return;
     }
 
+    const genQty = parseFloat(formData.production_quantity) || 0;
+    const physQty = formData.physical_quantity !== '' && formData.physical_quantity !== null && formData.physical_quantity !== undefined
+      ? parseFloat(formData.physical_quantity)
+      : genQty;
+
+    if (physQty < 0) {
+      toast.error('Physical quantity cannot be negative.');
+      return;
+    }
+
+    if (physQty < genQty && (!formData.wastage_reason || !formData.wastage_reason.trim())) {
+      toast.error('Please enter a reason for the shortfall / wasted products (e.g. "good wasted").');
+      return;
+    }
+
     setSubmitting(true);
     try {
       const payload = {
         ...formData,
+        production_quantity: genQty,
+        physical_quantity: physQty,
+        wastage_reason: formData.wastage_reason ? formData.wastage_reason.trim() : null,
         total_production_time_minutes: bomSimulation.total_production_time_minutes || 0,
         workforce_count: parseInt(formData.workforce_count || bomSimulation.workforce_required || 1, 10),
         workforce_cost: parseFloat(formData.workforce_cost) || 0,
@@ -559,6 +581,8 @@ const ProductionInventory = () => {
                 <th className="py-3 px-4">Batch Number</th>
                 <th className="py-3 px-4">Manufactured Product</th>
                 <th className="py-3 px-4 text-right">Units Produced</th>
+                <th className="py-3 px-4 text-right">Physical Verified</th>
+                <th className="py-3 px-4 text-right">Wastage / Loss</th>
                 <th className="py-3 px-4 text-right">Material Cost</th>
                 <th className="py-3 px-4 text-right">Workforce Expense</th>
                 <th className="py-3 px-4 text-right">Total Production Cost</th>
@@ -572,7 +596,7 @@ const ProductionInventory = () => {
             <tbody className="divide-y divide-slate-100">
               {filteredProductionRuns.length === 0 ? (
                 <tr>
-                  <td colSpan={13} className="py-8 text-center text-slate-400 italic">
+                  <td colSpan={15} className="py-8 text-center text-slate-400 italic">
                     No production runs recorded yet. Click "+ Log Production Batch" to start manufacturing.
                   </td>
                 </tr>
@@ -610,6 +634,27 @@ const ProductionInventory = () => {
                     {parseFloat(run.production_quantity).toLocaleString()} {run.product_uom || 'Units'}
                   </td>
 
+                  <td className="py-3 px-4 text-right font-bold text-emerald-700">
+                    {run.physical_quantity !== null && run.physical_quantity !== undefined
+                      ? `${parseFloat(run.physical_quantity).toLocaleString()} ${run.product_uom || 'Units'}`
+                      : '—'}
+                  </td>
+
+                  <td className="py-3 px-4 text-right">
+                    {parseFloat(run.wastage_quantity || 0) > 0 ? (
+                      <div>
+                        <span className="font-bold text-rose-600 block">
+                          {parseFloat(run.wastage_quantity)} {run.product_uom || 'Units'}
+                        </span>
+                        <span className="text-[10px] text-slate-500">
+                          ₹{parseFloat(run.wastage_cost || 0).toFixed(2)} ({run.wastage_reason || 'loss'})
+                        </span>
+                      </div>
+                    ) : (
+                      <span className="text-slate-400">0</span>
+                    )}
+                  </td>
+
                   <td className="py-3 px-4 text-right font-semibold text-slate-700">
                     ₹ {parseFloat(run.total_material_cost || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                   </td>
@@ -628,8 +673,8 @@ const ProductionInventory = () => {
                   </td>
 
                   <td className="py-3 px-4 text-center">
-                    <span className="font-semibold text-amber-700 bg-amber-50 px-2 py-0.5 rounded text-[11px] border border-amber-200">
-                      ⚡ {run.total_production_time_minutes || 0} m
+                    <span className="font-semibold text-amber-700 bg-amber-50 px-2 py-0.5 rounded text-[11px] border border-amber-200" title={formatProductionTime(null, null, run.total_production_time_minutes).badge}>
+                      ⚡ {formatProductionTime(null, null, run.total_production_time_minutes).label}
                     </span>
                   </td>
 
@@ -776,7 +821,7 @@ const ProductionInventory = () => {
                 </div>
 
                 <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Production Quantity *</label>
+                  <label className="block font-semibold text-slate-700 mb-1">Production Quantity (Generated) *</label>
                   <input
                     type="number"
                     step="0.01"
@@ -785,11 +830,34 @@ const ProductionInventory = () => {
                     value={formData.production_quantity}
                     onChange={(e) => {
                       const newQty = e.target.value;
-                      setFormData({ ...formData, production_quantity: newQty });
+                      setFormData({
+                        ...formData,
+                        production_quantity: newQty,
+                        physical_quantity: (!formData.physical_quantity || formData.physical_quantity === formData.production_quantity) ? newQty : formData.physical_quantity
+                      });
                       checkBomStockSimulation(formData.product_id, newQty, formData.workforce_count);
                     }}
                     className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-slate-900 font-bold text-sm focus:ring-2 focus:ring-blue-500 outline-none"
                   />
+                </div>
+
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1 flex items-center justify-between">
+                    <span>📦 Physical Verified Quantity</span>
+                    <span className="text-[10px] text-emerald-600 font-medium">Actual good items counted</span>
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    placeholder={`Defaults to ${formData.production_quantity || 'produced'}`}
+                    value={formData.physical_quantity}
+                    onChange={(e) => setFormData({ ...formData, physical_quantity: e.target.value })}
+                    className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-slate-900 font-bold text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                  />
+                  <span className="text-[10px] text-slate-500 block mt-0.5">
+                    If less than produced, shortfall will be recorded as wastage expense
+                  </span>
                 </div>
 
                 <div>
@@ -812,7 +880,7 @@ const ProductionInventory = () => {
 
                 <div>
                   <label className="block font-semibold text-slate-700 mb-1 flex items-center justify-between">
-                    <span>💼 Workforce / Labor Cost (₹)</span>
+                    <span>💼 Workforce Charges / Labor Cost (₹)</span>
                     <span className="text-[10px] text-indigo-600 font-semibold bg-indigo-50 px-1.5 py-0.5 rounded">Direct Expense</span>
                   </label>
                   <div className="relative">
@@ -828,9 +896,31 @@ const ProductionInventory = () => {
                     />
                   </div>
                   <span className="text-[10px] text-slate-500 block mt-0.5">
-                    Added to Accounts as Direct Wages & capitalized into WIP
+                    Adds to product cost & debited to Direct Wages in Accounts
                   </span>
                 </div>
+
+                {formData.physical_quantity !== '' && parseFloat(formData.physical_quantity) < parseFloat(formData.production_quantity) && (
+                  <div className="md:col-span-2 p-3 bg-rose-50 border border-rose-200 rounded-xl space-y-2">
+                    <div className="flex items-center gap-1.5 text-xs font-bold text-rose-900">
+                      <AlertTriangle size={15} className="text-rose-600" />
+                      <span>Shortfall of {(parseFloat(formData.production_quantity) - parseFloat(formData.physical_quantity)).toFixed(2)} units detected!</span>
+                    </div>
+                    <div>
+                      <label className="block font-semibold text-rose-900 text-xs mb-1">
+                        Reason for Loss / Wastage <span className="text-rose-500">*</span>
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        placeholder='e.g. good wasted, defect during production'
+                        value={formData.wastage_reason}
+                        onChange={(e) => setFormData({ ...formData, wastage_reason: e.target.value })}
+                        className="w-full bg-white border border-rose-300 rounded-lg px-3 py-2 text-slate-900 font-medium text-xs focus:ring-2 focus:ring-rose-500 outline-none"
+                      />
+                    </div>
+                  </div>
+                )}
 
                 <div>
                   <label className="block font-semibold text-slate-700 mb-1">Production Date</label>
@@ -910,20 +1000,28 @@ const ProductionInventory = () => {
                         <>
                           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
                             <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl shadow-2xs">
-                              <div className="flex items-center gap-1.5 text-amber-800 font-bold mb-1 text-xs">
-                                <Factory size={15} className="text-amber-600" />
-                                <span>Production Time</span>
+                              <div className="flex items-center justify-between text-amber-800 font-bold mb-1 text-xs">
+                                <div className="flex items-center gap-1.5">
+                                  <Factory size={15} className="text-amber-600" />
+                                  <span>Total Production Time</span>
+                                </div>
+                                <span className="text-[10px] text-amber-700 bg-amber-100/80 px-1.5 py-0.5 rounded font-mono">
+                                  Qty: {units} {bomSimulation.product?.unit_of_measure || 'units'}
+                                </span>
                               </div>
                               <div className="text-base font-extrabold text-slate-900">
-                                ⚡ {bomSimulation.total_production_time_minutes || 0} m
-                                {parseFloat(bomSimulation.total_production_time_minutes || 0) >= 60 && (
-                                  <span className="text-xs text-amber-900 font-semibold ml-1">
-                                    ({((bomSimulation.total_production_time_minutes || 0) / 60).toFixed(1)} h)
-                                  </span>
-                                )}
+                                ⚡ {bomSimulation.formatted_total_production_time || formatDuration(0, 0, bomSimulation.total_production_time_minutes).full}
                               </div>
-                              <span className="text-[10px] text-slate-500 block mt-0.5">
-                                {formData.workforce_count || bomSimulation.workforce_required || 1} operators assigned
+                              <div className="flex items-center justify-between text-[10.5px] text-slate-500 mt-1">
+                                <span>
+                                  Per unit: {bomSimulation.formatted_unit_production_time || formatDuration(0, 0, bomSimulation.production_time_per_unit_minutes).short}
+                                </span>
+                                <span className="font-semibold text-amber-900">
+                                  {parseFloat(bomSimulation.total_production_time_minutes || 0).toLocaleString()} mins
+                                </span>
+                              </div>
+                              <span className="text-[10px] text-slate-400 block mt-0.5">
+                                👥 {formData.workforce_count || bomSimulation.workforce_required || 1} operators assigned
                               </span>
                             </div>
 
@@ -968,27 +1066,42 @@ const ProductionInventory = () => {
                           </div>
 
                           {/* Detailed Accounts Posting Banner */}
-                          <div className="p-3 bg-gradient-to-r from-blue-50 via-indigo-50 to-slate-50 border border-indigo-200 rounded-xl text-indigo-950 text-xs">
-                            <div className="flex items-start gap-2">
-                              <Info size={16} className="text-indigo-600 shrink-0 mt-0.5" />
-                              <div className="space-y-1 w-full">
-                                <span className="font-bold block">Accounts Subsystem Posting & Cost Absorption:</span>
-                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px] opacity-90 mt-1">
-                                  <div className="bg-white/90 p-2 rounded-lg border border-indigo-100">
-                                    <strong className="text-slate-800 block mb-0.5">Debit Lines (Assets & Expenses):</strong>
-                                    <div>• <strong>Work in Progress (LED-MFG-WIP):</strong> ₹{totalProdCost.toFixed(2)}</div>
-                                    {wfCost > 0 && <div>• <strong>Direct Wages & Workforce (LED-EXP-WAGES):</strong> ₹{wfCost.toFixed(2)}</div>}
-                                  </div>
-                                  <div className="bg-white/90 p-2 rounded-lg border border-indigo-100">
-                                    <strong className="text-slate-800 block mb-0.5">Credit Lines (Inventory & Payables):</strong>
-                                    <div>• <strong>Raw Material Stock (LED-STOCK-RAW):</strong> ₹{matCost.toFixed(2)}</div>
-                                    {wfCost > 0 && <div>• <strong>Wages Payable (LED-WAGES-PAYABLE):</strong> ₹{wfCost.toFixed(2)}</div>}
-                                    {wfCost > 0 && <div>• <strong>Labor Absorbed (LED-MFG-LABOR-ABSORBED):</strong> ₹{wfCost.toFixed(2)}</div>}
+                          {(() => {
+                            const genQtyVal = parseFloat(formData.production_quantity) || 1;
+                            const physQtyVal = formData.physical_quantity !== '' && formData.physical_quantity !== null && formData.physical_quantity !== undefined
+                              ? parseFloat(formData.physical_quantity)
+                              : genQtyVal;
+                            const shortfallQty = genQtyVal > physQtyVal ? +(genQtyVal - physQtyVal).toFixed(4) : 0;
+                            const wastageLossCost = +(shortfallQty * unitProdCost).toFixed(2);
+                            const wipGoodCost = +(totalProdCost - wastageLossCost).toFixed(2);
+
+                            return (
+                              <div className="p-3 bg-gradient-to-r from-blue-50 via-indigo-50 to-slate-50 border border-indigo-200 rounded-xl text-indigo-950 text-xs">
+                                <div className="flex items-start gap-2">
+                                  <Info size={16} className="text-indigo-600 shrink-0 mt-0.5" />
+                                  <div className="space-y-1 w-full">
+                                    <span className="font-bold block">Accounts Subsystem Posting & Cost Absorption:</span>
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px] opacity-90 mt-1">
+                                      <div className="bg-white/90 p-2 rounded-lg border border-indigo-100">
+                                        <strong className="text-slate-800 block mb-0.5">Debit Lines (Assets & Expenses):</strong>
+                                        <div>• <strong>Work in Progress (LED-MFG-WIP):</strong> ₹{wipGoodCost.toFixed(2)}</div>
+                                        {shortfallQty > 0 && (
+                                          <div className="text-rose-700 font-bold">• <strong>Production Loss & Wastage (LED-LOSS-SPOILAGE):</strong> ₹{wastageLossCost.toFixed(2)}</div>
+                                        )}
+                                        {wfCost > 0 && <div>• <strong>Direct Wages & Workforce (LED-EXP-WAGES):</strong> ₹{wfCost.toFixed(2)}</div>}
+                                      </div>
+                                      <div className="bg-white/90 p-2 rounded-lg border border-indigo-100">
+                                        <strong className="text-slate-800 block mb-0.5">Credit Lines (Inventory & Payables):</strong>
+                                        <div>• <strong>Raw Material Stock (LED-STOCK-RAW):</strong> ₹{matCost.toFixed(2)}</div>
+                                        {wfCost > 0 && <div>• <strong>Wages Payable (LED-WAGES-PAYABLE):</strong> ₹{wfCost.toFixed(2)}</div>}
+                                        {wfCost > 0 && <div>• <strong>Labor Absorbed (LED-MFG-LABOR-ABSORBED):</strong> ₹{wfCost.toFixed(2)}</div>}
+                                      </div>
+                                    </div>
                                   </div>
                                 </div>
                               </div>
-                            </div>
-                          </div>
+                            );
+                          })()}
                         </>
                       );
                     })()}
@@ -1128,9 +1241,24 @@ const ProductionInventory = () => {
 
                 <div>
                   <span className="text-slate-400 text-[11px] block">Units Manufactured</span>
-                  <strong className="text-blue-700 font-bold text-sm">
+                  <strong className="text-blue-700 font-bold text-sm block">
                     {parseFloat(activeRun.production_quantity).toLocaleString()} {activeRun.product_uom || 'Units'}
                   </strong>
+                  {activeRun.physical_quantity !== null && activeRun.physical_quantity !== undefined && (
+                    <span className="text-emerald-700 font-bold text-xs block">
+                      Physical Count: {parseFloat(activeRun.physical_quantity).toLocaleString()} {activeRun.product_uom || 'Units'}
+                    </span>
+                  )}
+                  {parseFloat(activeRun.wastage_quantity || 0) > 0 && (
+                    <span className="text-rose-600 font-semibold text-[10px] block">
+                      ⚠️ Wasted: {parseFloat(activeRun.wastage_quantity)} ({activeRun.wastage_reason || 'loss'})
+                    </span>
+                  )}
+                  {activeRun.voucher_number && (
+                    <span className="text-indigo-600 font-mono text-[10px] block mt-0.5">
+                      Vch #{activeRun.voucher_number}
+                    </span>
+                  )}
                 </div>
 
                 <div>
@@ -1142,14 +1270,14 @@ const ProductionInventory = () => {
                 <div>
                   <span className="text-slate-400 text-[11px] block">Production Time & Crew</span>
                   <strong className="text-amber-700 font-bold text-sm block">
-                    ⚡ {activeRun.total_production_time_minutes || 0} Minutes
+                    ⚡ {formatProductionTime(null, null, activeRun.total_production_time_minutes).badge}
                   </strong>
                   <span className="text-[10px] text-slate-500">👥 {activeRun.workforce_count || 1} Operators</span>
                 </div>
               </div>
 
               {/* Cost Accounting Breakdown Cards */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div className={`grid grid-cols-1 ${parseFloat(activeRun.wastage_quantity || 0) > 0 ? 'sm:grid-cols-4' : 'sm:grid-cols-3'} gap-3`}>
                 <div className="p-3 bg-blue-50 border border-blue-200 rounded-xl">
                   <span className="text-blue-600 text-[11px] font-semibold block">1. Raw Material Cost</span>
                   <strong className="text-blue-900 font-extrabold text-base block mt-0.5">
@@ -1175,6 +1303,18 @@ const ProductionInventory = () => {
                     Unit Cost: ₹{parseFloat(activeRun.unit_production_cost || (activeRun.production_quantity > 0 ? ((parseFloat(activeRun.total_production_cost || 0) || (parseFloat(activeRun.total_material_cost || 0) + parseFloat(activeRun.workforce_cost || 0))) / activeRun.production_quantity) : 0)).toFixed(2)}
                   </span>
                 </div>
+
+                {parseFloat(activeRun.wastage_quantity || 0) > 0 && (
+                  <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl">
+                    <span className="text-rose-600 text-[11px] font-semibold block">4. Production Loss / Wastage</span>
+                    <strong className="text-rose-900 font-extrabold text-base block mt-0.5">
+                      ₹ {parseFloat(activeRun.wastage_cost || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                    </strong>
+                    <span className="text-[10px] text-rose-700 font-medium block">
+                      {parseFloat(activeRun.wastage_quantity)} units wasted ({activeRun.wastage_reason || 'loss'}) noted in Accounts
+                    </span>
+                  </div>
+                )}
               </div>
 
               {/* Consumed Materials Table */}

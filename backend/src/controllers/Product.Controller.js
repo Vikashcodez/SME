@@ -17,7 +17,11 @@ export const createProduct = async (req, res) => {
             gst_rate = 18.00,
             product_specification,
             min_stock_level = 0,
+            production_time_days = 0,
+            production_time_hours = 0,
             production_time_minutes = 0,
+            production_time_value,
+            production_time_unit = 'Minutes',
             workforce_required = 1,
             status = 'Active',
             raw_materials // Can be JSON array or JSON string
@@ -90,6 +94,26 @@ export const createProduct = async (req, res) => {
             }
         }
 
+        const pDays = Math.max(0, parseFloat(production_time_days) || 0);
+        const pHours = Math.max(0, parseFloat(production_time_hours) || 0);
+        const pMins = Math.max(0, parseFloat(production_time_minutes) || 0);
+
+        let totalMins = 0;
+        if (req.body.production_time_days !== undefined || req.body.production_time_hours !== undefined) {
+            totalMins = +(pDays * 1440 + pHours * 60 + pMins).toFixed(2);
+        } else if (production_time_value !== undefined && production_time_value !== '' && production_time_value !== null) {
+            const v = parseFloat(production_time_value) || 0;
+            const u = (production_time_unit || 'Minutes').toLowerCase();
+            if (u === 'days' || u === 'day') totalMins = +(v * 1440).toFixed(2);
+            else if (u === 'hours' || u === 'hour') totalMins = +(v * 60).toFixed(2);
+            else totalMins = +v.toFixed(2);
+        } else {
+            totalMins = pMins;
+        }
+
+        const finalDays = req.body.production_time_days !== undefined ? pDays : Math.floor(totalMins / 1440);
+        const finalHours = req.body.production_time_hours !== undefined ? pHours : Math.floor((totalMins % 1440) / 60);
+
         await client.query('BEGIN');
 
         // Insert Product Master
@@ -98,14 +122,14 @@ export const createProduct = async (req, res) => {
                 company_id, branch_id, product_code, product_name, category,
                 unit_of_measure, selling_price, cost_price, hsn_code, gst_rate,
                 product_specification, photo_1, photo_2, photo_3,
-                min_stock_level, production_time_minutes, workforce_required,
+                min_stock_level, production_time_days, production_time_hours, production_time_minutes, production_time_value, production_time_unit, workforce_required,
                 status, is_active, created_by, updated_by
             ) VALUES (
                 $1, $2, $3, $4, $5,
                 $6, $7, $8, $9, $10,
                 $11, $12, $13, $14,
-                $15, $16, $17,
-                $18, true, $19, $19
+                $15, $16, $17, $18, $19, $20, $21,
+                $22, true, $23, $23
             ) RETURNING *
         `;
 
@@ -125,7 +149,11 @@ export const createProduct = async (req, res) => {
             photo_2,
             photo_3,
             parseFloat(min_stock_level) || 0.00,
-            parseFloat(production_time_minutes) || 0.00,
+            finalDays,
+            finalHours,
+            totalMins,
+            totalMins,
+            'Minutes',
             parseInt(workforce_required, 10) || 1,
             status || 'Active',
             performedBy
@@ -377,7 +405,11 @@ export const updateProduct = async (req, res) => {
             gst_rate,
             product_specification,
             min_stock_level,
+            production_time_days,
+            production_time_hours,
             production_time_minutes,
+            production_time_value,
+            production_time_unit,
             workforce_required,
             status,
             raw_materials
@@ -417,6 +449,33 @@ export const updateProduct = async (req, res) => {
             }
         }
 
+        let daysVal = production_time_days !== undefined && production_time_days !== '' && production_time_days !== null
+            ? parseFloat(production_time_days)
+            : null;
+        let hoursVal = production_time_hours !== undefined && production_time_hours !== '' && production_time_hours !== null
+            ? parseFloat(production_time_hours)
+            : null;
+        let minsVal = production_time_minutes !== undefined && production_time_minutes !== '' && production_time_minutes !== null
+            ? parseFloat(production_time_minutes)
+            : null;
+
+        let timeMins = null;
+        if (daysVal !== null || hoursVal !== null) {
+            timeMins = +((daysVal || 0) * 1440 + (hoursVal || 0) * 60 + (minsVal || 0)).toFixed(2);
+        } else if (production_time_value !== undefined && production_time_value !== '' && production_time_value !== null) {
+            const v = parseFloat(production_time_value) || 0;
+            const u = (production_time_unit || 'Minutes').toLowerCase();
+            if (u === 'days' || u === 'day') timeMins = +(v * 1440).toFixed(2);
+            else if (u === 'hours' || u === 'hour') timeMins = +(v * 60).toFixed(2);
+            else timeMins = +v.toFixed(2);
+            daysVal = Math.floor(timeMins / 1440);
+            hoursVal = Math.floor((timeMins % 1440) / 60);
+        } else if (minsVal !== null) {
+            timeMins = minsVal;
+            daysVal = Math.floor(timeMins / 1440);
+            hoursVal = Math.floor((timeMins % 1440) / 60);
+        }
+
         await client.query('BEGIN');
 
         // Update Product Master
@@ -435,12 +494,16 @@ export const updateProduct = async (req, res) => {
                 photo_2 = $11,
                 photo_3 = $12,
                 min_stock_level = COALESCE($13, min_stock_level),
-                production_time_minutes = COALESCE($14, production_time_minutes),
-                workforce_required = COALESCE($15, workforce_required),
-                status = COALESCE($16, status),
-                updated_by = $17,
+                production_time_days = COALESCE($14, production_time_days),
+                production_time_hours = COALESCE($15, production_time_hours),
+                production_time_minutes = COALESCE($16, production_time_minutes),
+                production_time_value = COALESCE($17, production_time_value),
+                production_time_unit = COALESCE($18, production_time_unit),
+                workforce_required = COALESCE($19, workforce_required),
+                status = COALESCE($20, status),
+                updated_by = $21,
                 updated_at = CURRENT_TIMESTAMP
-            WHERE product_id = $18
+            WHERE product_id = $22
             RETURNING *
         `;
 
@@ -458,7 +521,11 @@ export const updateProduct = async (req, res) => {
             photo_2,
             photo_3,
             min_stock_level !== undefined ? parseFloat(min_stock_level) : null,
-            production_time_minutes !== undefined ? parseFloat(production_time_minutes) : null,
+            daysVal !== null ? daysVal : null,
+            hoursVal !== null ? hoursVal : null,
+            timeMins !== null ? timeMins : null,
+            timeMins !== null ? timeMins : null,
+            'Minutes',
             workforce_required !== undefined ? parseInt(workforce_required, 10) : null,
             status || null,
             performedBy,

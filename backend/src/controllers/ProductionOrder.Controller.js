@@ -1,4 +1,5 @@
 import pool from '../config/database.js';
+import { postAccountingVoucher, resolveLedger } from '../services/AccountingPosting.js';
 
 // Helper to auto-generate production order number
 const generateProductionNumber = async (client) => {
@@ -150,7 +151,22 @@ export const calculateRequirements = async (req, res) => {
         }
 
         // Calculate planned time, workforce, expenses
-        const plannedTimeMinutes = parseFloat(master.production_time_minutes || 0) * multiplier;
+        const masterTimePerUnitMinutes = parseFloat(master.production_time_minutes || 0);
+        const plannedTimeMinutes = masterTimePerUnitMinutes * multiplier;
+        const plannedDays = Math.floor(plannedTimeMinutes / 1440);
+        const remMinutesAfterDays = plannedTimeMinutes % 1440;
+        const plannedHours = Math.floor(remMinutesAfterDays / 60);
+        const plannedMins = +(remMinutesAfterDays % 60).toFixed(2);
+
+        const formatParts = (d, h, m) => {
+            const parts = [];
+            if (d > 0) parts.push(`${d} ${d === 1 ? 'Day' : 'Days'}`);
+            if (h > 0) parts.push(`${h} ${h === 1 ? 'Hour' : 'Hours'}`);
+            if (m > 0 || parts.length === 0) parts.push(`${m} ${m == 1 ? 'Minute' : 'Minutes'}`);
+            return parts.join(', ');
+        };
+
+        const formattedPlannedTime = formatParts(plannedDays, plannedHours, plannedMins);
         const plannedWorkforceCount = parseFloat(master.workforce_count || 1);
         const plannedExpense = (
             parseFloat(master.labor_cost || 0) +
@@ -165,7 +181,11 @@ export const calculateRequirements = async (req, res) => {
             product,
             production_master: master,
             planned_quantity: qty,
-            planned_time_minutes: plannedTimeMinutes,
+            planned_time_minutes: parseFloat(plannedTimeMinutes.toFixed(2)),
+            planned_days: plannedDays,
+            planned_hours: plannedHours,
+            planned_remaining_minutes: plannedMins,
+            formatted_planned_time: formattedPlannedTime,
             planned_workforce_count: plannedWorkforceCount,
             planned_expense: plannedExpense,
             materials: calculatedMaterials
@@ -467,67 +487,228 @@ export const startProductionOrder = async (req, res) => {
 
 // 4. Complete Production Run on Batch (before Quality Check)
 export const completeProductionBatch = async (req, res) => {
+    const client = await pool.connect();
     try {
+        await client.query('BEGIN');
+
         const { batchId } = req.params;
-        const { produced_quantity, actual_time_minutes, actual_expense, workforce_cost } = req.body;
+        const {
+            produced_quantity,
+            physical_quantity,
+            actual_time_minutes,
+            actual_expense,
+            workforce_cost,
+            wastage_reason
+        } = req.body;
 
         const producedQty = parseFloat(produced_quantity);
         if (isNaN(producedQty) || producedQty < 0) {
+            await client.query('ROLLBACK');
             return res.status(400).json({ success: false, message: 'Valid produced quantity is required.' });
+        }
+
+        const physQty = (physical_quantity !== undefined && physical_quantity !== null && physical_quantity !== '')
+            ? parseFloat(physical_quantity)
+            : producedQty;
+
+        if (isNaN(physQty) || physQty < 0) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({ success: false, message: 'Physical quantity cannot be negative.' });
+        }
+
+        let wastageQty = 0;
+        let reason = null;
+        if (physQty < producedQty) {
+            wastageQty = +(producedQty - physQty).toFixed(4);
+            reason = wastage_reason && wastage_reason.trim() !== '' ? wastage_reason.trim() : 'Production loss / wastage';
         }
 
         const wfCost = Math.max(0, parseFloat(workforce_cost !== undefined ? workforce_cost : actual_expense) || 0);
 
+        // Fetch batch along with order and product details
+        const batchQuery = `
+            SELECT pb.*, po.company_id, po.branch_id, po.product_id, po.production_number,
+                   p.product_name, p.product_code
+            FROM production_batches pb
+            JOIN production_orders po ON pb.production_order_id = po.id
+            JOIN products p ON po.product_id = p.product_id
+            WHERE pb.id = $1
+            FOR UPDATE OF pb
+        `;
+        const batchRes = await client.query(batchQuery, [batchId]);
+        if (batchRes.rows.length === 0) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({ success: false, message: 'Production Batch not found.' });
+        }
+        const batch = batchRes.rows[0];
+
         // Fetch material consumptions for this order
-        const consRes = await pool.query(
+        const consRes = await client.query(
             `SELECT COALESCE(SUM(total_cost), 0) as mat_cost 
              FROM production_material_consumptions 
-             WHERE production_order_id = (SELECT production_order_id FROM production_batches WHERE id = $1)`,
-            [batchId]
+             WHERE production_order_id = $1`,
+            [batch.production_order_id]
         );
         const matCost = parseFloat(consRes.rows[0]?.mat_cost || 0);
         const totalProdCost = +(matCost + wfCost).toFixed(2);
         const unitCost = producedQty > 0 ? +(totalProdCost / producedQty).toFixed(4) : 0;
+        const wastageCost = +(wastageQty * unitCost).toFixed(2);
+        const goodCost = +(totalProdCost - wastageCost).toFixed(2);
 
-        const batchRes = await pool.query(`
-            UPDATE production_batches
-            SET produced_quantity = $1,
-                material_cost = $2,
-                workforce_cost = $3,
-                total_production_cost = $4,
-                unit_cost = $5,
-                status = 'PENDING_QC',
-                updated_at = CURRENT_TIMESTAMP
-            WHERE id = $6
-            RETURNING *
-        `, [producedQty, matCost, wfCost, totalProdCost, unitCost, batchId]);
+        // Automatic Accounting Voucher
+        let voucher = null;
+        if (batch.company_id && (totalProdCost > 0 || wfCost > 0)) {
+            const rawStockLedgerId = await resolveLedger(client, batch.company_id, 'LED-STOCK-RAW', 'Raw Material Stock', 'GRP-STOCK', 'DR');
+            const wipLedgerId = await resolveLedger(client, batch.company_id, 'LED-MFG-WIP', 'Work In Progress Stock', 'GRP-STOCK', 'DR');
 
-        if (batchRes.rows.length === 0) {
-            return res.status(404).json({ success: false, message: 'Production Batch not found.' });
+            const accountingLines = [];
+
+            // 1. Debit WIP for good physical quantity cost
+            accountingLines.push({
+                ledgerId: wipLedgerId,
+                debit: goodCost,
+                credit: 0,
+                narration: `Production WIP: ${physQty} units of "${batch.product_name}" (Batch: ${batch.batch_number}) @ ₹${unitCost.toFixed(2)}/unit`
+            });
+
+            // 2. Debit Spoilage / Wastage Loss if shortfall occurred
+            if (wastageCost > 0) {
+                const spoilageLedgerId = await resolveLedger(client, batch.company_id, 'LED-LOSS-SPOILAGE', 'Production Loss & Wastage Expense', 'GRP-DIR-EXP', 'DR');
+                accountingLines.push({
+                    ledgerId: spoilageLedgerId,
+                    debit: wastageCost,
+                    credit: 0,
+                    narration: `Production loss / wastage: ${wastageQty} units of "${batch.product_name}" (${reason})`
+                });
+            }
+
+            // 3. Credit Raw Material Stock for consumed materials
+            accountingLines.push({
+                ledgerId: rawStockLedgerId,
+                debit: 0,
+                credit: matCost,
+                narration: `Raw material stock consumed for batch ${batch.batch_number} (${batch.production_number})`
+            });
+
+            // 4. Direct Workforce / Labor Expense entries if workforce cost was entered
+            if (wfCost > 0) {
+                const wagesExpLedgerId = await resolveLedger(client, batch.company_id, 'LED-EXP-WAGES', 'Direct Wages & Workforce Cost', 'GRP-DIR-EXP', 'DR');
+                const wagesPayableLedgerId = await resolveLedger(client, batch.company_id, 'LED-WAGES-PAYABLE', 'Wages & Workforce Payable', 'GRP-CL', 'CR');
+                const laborAbsorbedLedgerId = await resolveLedger(client, batch.company_id, 'LED-MFG-LABOR-ABSORBED', 'Workforce Cost Absorbed in Production', 'GRP-DIR-EXP', 'CR');
+
+                accountingLines.push({
+                    ledgerId: wagesExpLedgerId,
+                    debit: wfCost,
+                    credit: 0,
+                    narration: `Direct workforce charges for batch ${batch.batch_number}`
+                });
+
+                accountingLines.push({
+                    ledgerId: wagesPayableLedgerId,
+                    debit: 0,
+                    credit: wfCost,
+                    narration: `Workforce labor payable for batch ${batch.batch_number}`
+                });
+
+                accountingLines.push({
+                    ledgerId: laborAbsorbedLedgerId,
+                    debit: 0,
+                    credit: wfCost,
+                    narration: `Workforce labor capitalized into WIP (Batch: ${batch.batch_number})`
+                });
+            }
+
+            voucher = await postAccountingVoucher(client, {
+                companyId: batch.company_id,
+                branchId: batch.branch_id,
+                voucherDate: new Date().toISOString().split('T')[0],
+                sourceDocumentId: batch.id,
+                sourceModule: 'MANUFACTURING',
+                referenceNumber: batch.batch_number,
+                narration: `Production completion for batch ${batch.batch_number} of "${batch.product_name}". Generated: ${producedQty}, Physical: ${physQty}, Shortfall: ${wastageQty}${wastageQty > 0 ? ` (${reason})` : ''}. Material: ₹${matCost.toFixed(2)}, Workforce: ₹${wfCost.toFixed(2)}, Wastage Loss Expense: ₹${wastageCost.toFixed(2)}`,
+                lines: accountingLines
+            });
         }
 
-        const batch = batchRes.rows[0];
+        const batchResUpdated = await client.query(`
+            UPDATE production_batches
+            SET produced_quantity = $1,
+                physical_quantity = $2,
+                wastage_quantity = $3,
+                wastage_reason = $4,
+                wastage_cost = $5,
+                material_cost = $6,
+                workforce_cost = $7,
+                total_production_cost = $8,
+                unit_cost = $9,
+                accounting_voucher_id = $10,
+                status = 'PENDING_QC',
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = $11
+            RETURNING *
+        `, [
+            producedQty,
+            physQty,
+            wastageQty,
+            reason,
+            wastageCost,
+            matCost,
+            wfCost,
+            totalProdCost,
+            unitCost,
+            voucher?.voucher_id || null,
+            batchId
+        ]);
 
-        // Also update the parent Production Order
-        await pool.query(`
+        const updatedBatch = batchResUpdated.rows[0];
+
+        // Also update parent Production Order
+        await client.query(`
             UPDATE production_orders
             SET actual_time_minutes = COALESCE($1, actual_time_minutes),
                 actual_expense = COALESCE($2, actual_expense),
+                workforce_cost = $3,
+                total_production_cost = $4,
+                physical_quantity = $5,
+                wastage_quantity = $6,
+                wastage_reason = $7,
+                wastage_cost = $8,
+                accounting_voucher_id = $9,
                 actual_end_date = CURRENT_TIMESTAMP,
                 status = 'COMPLETED',
                 updated_at = CURRENT_TIMESTAMP
-            WHERE id = $3
-        `, [actual_time_minutes, actual_expense, batch.production_order_id]);
+            WHERE id = $10
+        `, [
+            actual_time_minutes || null,
+            wfCost,
+            wfCost,
+            totalProdCost,
+            physQty,
+            wastageQty,
+            reason,
+            wastageCost,
+            voucher?.voucher_id || null,
+            batch.production_order_id
+        ]);
+
+        await client.query('COMMIT');
 
         return res.status(200).json({
             success: true,
-            message: 'Production batch marked as completed and ready for Quality Inspection.',
-            data: batch
+            message: `Production batch marked as completed (${physQty} physical units verified${wastageQty > 0 ? `, ${wastageQty} wasted noted as expense` : ''}) and ready for Quality Inspection.`,
+            data: {
+                ...updatedBatch,
+                voucher_id: voucher?.voucher_id,
+                voucher_number: voucher?.voucher_number
+            }
         });
 
     } catch (error) {
+        await client.query('ROLLBACK');
         console.error('Error completing production batch:', error);
         return res.status(500).json({ success: false, message: 'Failed to complete production batch', error: error.message });
+    } finally {
+        client.release();
     }
 };
 
@@ -550,7 +731,11 @@ export const getAllProductionOrders = async (req, res) => {
                 b.branch_name,
                 CONCAT(e.first_name, ' ', COALESCE(e.last_name, '')) as created_by_name,
                 COUNT(DISTINCT pb.id) as batches_count,
-                COALESCE(SUM(pb.produced_quantity), 0) as total_produced_quantity
+                COALESCE(SUM(pb.produced_quantity), 0) as total_produced_quantity,
+                COALESCE(SUM(pb.physical_quantity), 0) as total_physical_quantity,
+                COALESCE(SUM(pb.wastage_quantity), 0) as total_wastage_quantity,
+                COALESCE(SUM(pb.wastage_cost), 0) as total_wastage_cost,
+                v.voucher_number
             FROM production_orders po
             JOIN products p ON po.product_id = p.product_id
             LEFT JOIN production_masters pm ON po.production_master_id = pm.id
@@ -558,6 +743,7 @@ export const getAllProductionOrders = async (req, res) => {
             LEFT JOIN branches b ON po.branch_id = b.branch_id
             LEFT JOIN employees e ON po.created_by = e.employee_id
             LEFT JOIN production_batches pb ON po.id = pb.production_order_id
+            LEFT JOIN vouchers v ON po.accounting_voucher_id = v.voucher_id
             WHERE 1=1
         `;
 
@@ -594,7 +780,7 @@ export const getAllProductionOrders = async (req, res) => {
             counter++;
         }
 
-        query += ` GROUP BY po.id, p.product_id, pm.id, c.company_id, b.branch_id, e.employee_id ORDER BY po.id DESC`;
+        query += ` GROUP BY po.id, p.product_id, pm.id, c.company_id, b.branch_id, e.employee_id, v.voucher_number ORDER BY po.id DESC`;
 
         const result = await pool.query(query, values);
         return res.status(200).json({ success: true, count: result.rows.length, data: result.rows });
@@ -620,13 +806,15 @@ export const getProductionOrderById = async (req, res) => {
                 pm.version as bom_version,
                 c.company_name,
                 b.branch_name,
-                CONCAT(e.first_name, ' ', COALESCE(e.last_name, '')) as created_by_name
+                CONCAT(e.first_name, ' ', COALESCE(e.last_name, '')) as created_by_name,
+                v.voucher_number
             FROM production_orders po
             JOIN products p ON po.product_id = p.product_id
             LEFT JOIN production_masters pm ON po.production_master_id = pm.id
             LEFT JOIN companies c ON po.company_id = c.company_id
             LEFT JOIN branches b ON po.branch_id = b.branch_id
             LEFT JOIN employees e ON po.created_by = e.employee_id
+            LEFT JOIN vouchers v ON po.accounting_voucher_id = v.voucher_id
             WHERE po.id = $1
         `;
 
@@ -637,8 +825,9 @@ export const getProductionOrderById = async (req, res) => {
 
         // Batches for this order
         const batchesRes = await pool.query(`
-            SELECT pb.*, qc.quality_status, qc.passed_quantity, qc.rework_quantity, qc.rejected_quantity
+            SELECT pb.*, v.voucher_number, qc.quality_status, qc.passed_quantity, qc.rework_quantity, qc.rejected_quantity
             FROM production_batches pb
+            LEFT JOIN vouchers v ON pb.accounting_voucher_id = v.voucher_id
             LEFT JOIN quality_checks qc ON pb.id = qc.production_batch_id
             WHERE pb.production_order_id = $1
             ORDER BY pb.id ASC

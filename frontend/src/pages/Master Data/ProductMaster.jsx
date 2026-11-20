@@ -8,6 +8,7 @@ import {
   companies as companiesApi,
   hsn as hsnApi
 } from '../../services/api';
+import { formatProductionTime, calculateTotalMinutes, formatDuration, decomposeMinutes } from '../../utils/productionTime';
 import toast from 'react-hot-toast';
 import { 
   Package, 
@@ -118,6 +119,8 @@ const ProductMaster = () => {
     gst_rate: '18',
     product_specification: '',
     min_stock_level: '0',
+    production_time_days: '',
+    production_time_hours: '',
     production_time_minutes: '',
     workforce_required: '1',
     status: 'Active',
@@ -509,7 +512,17 @@ const ProductMaster = () => {
       fData.append('gst_rate', formData.gst_rate || '18');
       fData.append('product_specification', formData.product_specification || '');
       fData.append('min_stock_level', formData.min_stock_level || '0');
-      fData.append('production_time_minutes', formData.production_time_minutes || '0');
+
+      const d = parseFloat(formData.production_time_days) || 0;
+      const h = parseFloat(formData.production_time_hours) || 0;
+      const m = parseFloat(formData.production_time_minutes) || 0;
+      const totalMins = calculateTotalMinutes(d, h, m);
+
+      fData.append('production_time_days', d.toString());
+      fData.append('production_time_hours', h.toString());
+      fData.append('production_time_minutes', m.toString());
+      fData.append('production_time_value', totalMins.toString());
+      fData.append('production_time_unit', 'Minutes');
       fData.append('workforce_required', formData.workforce_required || '1');
       fData.append('status', formData.status || 'Active');
       fData.append('raw_materials', JSON.stringify(formData.raw_materials));
@@ -533,9 +546,23 @@ const ProductMaster = () => {
   // Open Edit Modal
   const handleOpenEditModal = (product) => {
     setActiveProduct(product);
+    const totalMins = parseFloat(product.production_time_minutes) || 0;
+    let pDays = product.production_time_days !== undefined && product.production_time_days !== null && product.production_time_days !== '' ? product.production_time_days.toString() : '';
+    let pHours = product.production_time_hours !== undefined && product.production_time_hours !== null && product.production_time_hours !== '' ? product.production_time_hours.toString() : '';
+    let pMinutes = product.production_time_minutes !== undefined && product.production_time_minutes !== null ? product.production_time_minutes.toString() : '';
+
+    if ((!pDays || pDays === '0') && (!pHours || pHours === '0') && totalMins > 0) {
+      const decomp = decomposeMinutes(totalMins);
+      pDays = decomp.days > 0 ? decomp.days.toString() : '';
+      pHours = decomp.hours > 0 ? decomp.hours.toString() : '';
+      pMinutes = decomp.minutes > 0 ? decomp.minutes.toString() : '0';
+    }
+
     setEditFormData({
       ...product,
-      production_time_minutes: product.production_time_minutes || '',
+      production_time_days: pDays,
+      production_time_hours: pHours,
+      production_time_minutes: pMinutes,
       workforce_required: product.workforce_required || '1',
       raw_materials: product.bom_items ? product.bom_items.map(b => ({
         material_id: b.material_id,
@@ -583,7 +610,17 @@ const ProductMaster = () => {
       fData.append('gst_rate', editFormData.gst_rate || '18');
       fData.append('product_specification', editFormData.product_specification || '');
       fData.append('min_stock_level', editFormData.min_stock_level || '0');
-      fData.append('production_time_minutes', editFormData.production_time_minutes || '0');
+
+      const d = parseFloat(editFormData.production_time_days) || 0;
+      const h = parseFloat(editFormData.production_time_hours) || 0;
+      const m = parseFloat(editFormData.production_time_minutes) || 0;
+      const totalMins = calculateTotalMinutes(d, h, m);
+
+      fData.append('production_time_days', d.toString());
+      fData.append('production_time_hours', h.toString());
+      fData.append('production_time_minutes', m.toString());
+      fData.append('production_time_value', totalMins.toString());
+      fData.append('production_time_unit', 'Minutes');
       fData.append('workforce_required', editFormData.workforce_required || '1');
       fData.append('status', editFormData.status || 'Active');
       fData.append('raw_materials', JSON.stringify(editFormData.raw_materials));
@@ -913,7 +950,9 @@ const ProductMaster = () => {
                     <div className="grid grid-cols-2 gap-1.5 mb-2.5">
                       <div className="bg-amber-50/70 border border-amber-200/70 rounded-lg p-1.5 text-center">
                         <span className="text-[10px] text-amber-700 block font-semibold">Prod. Time / Unit</span>
-                        <span className="text-xs font-bold text-slate-800">⚡ {p.production_time_minutes || 0} Mins</span>
+                        <span className="text-xs font-bold text-slate-800" title={formatProductionTime(p.production_time_value, p.production_time_unit, p.production_time_minutes, p.production_time_days, p.production_time_hours).badge}>
+                          ⚡ {formatProductionTime(p.production_time_value, p.production_time_unit, p.production_time_minutes, p.production_time_days, p.production_time_hours).label}
+                        </span>
                       </div>
                       <div className="bg-blue-50/70 border border-blue-200/70 rounded-lg p-1.5 text-center">
                         <span className="text-[10px] text-blue-700 block font-semibold">Workforce</span>
@@ -1033,8 +1072,8 @@ const ProductMaster = () => {
                     </td>
 
                     <td className="py-3 px-4 text-center">
-                      <span className="font-semibold text-amber-700 bg-amber-50 px-2 py-0.5 rounded text-[11px] border border-amber-200">
-                        ⚡ {p.production_time_minutes || 0} m
+                      <span className="font-semibold text-amber-700 bg-amber-50 px-2 py-0.5 rounded text-[11px] border border-amber-200" title={formatProductionTime(p.production_time_value, p.production_time_unit, p.production_time_minutes, p.production_time_days, p.production_time_hours).badge}>
+                        ⚡ {formatProductionTime(p.production_time_value, p.production_time_unit, p.production_time_minutes, p.production_time_days, p.production_time_hours).label}
                       </span>
                     </td>
 
@@ -1370,37 +1409,108 @@ const ProductMaster = () => {
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
-                  <div>
-                    <label className="block font-semibold text-slate-700 mb-1">
-                      Production Time for 1 Product (in Minutes) *
-                    </label>
-                    <input
-                      type="number"
-                      step="0.5"
-                      min="0"
-                      placeholder="e.g. 15 (Minutes per 1 product)"
-                      value={formData.production_time_minutes}
-                      onChange={(e) => setFormData({ ...formData, production_time_minutes: e.target.value })}
-                      className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-slate-900 font-semibold focus:ring-2 focus:ring-blue-500 outline-none"
-                    />
-                    <p className="text-[10.5px] text-slate-500 mt-1">Total manufacturing time in minutes to produce 1 {formData.unit_of_measure || 'unit'}</p>
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-3.5">
+                  <div className="lg:col-span-2">
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="block font-semibold text-slate-700 text-xs">
+                        Production Time for 1 {formData.unit_of_measure || 'Product'} (Days, Hours & Minutes) *
+                      </label>
+                      {(() => {
+                        const total = calculateTotalMinutes(
+                          formData.production_time_days,
+                          formData.production_time_hours,
+                          formData.production_time_minutes
+                        );
+                        if (total > 0) {
+                          return (
+                            <span className="font-bold text-amber-800 bg-amber-100/90 px-2 py-0.5 rounded text-[10.5px] border border-amber-300">
+                              ⚡ {formatDuration(formData.production_time_days, formData.production_time_hours, formData.production_time_minutes).full} ({total.toLocaleString()} mins)
+                            </span>
+                          );
+                        }
+                        return null;
+                      })()}
+                    </div>
+                    <div className="grid grid-cols-3 gap-2">
+                      {/* Days Input */}
+                      <div>
+                        <div className="flex items-center rounded-lg border border-slate-200 bg-white overflow-hidden focus-within:ring-2 focus-within:ring-blue-500">
+                          <input
+                            type="number"
+                            min="0"
+                            step="1"
+                            placeholder="0"
+                            value={formData.production_time_days}
+                            onChange={(e) => setFormData({ ...formData, production_time_days: e.target.value })}
+                            className="w-full px-2.5 py-2 text-slate-900 font-semibold outline-none text-sm text-center"
+                          />
+                          <span className="bg-slate-100 px-2.5 py-2 text-xs font-semibold text-slate-600 border-l border-slate-200">
+                            Days
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Hours Input */}
+                      <div>
+                        <div className="flex items-center rounded-lg border border-slate-200 bg-white overflow-hidden focus-within:ring-2 focus-within:ring-blue-500">
+                          <input
+                            type="number"
+                            min="0"
+                            max="23"
+                            step="1"
+                            placeholder="0"
+                            value={formData.production_time_hours}
+                            onChange={(e) => setFormData({ ...formData, production_time_hours: e.target.value })}
+                            className="w-full px-2.5 py-2 text-slate-900 font-semibold outline-none text-sm text-center"
+                          />
+                          <span className="bg-slate-100 px-2.5 py-2 text-xs font-semibold text-slate-600 border-l border-slate-200">
+                            Hours
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Minutes Input */}
+                      <div>
+                        <div className="flex items-center rounded-lg border border-slate-200 bg-white overflow-hidden focus-within:ring-2 focus-within:ring-blue-500">
+                          <input
+                            type="number"
+                            min="0"
+                            step="any"
+                            placeholder="0"
+                            value={formData.production_time_minutes}
+                            onChange={(e) => setFormData({ ...formData, production_time_minutes: e.target.value })}
+                            className="w-full px-2.5 py-2 text-slate-900 font-semibold outline-none text-sm text-center"
+                          />
+                          <span className="bg-slate-100 px-2.5 py-2 text-xs font-semibold text-slate-600 border-l border-slate-200">
+                            Mins
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                    <p className="text-[10.5px] text-slate-500 mt-1">
+                      e.g. 1 Day, 5 Hours, 3 Mins to manufacture 1 {formData.unit_of_measure || 'unit'}
+                    </p>
                   </div>
 
                   <div>
-                    <label className="block font-semibold text-slate-700 mb-1">
+                    <label className="block font-semibold text-slate-700 text-xs mb-1">
                       Workforce Needed (Persons / Operators) *
                     </label>
-                    <input
-                      type="number"
-                      step="1"
-                      min="1"
-                      placeholder="e.g. 2 (Workers required)"
-                      value={formData.workforce_required}
-                      onChange={(e) => setFormData({ ...formData, workforce_required: e.target.value })}
-                      className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-slate-900 font-semibold focus:ring-2 focus:ring-blue-500 outline-none"
-                    />
-                    <p className="text-[10.5px] text-slate-500 mt-1">Total manpower / operators assigned to this production</p>
+                    <div className="flex items-center rounded-lg border border-slate-200 bg-white overflow-hidden focus-within:ring-2 focus-within:ring-blue-500">
+                      <input
+                        type="number"
+                        step="1"
+                        min="1"
+                        placeholder="1"
+                        value={formData.workforce_required}
+                        onChange={(e) => setFormData({ ...formData, workforce_required: e.target.value })}
+                        className="w-full px-3 py-2 text-slate-900 font-semibold outline-none text-sm text-center"
+                      />
+                      <span className="bg-slate-100 px-2.5 py-2 text-xs font-semibold text-slate-600 border-l border-slate-200">
+                        Workers
+                      </span>
+                    </div>
+                    <p className="text-[10.5px] text-slate-500 mt-1">Total manpower assigned to this production</p>
                   </div>
                 </div>
               </div>
@@ -1801,37 +1911,108 @@ const ProductMaster = () => {
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
-                  <div>
-                    <label className="block font-semibold text-slate-700 mb-1">
-                      Production Time for 1 Product (in Minutes) *
-                    </label>
-                    <input
-                      type="number"
-                      step="0.5"
-                      min="0"
-                      placeholder="e.g. 15 (Minutes per 1 product)"
-                      value={editFormData.production_time_minutes}
-                      onChange={(e) => setEditFormData({ ...editFormData, production_time_minutes: e.target.value })}
-                      className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-slate-900 font-semibold focus:ring-2 focus:ring-blue-500 outline-none"
-                    />
-                    <p className="text-[10.5px] text-slate-500 mt-1">Total manufacturing time in minutes to produce 1 {editFormData.unit_of_measure || 'unit'}</p>
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-3.5">
+                  <div className="lg:col-span-2">
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="block font-semibold text-slate-700 text-xs">
+                        Production Time for 1 {editFormData.unit_of_measure || 'Product'} (Days, Hours & Minutes) *
+                      </label>
+                      {(() => {
+                        const total = calculateTotalMinutes(
+                          editFormData.production_time_days,
+                          editFormData.production_time_hours,
+                          editFormData.production_time_minutes
+                        );
+                        if (total > 0) {
+                          return (
+                            <span className="font-bold text-amber-800 bg-amber-100/90 px-2 py-0.5 rounded text-[10.5px] border border-amber-300">
+                              ⚡ {formatDuration(editFormData.production_time_days, editFormData.production_time_hours, editFormData.production_time_minutes).full} ({total.toLocaleString()} mins)
+                            </span>
+                          );
+                        }
+                        return null;
+                      })()}
+                    </div>
+                    <div className="grid grid-cols-3 gap-2">
+                      {/* Days Input */}
+                      <div>
+                        <div className="flex items-center rounded-lg border border-slate-200 bg-white overflow-hidden focus-within:ring-2 focus-within:ring-blue-500">
+                          <input
+                            type="number"
+                            min="0"
+                            step="1"
+                            placeholder="0"
+                            value={editFormData.production_time_days}
+                            onChange={(e) => setEditFormData({ ...editFormData, production_time_days: e.target.value })}
+                            className="w-full px-2.5 py-2 text-slate-900 font-semibold outline-none text-sm text-center"
+                          />
+                          <span className="bg-slate-100 px-2.5 py-2 text-xs font-semibold text-slate-600 border-l border-slate-200">
+                            Days
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Hours Input */}
+                      <div>
+                        <div className="flex items-center rounded-lg border border-slate-200 bg-white overflow-hidden focus-within:ring-2 focus-within:ring-blue-500">
+                          <input
+                            type="number"
+                            min="0"
+                            max="23"
+                            step="1"
+                            placeholder="0"
+                            value={editFormData.production_time_hours}
+                            onChange={(e) => setEditFormData({ ...editFormData, production_time_hours: e.target.value })}
+                            className="w-full px-2.5 py-2 text-slate-900 font-semibold outline-none text-sm text-center"
+                          />
+                          <span className="bg-slate-100 px-2.5 py-2 text-xs font-semibold text-slate-600 border-l border-slate-200">
+                            Hours
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Minutes Input */}
+                      <div>
+                        <div className="flex items-center rounded-lg border border-slate-200 bg-white overflow-hidden focus-within:ring-2 focus-within:ring-blue-500">
+                          <input
+                            type="number"
+                            min="0"
+                            step="any"
+                            placeholder="0"
+                            value={editFormData.production_time_minutes}
+                            onChange={(e) => setEditFormData({ ...editFormData, production_time_minutes: e.target.value })}
+                            className="w-full px-2.5 py-2 text-slate-900 font-semibold outline-none text-sm text-center"
+                          />
+                          <span className="bg-slate-100 px-2.5 py-2 text-xs font-semibold text-slate-600 border-l border-slate-200">
+                            Mins
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                    <p className="text-[10.5px] text-slate-500 mt-1">
+                      e.g. 1 Day, 5 Hours, 3 Mins to manufacture 1 {editFormData.unit_of_measure || 'unit'}
+                    </p>
                   </div>
 
                   <div>
-                    <label className="block font-semibold text-slate-700 mb-1">
+                    <label className="block font-semibold text-slate-700 text-xs mb-1">
                       Workforce Needed (Persons / Operators) *
                     </label>
-                    <input
-                      type="number"
-                      step="1"
-                      min="1"
-                      placeholder="e.g. 2 (Workers required)"
-                      value={editFormData.workforce_required}
-                      onChange={(e) => setEditFormData({ ...editFormData, workforce_required: e.target.value })}
-                      className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-slate-900 font-semibold focus:ring-2 focus:ring-blue-500 outline-none"
-                    />
-                    <p className="text-[10.5px] text-slate-500 mt-1">Total manpower / operators assigned to this production</p>
+                    <div className="flex items-center rounded-lg border border-slate-200 bg-white overflow-hidden focus-within:ring-2 focus-within:ring-blue-500">
+                      <input
+                        type="number"
+                        step="1"
+                        min="1"
+                        placeholder="1"
+                        value={editFormData.workforce_required}
+                        onChange={(e) => setEditFormData({ ...editFormData, workforce_required: e.target.value })}
+                        className="w-full px-3 py-2 text-slate-900 font-semibold outline-none text-sm text-center"
+                      />
+                      <span className="bg-slate-100 px-2.5 py-2 text-xs font-semibold text-slate-600 border-l border-slate-200">
+                        Workers
+                      </span>
+                    </div>
+                    <p className="text-[10.5px] text-slate-500 mt-1">Total manpower assigned to this production</p>
                   </div>
                 </div>
               </div>
@@ -1978,7 +2159,7 @@ const ProductMaster = () => {
                 <div>
                   <span className="text-slate-400 text-[11px] block">Prod. Time / Unit</span>
                   <strong className="text-amber-700 font-bold text-sm">
-                    ⚡ {activeProduct.production_time_minutes || 0} Mins
+                    ⚡ {formatProductionTime(activeProduct.production_time_value, activeProduct.production_time_unit, activeProduct.production_time_minutes, activeProduct.production_time_days, activeProduct.production_time_hours).badge}
                   </strong>
                 </div>
 

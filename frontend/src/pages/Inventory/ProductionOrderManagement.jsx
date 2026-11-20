@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { productionOrders as orderApi, productionMasters as bomApi, products as productsApi, branches as branchesApi, companies as companiesApi } from '../../services/api';
+import { formatProductionTime, formatDuration } from '../../utils/productionTime';
 import toast from 'react-hot-toast';
 import {
   Factory,
@@ -9,6 +10,7 @@ import {
   Eye,
   X,
   Play,
+  CheckCircle,
   CheckCircle2,
   AlertTriangle,
   Boxes,
@@ -46,7 +48,9 @@ const ProductionOrderManagement = () => {
   const [selectedOrder, setSelectedOrder] = useState(null);
   const [selectedBatchForCompletion, setSelectedBatchForCompletion] = useState(null);
   const [producedQuantityInput, setProducedQuantityInput] = useState('');
+  const [physicalQuantityInput, setPhysicalQuantityInput] = useState('');
   const [workforceExpenseInput, setWorkforceExpenseInput] = useState('');
+  const [wastageReasonInput, setWastageReasonInput] = useState('');
 
   const [submitting, setSubmitting] = useState(false);
 
@@ -201,18 +205,32 @@ const ProductionOrderManagement = () => {
   // Complete Production Batch
   const handleCompleteBatchSubmit = async (e) => {
     e.preventDefault();
-    if (!producedQuantityInput || parseFloat(producedQuantityInput) < 0) {
-      toast.error('Please enter valid produced quantity');
+    const producedQty = parseFloat(producedQuantityInput);
+    if (isNaN(producedQty) || producedQty < 0) {
+      toast.error('Please enter valid produced / generated quantity');
+      return;
+    }
+
+    const physQty = physicalQuantityInput !== '' ? parseFloat(physicalQuantityInput) : producedQty;
+    if (isNaN(physQty) || physQty < 0) {
+      toast.error('Please enter valid physical quantity');
+      return;
+    }
+
+    if (physQty < producedQty && (!wastageReasonInput || !wastageReasonInput.trim())) {
+      toast.error('Please enter a reason for the shortfall / wasted goods (e.g. "good wasted")');
       return;
     }
 
     try {
       const res = await orderApi.completeBatch(selectedBatchForCompletion.id, {
-        produced_quantity: parseFloat(producedQuantityInput),
-        workforce_cost: parseFloat(workforceExpenseInput) || 0
+        produced_quantity: producedQty,
+        physical_quantity: physQty,
+        workforce_cost: parseFloat(workforceExpenseInput) || 0,
+        wastage_reason: wastageReasonInput ? wastageReasonInput.trim() : null
       });
       if (res.data?.success) {
-        toast.success('Production batch completed! Sent to Quality Check inspection.');
+        toast.success(res.data.message || 'Production batch completed! Sent to Quality Check inspection.');
         setShowCompleteModal(false);
         fetchOrders();
       }
@@ -317,6 +335,8 @@ const ProductionOrderManagement = () => {
                 <th className="py-3 px-4">Finished Product</th>
                 <th className="py-3 px-4 text-right">Planned Qty</th>
                 <th className="py-3 px-4 text-right">Produced Qty</th>
+                <th className="py-3 px-4 text-right">Physical Verified</th>
+                <th className="py-3 px-4 text-right">Wastage / Loss</th>
                 <th className="py-3 px-4">Start Date</th>
                 <th className="py-3 px-4 text-center">Status</th>
                 <th className="py-3 px-4 text-center">Batches</th>
@@ -326,11 +346,11 @@ const ProductionOrderManagement = () => {
             <tbody className="divide-y divide-gray-100 text-gray-700">
               {loading ? (
                 <tr>
-                  <td colSpan="8" className="text-center py-10 text-gray-400">Loading production orders...</td>
+                  <td colSpan="10" className="text-center py-10 text-gray-400">Loading production orders...</td>
                 </tr>
               ) : filteredOrders.length === 0 ? (
                 <tr>
-                  <td colSpan="8" className="text-center py-12 text-gray-400">
+                  <td colSpan="10" className="text-center py-12 text-gray-400">
                     <Factory className="w-8 h-8 mx-auto mb-2 text-gray-300" />
                     No Production Orders found. Click "New Production Order" to plan and execute manufacturing.
                   </td>
@@ -338,7 +358,12 @@ const ProductionOrderManagement = () => {
               ) : (
                 filteredOrders.map((order) => (
                   <tr key={order.id} className="hover:bg-gray-50 transition">
-                    <td className="py-3 px-4 font-semibold text-amber-600 font-mono">{order.production_number}</td>
+                    <td className="py-3 px-4 font-semibold text-amber-600 font-mono">
+                      <div>{order.production_number}</div>
+                      {order.voucher_number && (
+                        <span className="text-[10px] text-indigo-600 font-mono block">Vch #{order.voucher_number}</span>
+                      )}
+                    </td>
                     <td className="py-3 px-4">
                       <div className="font-medium text-gray-900">{order.product_name}</div>
                       <div className="text-[11px] text-gray-400">{order.product_code} • {order.bom_name}</div>
@@ -348,6 +373,25 @@ const ProductionOrderManagement = () => {
                     </td>
                     <td className="py-3 px-4 text-right font-semibold text-gray-900">
                       {parseFloat(order.total_produced_quantity || 0)} {order.product_unit}
+                    </td>
+                    <td className="py-3 px-4 text-right font-bold text-emerald-700">
+                      {parseFloat(order.total_physical_quantity || order.physical_quantity || 0) > 0
+                        ? `${parseFloat(order.total_physical_quantity || order.physical_quantity)} ${order.product_unit}`
+                        : '—'}
+                    </td>
+                    <td className="py-3 px-4 text-right">
+                      {parseFloat(order.total_wastage_quantity || order.wastage_quantity || 0) > 0 ? (
+                        <div>
+                          <span className="font-bold text-rose-600 block">
+                            {parseFloat(order.total_wastage_quantity || order.wastage_quantity)} {order.product_unit}
+                          </span>
+                          <span className="text-[10px] text-gray-500">
+                            ₹{parseFloat(order.total_wastage_cost || order.wastage_cost || 0).toFixed(2)}
+                          </span>
+                        </div>
+                      ) : (
+                        <span className="text-gray-400">0</span>
+                      )}
                     </td>
                     <td className="py-3 px-4 text-gray-500">
                       {new Date(order.planned_start_date).toLocaleDateString()}
@@ -377,6 +421,34 @@ const ProductionOrderManagement = () => {
                           >
                             <Play className="w-3 h-3 fill-current" />
                             Start Run
+                          </button>
+                        )}
+                        {order.status === 'IN_PROGRESS' && (
+                          <button
+                            onClick={async () => {
+                              try {
+                                const res = await orderApi.getById(order.id);
+                                const fullOrder = res.data?.data;
+                                setSelectedOrder(fullOrder);
+                                const pendingBatch = fullOrder?.batches?.find(b => b.status === 'IN_PRODUCTION');
+                                if (pendingBatch) {
+                                  setSelectedBatchForCompletion(pendingBatch);
+                                  setProducedQuantityInput(pendingBatch.planned_quantity || order.planned_quantity);
+                                  setPhysicalQuantityInput(pendingBatch.planned_quantity || order.planned_quantity);
+                                  setWorkforceExpenseInput('');
+                                  setWastageReasonInput('');
+                                  setShowCompleteModal(true);
+                                } else {
+                                  setShowDetailModal(true);
+                                }
+                              } catch (err) {
+                                toast.error('Failed to load order details');
+                              }
+                            }}
+                            className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] bg-amber-600 hover:bg-amber-700 text-white rounded font-medium shadow-2xs transition"
+                          >
+                            <CheckCircle className="w-3 h-3" />
+                            Mark Produced
                           </button>
                         )}
                         <button
@@ -484,7 +556,14 @@ const ProductionOrderManagement = () => {
                     </div>
                     <div>
                       <span className="text-gray-500 text-[11px] block">Total Cycle Time</span>
-                      <span className="font-bold text-gray-900">{calcPreview.planned_time_minutes} minutes</span>
+                      <span className="font-bold text-gray-900 block">
+                        {calcPreview.formatted_planned_time || formatDuration(0, 0, calcPreview.planned_time_minutes).full}
+                      </span>
+                      {parseFloat(calcPreview.planned_time_minutes || 0) > 0 && (
+                        <span className="text-[10px] text-gray-500 font-semibold block">
+                          ({parseFloat(calcPreview.planned_time_minutes || 0).toLocaleString()} mins)
+                        </span>
+                      )}
                     </div>
                     <div>
                       <span className="text-gray-500 text-[11px] block">Workforce Required</span>
@@ -645,6 +724,10 @@ const ProductionOrderManagement = () => {
                         <th className="py-2 px-3">Production Date</th>
                         <th className="py-2 px-3 text-right">Planned Qty</th>
                         <th className="py-2 px-3 text-right">Produced Qty</th>
+                        <th className="py-2 px-3 text-right">Physical Verified</th>
+                        <th className="py-2 px-3 text-right">Wastage / Loss</th>
+                        <th className="py-2 px-3 text-right">Workforce Cost</th>
+                        <th className="py-2 px-3 text-right">Total Cost</th>
                         <th className="py-2 px-3 text-center">Batch Status</th>
                         <th className="py-2 px-3 text-center">Action</th>
                       </tr>
@@ -652,10 +735,34 @@ const ProductionOrderManagement = () => {
                     <tbody className="divide-y divide-gray-100">
                       {selectedOrder.batches?.map(b => (
                         <tr key={b.id} className="hover:bg-gray-50/50">
-                          <td className="py-2 px-3 font-mono font-bold text-blue-600">{b.batch_number}</td>
+                          <td className="py-2 px-3">
+                            <span className="font-mono font-bold text-blue-600 block">{b.batch_number}</span>
+                            {b.voucher_number && (
+                              <span className="font-mono text-[10px] text-indigo-600 block">Vch #{b.voucher_number}</span>
+                            )}
+                          </td>
                           <td className="py-2 px-3">{new Date(b.production_date).toLocaleDateString()}</td>
                           <td className="py-2 px-3 text-right">{parseFloat(b.planned_quantity)}</td>
-                          <td className="py-2 px-3 text-right font-bold text-gray-900">{parseFloat(b.produced_quantity || 0)}</td>
+                          <td className="py-2 px-3 text-right font-medium text-gray-800">{parseFloat(b.produced_quantity || 0)}</td>
+                          <td className="py-2 px-3 text-right font-bold text-emerald-700">
+                            {b.physical_quantity !== null && b.physical_quantity !== undefined ? parseFloat(b.physical_quantity) : '—'}
+                          </td>
+                          <td className="py-2 px-3 text-right">
+                            {parseFloat(b.wastage_quantity || 0) > 0 ? (
+                              <div>
+                                <span className="font-bold text-rose-600 block">{parseFloat(b.wastage_quantity)} units</span>
+                                <span className="text-[10px] text-gray-500 block">₹{parseFloat(b.wastage_cost || 0).toFixed(2)} ({b.wastage_reason})</span>
+                              </div>
+                            ) : (
+                              <span className="text-gray-400">0</span>
+                            )}
+                          </td>
+                          <td className="py-2 px-3 text-right font-semibold text-purple-700">
+                            ₹{parseFloat(b.workforce_cost || 0).toFixed(2)}
+                          </td>
+                          <td className="py-2 px-3 text-right font-bold text-gray-900">
+                            ₹{parseFloat(b.total_production_cost || 0).toFixed(2)}
+                          </td>
                           <td className="py-2 px-3 text-center">
                             <span className="inline-block px-2 py-0.5 bg-blue-50 text-blue-700 font-semibold text-[10px] rounded-full">
                               {b.status}
@@ -667,7 +774,9 @@ const ProductionOrderManagement = () => {
                                 onClick={() => {
                                   setSelectedBatchForCompletion(b);
                                   setProducedQuantityInput(b.planned_quantity);
+                                  setPhysicalQuantityInput(b.planned_quantity);
                                   setWorkforceExpenseInput('');
+                                  setWastageReasonInput('');
                                   setShowCompleteModal(true);
                                 }}
                                 className="px-2.5 py-1 bg-amber-600 hover:bg-amber-700 text-white text-[11px] font-semibold rounded transition"
@@ -731,56 +840,147 @@ const ProductionOrderManagement = () => {
 
       {/* COMPLETE BATCH MODAL */}
       {showCompleteModal && selectedBatchForCompletion && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4">
-          <div className="bg-white rounded-xl shadow-xl border border-gray-100 w-full max-w-md p-6 space-y-4">
-            <div className="flex items-center justify-between">
-              <h2 className="text-sm font-bold text-gray-900">Mark Batch Produced</h2>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4 overflow-y-auto">
+          <div className="bg-white rounded-xl shadow-xl border border-gray-100 w-full max-w-lg p-6 space-y-4 my-auto animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-center justify-between border-b border-gray-100 pb-3">
+              <div className="flex items-center gap-2">
+                <div className="p-1.5 bg-amber-50 text-amber-600 rounded-lg">
+                  <Factory className="w-5 h-5" />
+                </div>
+                <div>
+                  <h2 className="text-sm font-bold text-gray-900">Complete Production Batch</h2>
+                  <p className="text-[11px] font-mono text-gray-500">Batch #{selectedBatchForCompletion.batch_number}</p>
+                </div>
+              </div>
               <button onClick={() => setShowCompleteModal(false)} className="text-gray-400 hover:text-gray-600">
                 <X className="w-4 h-4" />
               </button>
             </div>
+
             <p className="text-xs text-gray-500">
-              Enter the actual produced units for batch <strong>{selectedBatchForCompletion.batch_number}</strong>. This batch will move to Quality Check (QC).
+              Verify actual manufactured count, enter workforce labor expenses, and record physical verification. Shortfalls will be automatically recorded as loss expense in Accounts.
             </p>
+
             <form onSubmit={handleCompleteBatchSubmit} className="space-y-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-gray-700 mb-1">Generated / System Quantity</label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="any"
+                    required
+                    value={producedQuantityInput}
+                    onChange={(e) => {
+                      setProducedQuantityInput(e.target.value);
+                      if (!physicalQuantityInput || physicalQuantityInput === producedQuantityInput) {
+                        setPhysicalQuantityInput(e.target.value);
+                      }
+                    }}
+                    placeholder="e.g. 100"
+                    className="w-full px-3 py-2 text-xs border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-amber-500 font-bold"
+                  />
+                  <span className="text-[10px] text-gray-400 block mt-0.5">Planned: {selectedBatchForCompletion.planned_quantity} units</span>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-gray-700 mb-1 flex items-center justify-between">
+                    <span>Workforce Charges (₹)</span>
+                    <span className="text-[10px] text-indigo-600 font-medium bg-indigo-50 px-1 rounded">Direct Expense</span>
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    placeholder="e.g. 1500.00"
+                    value={workforceExpenseInput}
+                    onChange={(e) => setWorkforceExpenseInput(e.target.value)}
+                    className="w-full px-3 py-2 text-xs border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-amber-500 font-bold"
+                  />
+                  <span className="text-[10px] text-gray-400 block mt-0.5">Debited to Direct Wages & added to product cost</span>
+                </div>
+              </div>
+
               <div>
-                <label className="block text-xs font-semibold text-gray-700 mb-1">Actual Produced Quantity</label>
+                <label className="block text-xs font-semibold text-gray-700 mb-1 flex items-center justify-between">
+                  <span>Physical Verified Quantity</span>
+                  <span className="text-[10px] text-emerald-600 font-medium">Actual good items counted</span>
+                </label>
                 <input
                   type="number"
                   min="0"
                   step="any"
                   required
-                  value={producedQuantityInput}
-                  onChange={(e) => setProducedQuantityInput(e.target.value)}
-                  className="w-full px-3 py-2 text-xs border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-amber-500 font-bold"
+                  value={physicalQuantityInput}
+                  onChange={(e) => setPhysicalQuantityInput(e.target.value)}
+                  placeholder="e.g. 95"
+                  className="w-full px-3 py-2 text-xs border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-amber-500 font-bold text-gray-900"
                 />
               </div>
-              <div>
-                <label className="block text-xs font-semibold text-gray-700 mb-1 flex items-center justify-between">
-                  <span>Workforce / Labor Expense (₹)</span>
-                  <span className="text-[10px] text-amber-700 font-medium">Added to Accounts as Direct Wages</span>
-                </label>
-                <input
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  placeholder="e.g. 1500.00"
-                  value={workforceExpenseInput}
-                  onChange={(e) => setWorkforceExpenseInput(e.target.value)}
-                  className="w-full px-3 py-2 text-xs border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-amber-500 font-bold"
-                />
-              </div>
-              <div className="flex justify-end gap-2">
+
+              {/* Live Shortfall & Wastage Section */}
+              {(() => {
+                const genQty = parseFloat(producedQuantityInput) || 0;
+                const physQty = physicalQuantityInput !== '' ? parseFloat(physicalQuantityInput) : genQty;
+                const shortfall = genQty > physQty ? +(genQty - physQty).toFixed(4) : 0;
+                const wfCost = parseFloat(workforceExpenseInput) || 0;
+                const matCost = selectedOrder?.consumptions?.reduce((sum, c) => sum + parseFloat(c.total_cost || 0), 0) || 0;
+                const totalCost = matCost + wfCost;
+                const unitCost = genQty > 0 ? (totalCost / genQty) : 0;
+                const wastageCost = +(shortfall * unitCost).toFixed(2);
+
+                if (shortfall <= 0) return null;
+
+                return (
+                  <div className="p-3.5 bg-rose-50 border border-rose-200 rounded-xl space-y-3">
+                    <div className="flex items-start gap-2">
+                      <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                      <div>
+                        <h4 className="text-xs font-bold text-rose-900">
+                          Shortfall Detected: {shortfall} units wasted / missing
+                        </h4>
+                        <p className="text-[11px] text-rose-700 mt-0.5">
+                          Generated quantity ({genQty}) is greater than physical quantity ({physQty}). Please enter the wastage reason.
+                        </p>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] font-bold text-rose-900 mb-1">
+                        Reason for Loss / Wastage <span className="text-red-500">*</span>
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        value={wastageReasonInput}
+                        onChange={(e) => setWastageReasonInput(e.target.value)}
+                        placeholder='e.g. good wasted, defect during production'
+                        className="w-full px-3 py-2 text-xs border border-rose-300 rounded-lg bg-white focus:outline-none focus:ring-1 focus:ring-rose-500 font-medium"
+                      />
+                    </div>
+
+                    <div className="p-2.5 bg-white rounded-lg border border-rose-100 flex items-center justify-between text-xs">
+                      <span className="text-gray-600">Calculated Wastage Expense:</span>
+                      <div className="text-right">
+                        <span className="font-extrabold text-rose-700 block">₹{wastageCost.toFixed(2)}</span>
+                        <span className="text-[10px] text-gray-500">Noted as expense in Accounts (LED-LOSS-SPOILAGE)</span>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
+
+              <div className="flex justify-end gap-2 pt-2 border-t border-gray-100">
                 <button
                   type="button"
                   onClick={() => setShowCompleteModal(false)}
-                  className="px-3 py-1.5 border border-gray-200 text-gray-600 rounded-lg text-xs"
+                  className="px-3 py-1.5 border border-gray-200 text-gray-600 rounded-lg text-xs hover:bg-gray-50"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-semibold"
+                  className="px-4 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-semibold shadow-sm"
                 >
                   Confirm & Move to QC
                 </button>

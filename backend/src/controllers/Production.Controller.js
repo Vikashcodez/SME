@@ -65,9 +65,31 @@ export const checkMaterialAvailability = async (req, res) => {
             branch_id && branch_id !== 'all' ? branch_id : null
         ]);
 
-        const timePerUnit = parseFloat(product.production_time_minutes) || 0;
-        const totalTimeMinutes = timePerUnit * qty;
-        const totalTimeHours = totalTimeMinutes / 60;
+        const timePerUnitMinutes = parseFloat(product.production_time_minutes) || 0;
+        const unitDays = product.production_time_days !== undefined && product.production_time_days !== null
+            ? parseFloat(product.production_time_days)
+            : Math.floor(timePerUnitMinutes / 1440);
+        const unitHours = product.production_time_hours !== undefined && product.production_time_hours !== null
+            ? parseFloat(product.production_time_hours)
+            : Math.floor((timePerUnitMinutes % 1440) / 60);
+        const unitMinutes = +(timePerUnitMinutes % 60).toFixed(2);
+
+        const totalTimeMinutes = timePerUnitMinutes * qty;
+        const totalDays = Math.floor(totalTimeMinutes / 1440);
+        const remMinutesAfterDays = totalTimeMinutes % 1440;
+        const totalHours = Math.floor(remMinutesAfterDays / 60);
+        const remMinutes = +(remMinutesAfterDays % 60).toFixed(2);
+
+        const formatParts = (d, h, m) => {
+            const parts = [];
+            if (d > 0) parts.push(`${d} ${d === 1 ? 'Day' : 'Days'}`);
+            if (h > 0) parts.push(`${h} ${h === 1 ? 'Hour' : 'Hours'}`);
+            if (m > 0 || parts.length === 0) parts.push(`${m} ${m == 1 ? 'Minute' : 'Minutes'}`);
+            return parts.join(', ');
+        };
+
+        const formattedUnitTime = formatParts(unitDays, unitHours, unitMinutes);
+        const formattedTotalTime = formatParts(totalDays, totalHours, remMinutes);
         const workforceRequired = parseInt(product.workforce_required, 10) || 1;
 
         if (bomRes.rows.length === 0) {
@@ -79,9 +101,16 @@ export const checkMaterialAvailability = async (req, res) => {
                 message: 'No Raw Materials configured for this product. Please assign raw materials in Product Master.',
                 product,
                 production_quantity: qty,
-                production_time_per_unit_minutes: timePerUnit,
+                unit_production_time_days: unitDays,
+                unit_production_time_hours: unitHours,
+                unit_production_time_minutes: unitMinutes,
+                formatted_unit_production_time: formattedUnitTime,
+                production_time_per_unit_minutes: timePerUnitMinutes,
+                total_production_time_days: totalDays,
+                total_production_time_hours: totalHours,
+                total_production_time_remaining_minutes: remMinutes,
+                formatted_total_production_time: formattedTotalTime,
                 total_production_time_minutes: parseFloat(totalTimeMinutes.toFixed(2)),
-                total_production_time_hours: parseFloat(totalTimeHours.toFixed(2)),
                 workforce_required: workforceRequired,
                 materials: [],
                 total_material_cost: 0
@@ -129,9 +158,16 @@ export const checkMaterialAvailability = async (req, res) => {
             can_produce: canProduce,
             product,
             production_quantity: qty,
-            production_time_per_unit_minutes: timePerUnit,
+            unit_production_time_days: unitDays,
+            unit_production_time_hours: unitHours,
+            unit_production_time_minutes: unitMinutes,
+            formatted_unit_production_time: formattedUnitTime,
+            production_time_per_unit_minutes: timePerUnitMinutes,
+            total_production_time_days: totalDays,
+            total_production_time_hours: totalHours,
+            total_production_time_remaining_minutes: remMinutes,
+            formatted_total_production_time: formattedTotalTime,
             total_production_time_minutes: parseFloat(totalTimeMinutes.toFixed(2)),
-            total_production_time_hours: parseFloat(totalTimeHours.toFixed(2)),
             workforce_required: workforceRequired,
             total_material_cost: parseFloat(totalEstimatedCost.toFixed(2)),
             materials
@@ -300,12 +336,32 @@ export const recordProductionRun = async (req, res) => {
         const totalProductionCost = +(totalMaterialCost + workforceCost).toFixed(2);
         const unitProductionCost = +(totalProductionCost / qty).toFixed(4);
 
+        const physicalQty = (req.body.physical_quantity !== undefined && req.body.physical_quantity !== null && req.body.physical_quantity !== '')
+            ? parseFloat(req.body.physical_quantity)
+            : qty;
+
+        let wastageQty = 0;
+        let wastageReason = null;
+        let wastageCost = 0;
+        let goodCost = totalProductionCost;
+
+        if (physicalQty < qty) {
+            wastageQty = +(qty - physicalQty).toFixed(4);
+            wastageReason = req.body.wastage_reason && req.body.wastage_reason.trim() !== ''
+                ? req.body.wastage_reason.trim()
+                : 'Production loss / wastage';
+            wastageCost = +(wastageQty * unitProductionCost).toFixed(2);
+            goodCost = +(totalProductionCost - wastageCost).toFixed(2);
+        }
+
         // 5. Create Raw Material Production Record
         const prodInsertQuery = `
             INSERT INTO raw_material_production (
                 company_id, branch_id, production_code, batch_number,
                 production_date, production_period_type, product_id,
-                production_quantity, total_material_cost, workforce_cost,
+                production_quantity, physical_quantity, wastage_quantity,
+                wastage_reason, wastage_cost,
+                total_material_cost, workforce_cost,
                 total_production_cost, unit_production_cost,
                 total_production_time_minutes, workforce_count,
                 production_status, warehouse_location, notes, created_by
@@ -315,7 +371,9 @@ export const recordProductionRun = async (req, res) => {
                 $8, $9, $10,
                 $11, $12,
                 $13, $14,
-                'Pending Quality Check', $15, $16, $17
+                $15, $16,
+                $17, $18,
+                'Pending Quality Check', $19, $20, $21
             ) RETURNING *
         `;
 
@@ -328,6 +386,10 @@ export const recordProductionRun = async (req, res) => {
             production_period_type || 'Daily',
             product_id,
             qty,
+            physicalQty,
+            wastageQty,
+            wastageReason,
+            wastageCost,
             totalMaterialCost,
             workforceCost,
             totalProductionCost,
@@ -346,9 +408,10 @@ export const recordProductionRun = async (req, res) => {
             INSERT INTO production_batches (
                 company_id, branch_id, production_id, product_id,
                 batch_number, planned_quantity, produced_quantity,
+                physical_quantity, wastage_quantity, wastage_reason, wastage_cost,
                 production_date, status, material_cost, workforce_cost,
                 total_production_cost, unit_cost
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'PENDING_QC', $9, $10, $11, $12)
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'PENDING_QC', $13, $14, $15, $16)
             RETURNING *
         `;
         const batchRes = await client.query(batchInsertQuery, [
@@ -359,6 +422,10 @@ export const recordProductionRun = async (req, res) => {
             autoBatch,
             qty,
             qty,
+            physicalQty,
+            wastageQty,
+            wastageReason,
+            wastageCost,
             production_date || new Date().toISOString().split('T')[0],
             totalMaterialCost,
             workforceCost,
@@ -443,13 +510,24 @@ export const recordProductionRun = async (req, res) => {
 
         const accountingLines = [];
 
-        // 1. Debit WIP for full Total Production Cost (Material Cost + Workforce Cost)
+        // 1. Debit WIP for good physical quantity cost
         accountingLines.push({
             ledgerId: wipLedgerId,
-            debit: totalProductionCost,
+            debit: goodCost,
             credit: 0,
-            narration: `Production WIP: ${qty} ${product.unit_of_measure} of "${product.product_name}" (Batch: ${autoBatch}) @ ₹${unitProductionCost.toFixed(2)}/unit`
+            narration: `Production WIP: ${physicalQty} ${product.unit_of_measure} of "${product.product_name}" (Batch: ${autoBatch}) @ ₹${unitProductionCost.toFixed(2)}/unit`
         });
+
+        // Spoilage / Wastage Loss if shortfall occurred
+        if (wastageCost > 0) {
+            const spoilageLedgerId = await resolveLedger(client, effectiveCompanyId, 'LED-LOSS-SPOILAGE', 'Production Loss & Wastage Expense', 'GRP-DIR-EXP', 'DR');
+            accountingLines.push({
+                ledgerId: spoilageLedgerId,
+                debit: wastageCost,
+                credit: 0,
+                narration: `Production loss / wastage: ${wastageQty} ${product.unit_of_measure} of "${product.product_name}" (${wastageReason})`
+            });
+        }
 
         // 2. Itemized Raw Material Stock credit lines
         const deductionSum = deductions.reduce((s, d) => s + parseFloat(d.total_cost.toFixed(2)), 0);
@@ -498,16 +576,21 @@ export const recordProductionRun = async (req, res) => {
             });
         }
 
-        await postAccountingVoucher(client, {
+        const voucher = await postAccountingVoucher(client, {
             companyId: effectiveCompanyId,
             branchId: effectiveBranchId,
             voucherDate: production_date,
             sourceDocumentId: productionRecord.production_id,
             sourceModule: 'MANUFACTURING',
             referenceNumber: prodCode,
-            narration: `Production of ${qty} ${product.unit_of_measure} of "${product.product_name}" (Batch: ${autoBatch}). Material: ₹${totalMaterialCost.toFixed(2)}, Workforce Expense: ₹${workforceCost.toFixed(2)}, Total Cost: ₹${totalProductionCost.toFixed(2)}`,
+            narration: `Production of ${qty} ${product.unit_of_measure} of "${product.product_name}" (Batch: ${autoBatch}). Physical: ${physicalQty}${wastageQty > 0 ? `, Shortfall: ${wastageQty} (${wastageReason})` : ''}. Material: ₹${totalMaterialCost.toFixed(2)}, Workforce: ₹${workforceCost.toFixed(2)}, Wastage Expense: ₹${wastageCost.toFixed(2)}`,
             lines: accountingLines
         });
+
+        if (voucher?.voucher_id) {
+            await client.query(`UPDATE raw_material_production SET accounting_voucher_id = $1 WHERE production_id = $2`, [voucher.voucher_id, productionRecord.production_id]);
+            await client.query(`UPDATE production_batches SET accounting_voucher_id = $1 WHERE id = $2`, [voucher.voucher_id, batchRecord.id]);
+        }
 
         await client.query('COMMIT');
 
@@ -515,8 +598,10 @@ export const recordProductionRun = async (req, res) => {
             success: true,
             message: `Production order batch created for ${qty} ${product.unit_of_measure} of "${product.product_name}". Raw materials deducted and batch sent to Quality Check.`,
             data: {
-                production: productionRecord,
-                batch: batchRecord,
+                production: { ...productionRecord, accounting_voucher_id: voucher?.voucher_id },
+                batch: { ...batchRecord, accounting_voucher_id: voucher?.voucher_id },
+                voucher_id: voucher?.voucher_id,
+                voucher_number: voucher?.voucher_number,
                 product_name: product.product_name,
                 materials_consumed: deductions
             }
@@ -542,6 +627,7 @@ export const getAllProductionRuns = async (req, res) => {
         let query = `
             SELECT 
                 pr.*,
+                v.voucher_number,
                 p.product_code,
                 p.product_name,
                 p.category as product_category,
@@ -563,6 +649,7 @@ export const getAllProductionRuns = async (req, res) => {
             LEFT JOIN companies c ON pr.company_id = c.company_id
             LEFT JOIN branches b ON pr.branch_id = b.branch_id
             LEFT JOIN employees e ON pr.created_by = e.employee_id
+            LEFT JOIN vouchers v ON pr.accounting_voucher_id = v.voucher_id
             WHERE 1=1
         `;
 
@@ -644,6 +731,7 @@ export const getProductionRunById = async (req, res) => {
         const runQuery = `
             SELECT 
                 pr.*,
+                v.voucher_number,
                 p.product_code,
                 p.product_name,
                 p.category as product_category,
@@ -663,6 +751,7 @@ export const getProductionRunById = async (req, res) => {
             LEFT JOIN companies c ON pr.company_id = c.company_id
             LEFT JOIN branches b ON pr.branch_id = b.branch_id
             LEFT JOIN employees e ON pr.created_by = e.employee_id
+            LEFT JOIN vouchers v ON pr.accounting_voucher_id = v.voucher_id
             WHERE pr.production_id = $1
         `;
 

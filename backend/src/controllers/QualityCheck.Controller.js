@@ -119,7 +119,7 @@ export const recordQualityCheck = async (req, res) => {
                    COALESCE(pb.material_cost, rmp.total_material_cost, 0) as total_mat_cost,
                    COALESCE(pb.workforce_cost, rmp.workforce_cost, 0) as total_workforce_cost,
                    COALESCE(pb.unit_cost, rmp.unit_production_cost, 0) as default_unit_cost,
-                   COALESCE(pb.produced_quantity, pb.planned_quantity, rmp.production_quantity) as default_prod_qty,
+                   COALESCE(pb.physical_quantity, pb.produced_quantity, pb.planned_quantity, rmp.production_quantity) as default_prod_qty,
                    p.product_code, p.product_name, p.selling_price
             FROM production_batches pb
             LEFT JOIN production_orders po ON pb.production_order_id = po.id

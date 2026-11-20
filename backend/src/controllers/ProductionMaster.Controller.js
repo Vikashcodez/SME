@@ -14,7 +14,11 @@ export const createProductionMaster = async (req, res) => {
             name,
             output_quantity = 1,
             output_unit = 'PCS',
+            production_time_days = 0,
+            production_time_hours = 0,
             production_time_minutes = 0,
+            production_time_value,
+            production_time_unit = 'Minutes',
             overhead_cost = 0,
             other_expense = 0,
             status = 'ACTIVE',
@@ -58,13 +62,34 @@ export const createProductionMaster = async (req, res) => {
 
         const bomName = name && name.trim() !== '' ? name.trim() : `BOM - Version ${version}`;
 
+        const pDays = Math.max(0, parseFloat(production_time_days) || 0);
+        const pHours = Math.max(0, parseFloat(production_time_hours) || 0);
+        const pMins = Math.max(0, parseFloat(production_time_minutes) || 0);
+
+        let totalMins = 0;
+        if (req.body.production_time_days !== undefined || req.body.production_time_hours !== undefined) {
+            totalMins = +(pDays * 1440 + pHours * 60 + pMins).toFixed(2);
+        } else if (production_time_value !== undefined && production_time_value !== '' && production_time_value !== null) {
+            const v = parseFloat(production_time_value) || 0;
+            const u = (production_time_unit || 'Minutes').toLowerCase();
+            if (u === 'days' || u === 'day') totalMins = +(v * 1440).toFixed(2);
+            else if (u === 'hours' || u === 'hour') totalMins = +(v * 60).toFixed(2);
+            else totalMins = +v.toFixed(2);
+        } else {
+            totalMins = pMins;
+        }
+
+        const finalDays = req.body.production_time_days !== undefined ? pDays : Math.floor(totalMins / 1440);
+        const finalHours = req.body.production_time_hours !== undefined ? pHours : Math.floor((totalMins % 1440) / 60);
+
         const masterInsertQuery = `
             INSERT INTO production_masters (
                 company_id, branch_id, product_id, version,
                 name, output_quantity, output_unit, workforce_count,
-                production_time_minutes, labor_cost, overhead_cost,
+                production_time_days, production_time_hours, production_time_minutes, production_time_value, production_time_unit,
+                labor_cost, overhead_cost,
                 other_expense, status, effective_from, created_by
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
             RETURNING *
         `;
 
@@ -77,7 +102,11 @@ export const createProductionMaster = async (req, res) => {
             parseFloat(output_quantity) || 1,
             output_unit || 'PCS',
             finalWorkforceCount,
-            parseFloat(production_time_minutes) || 0,
+            finalDays,
+            finalHours,
+            totalMins,
+            totalMins,
+            'Minutes',
             finalLaborCost,
             parseFloat(overhead_cost) || 0,
             parseFloat(other_expense) || 0,
@@ -316,7 +345,11 @@ export const updateProductionMaster = async (req, res) => {
             output_quantity,
             output_unit,
             workforce_count,
+            production_time_days,
+            production_time_hours,
             production_time_minutes,
+            production_time_value,
+            production_time_unit,
             labor_cost,
             overhead_cost,
             other_expense,
@@ -326,26 +359,58 @@ export const updateProductionMaster = async (req, res) => {
             workforce
         } = req.body;
 
+        let daysVal = production_time_days !== undefined && production_time_days !== '' && production_time_days !== null
+            ? parseFloat(production_time_days)
+            : null;
+        let hoursVal = production_time_hours !== undefined && production_time_hours !== '' && production_time_hours !== null
+            ? parseFloat(production_time_hours)
+            : null;
+        let minsVal = production_time_minutes !== undefined && production_time_minutes !== '' && production_time_minutes !== null
+            ? parseFloat(production_time_minutes)
+            : null;
+
+        let timeMins = null;
+        if (daysVal !== null || hoursVal !== null) {
+            timeMins = +((daysVal || 0) * 1440 + (hoursVal || 0) * 60 + (minsVal || 0)).toFixed(2);
+        } else if (production_time_value !== undefined && production_time_value !== '' && production_time_value !== null) {
+            const v = parseFloat(production_time_value) || 0;
+            const u = (production_time_unit || 'Minutes').toLowerCase();
+            if (u === 'days' || u === 'day') timeMins = +(v * 1440).toFixed(2);
+            else if (u === 'hours' || u === 'hour') timeMins = +(v * 60).toFixed(2);
+            else timeMins = +v.toFixed(2);
+            daysVal = Math.floor(timeMins / 1440);
+            hoursVal = Math.floor((timeMins % 1440) / 60);
+        } else if (minsVal !== null) {
+            timeMins = minsVal;
+            daysVal = Math.floor(timeMins / 1440);
+            hoursVal = Math.floor((timeMins % 1440) / 60);
+        }
+
         const updateMasterQuery = `
             UPDATE production_masters SET
                 name = COALESCE($1, name),
                 output_quantity = COALESCE($2, output_quantity),
                 output_unit = COALESCE($3, output_unit),
                 workforce_count = COALESCE($4, workforce_count),
-                production_time_minutes = COALESCE($5, production_time_minutes),
-                labor_cost = COALESCE($6, labor_cost),
-                overhead_cost = COALESCE($7, overhead_cost),
-                other_expense = COALESCE($8, other_expense),
-                status = COALESCE($9, status),
-                effective_from = COALESCE($10, effective_from),
+                production_time_days = COALESCE($5, production_time_days),
+                production_time_hours = COALESCE($6, production_time_hours),
+                production_time_minutes = COALESCE($7, production_time_minutes),
+                production_time_value = COALESCE($8, production_time_value),
+                production_time_unit = COALESCE($9, production_time_unit),
+                labor_cost = COALESCE($10, labor_cost),
+                overhead_cost = COALESCE($11, overhead_cost),
+                other_expense = COALESCE($12, other_expense),
+                status = COALESCE($13, status),
+                effective_from = COALESCE($14, effective_from),
                 updated_at = CURRENT_TIMESTAMP
-            WHERE id = $11
+            WHERE id = $15
             RETURNING *
         `;
 
         const masterRes = await client.query(updateMasterQuery, [
             name, output_quantity, output_unit, workforce_count,
-            production_time_minutes, labor_cost, overhead_cost,
+            daysVal, hoursVal, timeMins, timeMins, 'Minutes',
+            labor_cost, overhead_cost,
             other_expense, status, effective_from, id
         ]);
 

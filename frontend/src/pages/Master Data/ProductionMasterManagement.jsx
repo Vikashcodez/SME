@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { productionMasters as bomApi, products as productsApi, rawMaterials as materialsApi, branches as branchesApi, companies as companiesApi } from '../../services/api';
+import { formatProductionTime, calculateTotalMinutes, formatDuration, decomposeMinutes } from '../../utils/productionTime';
 import toast from 'react-hot-toast';
 import {
   Layers,
@@ -51,6 +52,8 @@ const ProductionMasterManagement = () => {
     output_quantity: 1,
     output_unit: 'PCS',
     workforce_count: 1,
+    production_time_days: 0,
+    production_time_hours: 0,
     production_time_minutes: 45,
     overhead_cost: 0,
     other_expense: 0,
@@ -259,7 +262,11 @@ const ProductionMasterManagement = () => {
         output_quantity: formData.output_quantity,
         output_unit: formData.output_unit,
         workforce_count: computedCosts.totalWorkers,
-        production_time_minutes: formData.production_time_minutes,
+        production_time_days: parseFloat(formData.production_time_days) || 0,
+        production_time_hours: parseFloat(formData.production_time_hours) || 0,
+        production_time_minutes: parseFloat(formData.production_time_minutes) || 0,
+        production_time_value: calculateTotalMinutes(formData.production_time_days, formData.production_time_hours, formData.production_time_minutes),
+        production_time_unit: 'Minutes',
         labor_cost: computedCosts.laborCost,
         overhead_cost: formData.overhead_cost,
         other_expense: formData.other_expense,
@@ -421,7 +428,9 @@ const ProductionMasterManagement = () => {
                   </div>
                   <div>
                     <span className="text-[10px] text-gray-400 block">Cycle Time</span>
-                    <span className="font-bold text-gray-800">{parseFloat(bom.production_time_minutes)} mins</span>
+                    <span className="font-bold text-gray-800" title={formatProductionTime(bom.production_time_value, bom.production_time_unit, bom.production_time_minutes).badge}>
+                      {formatProductionTime(bom.production_time_value, bom.production_time_unit, bom.production_time_minutes).label}
+                    </span>
                   </div>
                 </div>
 
@@ -556,16 +565,66 @@ const ProductionMasterManagement = () => {
                   </div>
                 </div>
 
-                <div>
-                  <label className="block text-xs font-semibold text-gray-700 mb-1">Cycle Time (Minutes)</label>
-                  <input
-                    type="number"
-                    min="0"
-                    step="any"
-                    value={formData.production_time_minutes}
-                    onChange={(e) => setFormData({ ...formData, production_time_minutes: e.target.value })}
-                    className="w-full px-3 py-2 text-xs border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                  />
+                <div className="col-span-1 sm:col-span-2">
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-xs font-semibold text-gray-700">Cycle Time (Days, Hours & Minutes)</label>
+                    {(() => {
+                      const total = calculateTotalMinutes(formData.production_time_days, formData.production_time_hours, formData.production_time_minutes);
+                      if (total > 0) {
+                        return (
+                          <span className="font-bold text-amber-800 bg-amber-50 px-2 py-0.5 rounded text-[10.5px] border border-amber-200">
+                            ⚡ {formatDuration(formData.production_time_days, formData.production_time_hours, formData.production_time_minutes).full} ({total.toLocaleString()} mins)
+                          </span>
+                        );
+                      }
+                      return null;
+                    })()}
+                  </div>
+                  <div className="grid grid-cols-3 gap-2">
+                    <div className="flex items-center rounded-lg border border-gray-200 bg-white overflow-hidden">
+                      <input
+                        type="number"
+                        min="0"
+                        step="1"
+                        placeholder="0"
+                        value={formData.production_time_days}
+                        onChange={(e) => setFormData({ ...formData, production_time_days: e.target.value })}
+                        className="w-full px-2 py-2 text-xs font-semibold text-gray-900 outline-none text-center"
+                      />
+                      <span className="bg-gray-100 px-2 py-2 text-[11px] font-semibold text-gray-600 border-l border-gray-200">
+                        Days
+                      </span>
+                    </div>
+                    <div className="flex items-center rounded-lg border border-gray-200 bg-white overflow-hidden">
+                      <input
+                        type="number"
+                        min="0"
+                        max="23"
+                        step="1"
+                        placeholder="0"
+                        value={formData.production_time_hours}
+                        onChange={(e) => setFormData({ ...formData, production_time_hours: e.target.value })}
+                        className="w-full px-2 py-2 text-xs font-semibold text-gray-900 outline-none text-center"
+                      />
+                      <span className="bg-gray-100 px-2 py-2 text-[11px] font-semibold text-gray-600 border-l border-gray-200">
+                        Hours
+                      </span>
+                    </div>
+                    <div className="flex items-center rounded-lg border border-gray-200 bg-white overflow-hidden">
+                      <input
+                        type="number"
+                        min="0"
+                        step="any"
+                        placeholder="0"
+                        value={formData.production_time_minutes}
+                        onChange={(e) => setFormData({ ...formData, production_time_minutes: e.target.value })}
+                        className="w-full px-2 py-2 text-xs font-semibold text-gray-900 outline-none text-center"
+                      />
+                      <span className="bg-gray-100 px-2 py-2 text-[11px] font-semibold text-gray-600 border-l border-gray-200">
+                        Mins
+                      </span>
+                    </div>
+                  </div>
                 </div>
 
                 <div>
@@ -866,7 +925,9 @@ const ProductionMasterManagement = () => {
                 </div>
                 <div>
                   <span className="text-gray-400 text-[11px] block">Time</span>
-                  <span className="font-bold text-gray-800">{parseFloat(selectedBom.production_time_minutes)} mins</span>
+                  <span className="font-bold text-gray-800" title={formatProductionTime(selectedBom.production_time_value, selectedBom.production_time_unit, selectedBom.production_time_minutes).badge}>
+                    {formatProductionTime(selectedBom.production_time_value, selectedBom.production_time_unit, selectedBom.production_time_minutes).label}
+                  </span>
                 </div>
                 <div>
                   <span className="text-gray-400 text-[11px] block">Workforce</span>
