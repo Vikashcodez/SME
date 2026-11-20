@@ -61,6 +61,7 @@ const PurchaseInvoiceManagement = () => {
     amount: '',
     payment_mode: 'BANK',
     bank_account_id: '',
+    payment_ledger_id: '',
     instrument_type: 'NEFT',
     instrument_reference_number: '',
     payment_date: new Date().toISOString().split('T')[0],
@@ -71,6 +72,7 @@ const PurchaseInvoiceManagement = () => {
   const [unpaidBills, setUnpaidBills] = useState([]);
   const [bankAccounts, setBankAccounts] = useState([]);
   const [cashLedger, setCashLedger] = useState(null);
+  const [cashLedgers, setCashLedgers] = useState([]);
 
   // Fetch Invoices
   const fetchInvoices = async () => {
@@ -87,32 +89,76 @@ const PurchaseInvoiceManagement = () => {
     }
   };
 
-  // Fetch Vendors, Raw Materials, Bank Accounts and Cash Ledger
+  // Fetch Vendors, Raw Materials, Bank Accounts and Cash Ledgers
   const fetchMasterData = async () => {
     if (!companyId) return;
     try {
-      const [vRes, rmRes, grnRes, tRes, bankRes, cashRes] = await Promise.all([
+      const [vRes, rmRes, grnRes, tRes, bankRes, cashRes, coaRes] = await Promise.allSettled([
         partyApi.getAll({ company_id: companyId, role: 'SUPPLIER' }),
         rawMaterialApi.getAll({ company_id: companyId }),
         purchaseApi.getPendingGrns({ company_id: companyId }),
         taxApi.getAll({ company_id: companyId }),
         accountingApi.getBankAccounts({ company_id: companyId }),
-        accountingApi.getLedgers({ company_id: companyId, group_code: 'GRP-CASH' })
+        accountingApi.getLedgers({ company_id: companyId, group_code: 'GRP-CASH,CASH_IN_HAND' }),
+        accountingApi.getChartOfAccounts({ company_id: companyId })
       ]);
-      setVendorsList(vRes.data.data || []);
-      setRawMaterialsList(rmRes.data.data || rmRes.data || []);
-      setPendingGrns(grnRes.data.data || []);
-      setTaxesList((tRes.data.data || []).filter(tax => tax.is_active));
 
-      const banks = bankRes.data?.data || [];
+      if (vRes.status === 'fulfilled') setVendorsList(vRes.value.data?.data || []);
+      if (rmRes.status === 'fulfilled') setRawMaterialsList(rmRes.value.data?.data || rmRes.value.data || []);
+      if (grnRes.status === 'fulfilled') setPendingGrns(grnRes.value.data?.data || []);
+      if (tRes.status === 'fulfilled') setTaxesList((tRes.value.data?.data || []).filter(tax => tax.is_active));
+
+      let banks = (bankRes.status === 'fulfilled' && bankRes.value.data?.data) || [];
+      const allLedgers = (coaRes.status === 'fulfilled' && coaRes.value.data?.data?.ledgers) || [];
+
+      // Fallback: If bank accounts list is empty, extract from Chart of Accounts bank ledgers
+      if (banks.length === 0 && allLedgers.length > 0) {
+        const bankLedgers = allLedgers.filter(l =>
+          ['GRP-BANK', 'BANK_ACCOUNTS'].includes(l.group_code) ||
+          String(l.group_name || '').toLowerCase().includes('bank')
+        );
+        banks = bankLedgers.map(l => ({
+          bank_account_id: l.ledger_id,
+          ledger_id: l.ledger_id,
+          bank_name: l.ledger_name,
+          account_number: l.ledger_code,
+          current_balance: l.current_balance,
+          current_balance_type: l.current_balance_type || 'DR'
+        }));
+      }
       setBankAccounts(banks);
-      if (banks.length > 0) {
-        setPaymentForm(prev => (prev.bank_account_id ? prev : { ...prev, bank_account_id: String(banks[0].bank_account_id) }));
+
+      const fundedBank = banks.find(b => parseFloat(b.current_balance || 0) > 0) || banks[0];
+      if (fundedBank) {
+        setPaymentForm(prev => {
+          const stillValid = banks.some(b => String(b.bank_account_id) === String(prev.bank_account_id));
+          return stillValid && prev.bank_account_id ? prev : { ...prev, bank_account_id: String(fundedBank.bank_account_id) };
+        });
       }
 
-      const cashList = cashRes.data?.data || [];
-      const primaryCash = cashList.find(l => l.ledger_code === 'LED-CASH-MAIN') || cashList[0] || null;
-      setCashLedger(primaryCash);
+      let cashList = (cashRes.status === 'fulfilled' && cashRes.value.data?.data) || [];
+      // Fallback: If cash list is empty, extract from Chart of Accounts cash ledgers
+      if (cashList.length === 0 && allLedgers.length > 0) {
+        cashList = allLedgers.filter(l =>
+          ['GRP-CASH', 'CASH_IN_HAND'].includes(l.group_code) ||
+          String(l.group_name || '').toLowerCase().includes('cash')
+        );
+      }
+      setCashLedgers(cashList);
+
+      const fundedCash = cashList.find(c => parseFloat(c.current_balance || 0) > 0) || cashList[0] || null;
+      setCashLedger(prev => {
+        if (prev && cashList.some(c => String(c.ledger_id) === String(prev.ledger_id))) {
+          return cashList.find(c => String(c.ledger_id) === String(prev.ledger_id));
+        }
+        return fundedCash;
+      });
+      if (fundedCash) {
+        setPaymentForm(prev => {
+          const stillValid = cashList.some(c => String(c.ledger_id) === String(prev.payment_ledger_id));
+          return stillValid && prev.payment_ledger_id ? prev : { ...prev, payment_ledger_id: String(fundedCash.ledger_id) };
+        });
+      }
     } catch (err) {
       console.error(err);
     }
@@ -124,32 +170,41 @@ const PurchaseInvoiceManagement = () => {
   }, [companyId]);
 
   useEffect(() => {
+    if (activeTab === 'payment-settlement') {
+      fetchMasterData();
+      fetchInvoices();
+    }
+  }, [activeTab]);
+
+  useEffect(() => {
     if (activeTab !== 'payment-settlement') return;
     const allUnpaid = invoices.filter(invoice =>
       parseFloat(invoice.outstanding_amount || 0) > 0
     );
+    setUnpaidBills(allUnpaid);
+
     if (allUnpaid.length === 0) {
-      setUnpaidBills([]);
       return;
     }
-    setUnpaidBills(allUnpaid);
-    const firstUnpaid = allUnpaid.find(invoice =>
-      invoice.party_id || invoice.vendor_profile_id || invoice.vendor_id
-    ) || allUnpaid[0];
+
+    const currentSelected = allUnpaid.find(inv => String(inv.purchase_invoice_id) === String(paymentForm.selected_invoice_id));
+    const targetBill = currentSelected || allUnpaid[0];
     const partyId =
-      firstUnpaid.party_id ||
-      firstUnpaid.vendor_profile_id ||
-      firstUnpaid.vendor_id ||
-      firstUnpaid.existing_vendor_id;
+      targetBill.party_id ||
+      targetBill.vendor_profile_id ||
+      targetBill.vendor_id ||
+      targetBill.existing_vendor_id;
+
     setPaymentForm(prev => ({
       ...prev,
-      vendor_id: partyId ? String(partyId) : '',
-      selected_invoice_id: String(firstUnpaid.purchase_invoice_id),
-      amount: String(parseFloat(firstUnpaid.outstanding_amount || 0)),
+      vendor_id: partyId ? String(partyId) : prev.vendor_id,
+      selected_invoice_id: String(targetBill.purchase_invoice_id),
+      amount: prev.selected_invoice_id === String(targetBill.purchase_invoice_id) && prev.amount ? prev.amount : String(parseFloat(targetBill.outstanding_amount || 0)),
       invoices_to_settle: [{
-        purchase_invoice_id: firstUnpaid.purchase_invoice_id,
-        amount: parseFloat(firstUnpaid.outstanding_amount || 0)
-      }]
+        purchase_invoice_id: targetBill.purchase_invoice_id,
+        amount: parseFloat(targetBill.outstanding_amount || 0)
+      }],
+      narration: prev.narration || `Payment for purchase invoice ${targetBill.supplier_invoice_number}`
     }));
   }, [activeTab, invoices]);
 
@@ -238,6 +293,8 @@ const PurchaseInvoiceManagement = () => {
   };
 
   const handlePayInvoice = (invoice) => {
+    const preferredBank = bankAccounts.find(b => parseFloat(b.current_balance || 0) > 0) || bankAccounts[0];
+    const preferredCash = cashLedgers.find(c => parseFloat(c.current_balance || 0) > 0) || cashLedgers[0];
     setPaymentForm(prev => ({
       ...prev,
       vendor_id: String(invoice.vendor_id),
@@ -248,10 +305,48 @@ const PurchaseInvoiceManagement = () => {
       }],
       selected_invoice_id: String(invoice.purchase_invoice_id),
       narration: `Payment for purchase invoice ${invoice.supplier_invoice_number}`,
-      bank_account_id: prev.bank_account_id || (bankAccounts[0] ? String(bankAccounts[0].bank_account_id) : '')
+      bank_account_id: prev.bank_account_id || (preferredBank ? String(preferredBank.bank_account_id) : ''),
+      payment_ledger_id: prev.payment_ledger_id || (preferredCash ? String(preferredCash.ledger_id) : '')
     }));
     setUnpaidBills([invoice]);
     setActiveTab('payment-settlement');
+  };
+
+  const handleSelectInvoice = (invId) => {
+    const bill = unpaidBills.find(b => String(b.purchase_invoice_id) === String(invId));
+    if (bill) {
+      const partyId = bill.party_id || bill.vendor_profile_id || bill.vendor_id || bill.existing_vendor_id;
+      setPaymentForm(prev => ({
+        ...prev,
+        selected_invoice_id: String(bill.purchase_invoice_id),
+        vendor_id: partyId ? String(partyId) : prev.vendor_id,
+        amount: String(parseFloat(bill.outstanding_amount || 0)),
+        invoices_to_settle: [{
+          purchase_invoice_id: bill.purchase_invoice_id,
+          amount: parseFloat(bill.outstanding_amount || 0)
+        }],
+        narration: `Payment for purchase invoice ${bill.supplier_invoice_number}`
+      }));
+    } else {
+      setPaymentForm(prev => ({
+        ...prev,
+        selected_invoice_id: '',
+        amount: '',
+        invoices_to_settle: []
+      }));
+    }
+  };
+
+  const handlePaymentModeChange = (mode) => {
+    const preferredBank = bankAccounts.find(b => parseFloat(b.current_balance || 0) > 0) || bankAccounts[0];
+    const preferredCash = cashLedgers.find(c => parseFloat(c.current_balance || 0) > 0) || cashLedgers[0];
+    setPaymentForm(prev => ({
+      ...prev,
+      payment_mode: mode,
+      instrument_type: mode === 'CASH' ? 'CASH' : 'NEFT',
+      bank_account_id: mode === 'BANK' ? (prev.bank_account_id || (preferredBank ? String(preferredBank.bank_account_id) : '')) : prev.bank_account_id,
+      payment_ledger_id: mode === 'CASH' ? (prev.payment_ledger_id || (preferredCash ? String(preferredCash.ledger_id) : '')) : prev.payment_ledger_id
+    }));
   };
 
   // Handle Material Selection
@@ -330,35 +425,46 @@ const PurchaseInvoiceManagement = () => {
   const handleRecordPayment = async (e) => {
     e.preventDefault();
     if (!paymentForm.vendor_id || !parseFloat(paymentForm.amount)) {
-      toast.error('Please select Vendor and valid amount');
+      toast.error('Please select an unpaid bill or vendor with valid amount');
       return;
     }
-    if (paymentForm.payment_mode === 'BANK' && !paymentForm.bank_account_id && bankAccounts.length > 0) {
+    if (paymentForm.payment_mode === 'BANK' && !paymentForm.bank_account_id) {
       toast.error('Please select a Bank Account to make the payment');
       return;
     }
+    const chosenCashId = paymentForm.payment_ledger_id || cashLedger?.ledger_id;
+    if (paymentForm.payment_mode === 'CASH' && !chosenCashId) {
+      toast.error('Please select a Cash in Hand ledger');
+      return;
+    }
+
     try {
       setLoading(true);
       await purchaseApi.recordPayment({
         ...paymentForm,
         company_id: companyId,
-        payment_ledger_id: paymentForm.payment_mode === 'CASH' ? cashLedger?.ledger_id : undefined
+        payment_ledger_id: paymentForm.payment_mode === 'CASH' ? chosenCashId : undefined,
+        bank_account_id: paymentForm.payment_mode === 'BANK' ? paymentForm.bank_account_id : undefined
       });
       toast.success('Vendor payment recorded and allocated against bills!');
-      setPaymentForm({
+
+      await Promise.all([fetchInvoices(), fetchMasterData()]);
+
+      const preferredBank = bankAccounts.find(b => parseFloat(b.current_balance || 0) > 0) || bankAccounts[0];
+      const preferredCash = cashLedgers.find(c => parseFloat(c.current_balance || 0) > 0) || cashLedgers[0];
+      setPaymentForm(prev => ({
         vendor_id: '',
         amount: '',
-        payment_mode: 'BANK',
-        bank_account_id: bankAccounts[0] ? String(bankAccounts[0].bank_account_id) : '',
-        instrument_type: 'NEFT',
+        payment_mode: prev.payment_mode,
+        bank_account_id: preferredBank ? String(preferredBank.bank_account_id) : '',
+        payment_ledger_id: preferredCash ? String(preferredCash.ledger_id) : '',
+        instrument_type: prev.payment_mode === 'CASH' ? 'CASH' : 'NEFT',
         instrument_reference_number: '',
         payment_date: new Date().toISOString().split('T')[0],
         narration: '',
         invoices_to_settle: [],
         selected_invoice_id: ''
-      });
-      setUnpaidBills([]);
-      await Promise.all([fetchInvoices(), fetchMasterData()]);
+      }));
     } catch (err) {
       console.error(err);
       toast.error(err.response?.data?.message || 'Failed to record payment');
@@ -882,14 +988,45 @@ const PurchaseInvoiceManagement = () => {
       {/* TAB 3: VENDOR PAYMENT & BILL SETTLEMENT */}
       {activeTab === 'payment-settlement' && (
         <form onSubmit={handleRecordPayment} className="bg-white p-6 rounded-2xl border border-slate-200/80 shadow-sm space-y-6">
-          <div className="border-b border-slate-100 pb-4">
-            <h2 className="text-lg font-bold text-slate-900">Vendor Payment Settlement (VCH-PAYMENT)</h2>
-            <p className="text-xs text-slate-500">Record cash/bank disbursement against outstanding purchase bills (AGST_REF)</p>
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 border-b border-slate-100 gap-3">
+            <div>
+              <h2 className="text-lg font-bold text-slate-900">Vendor Payment Settlement (VCH-PAYMENT)</h2>
+              <p className="text-xs text-slate-500">Record cash/bank disbursement against outstanding purchase bills (AGST_REF)</p>
+            </div>
+            <button
+              type="button"
+              onClick={async () => {
+                await Promise.all([fetchMasterData(), fetchInvoices()]);
+                toast.success('Accounts and outstanding bills refreshed');
+              }}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold transition"
+            >
+              <RefreshCw className="w-3.5 h-3.5" /> Refresh Balances
+            </button>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
-              <label className="block text-xs font-semibold text-slate-600 mb-1">Party (Auto-selected from Bill)</label>
+              <label className="block text-xs font-semibold text-slate-600 mb-1">Select Purchase Bill to Settle *</label>
+              <select
+                value={paymentForm.selected_invoice_id || ''}
+                onChange={(e) => handleSelectInvoice(e.target.value)}
+                className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm bg-slate-50 focus:bg-white focus:outline-none"
+              >
+                {unpaidBills.length === 0 ? (
+                  <option value="">No unpaid bills found</option>
+                ) : (
+                  unpaidBills.map(b => (
+                    <option key={b.purchase_invoice_id} value={b.purchase_invoice_id}>
+                      {b.supplier_invoice_number} ({b.vendor_trade_name || 'Vendor'}) - Due: ₹{parseFloat(b.outstanding_amount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                    </option>
+                  ))
+                )}
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-600 mb-1">Party / Vendor</label>
               <input
                 type="text"
                 value={(() => {
@@ -916,23 +1053,6 @@ const PurchaseInvoiceManagement = () => {
             </div>
 
             <div>
-              <label className="block text-xs font-semibold text-slate-600 mb-1">Pending Invoice (Auto-selected)</label>
-              <input
-                type="text"
-                value={(() => {
-                  const bill = unpaidBills.find(item =>
-                    String(item.purchase_invoice_id) === String(paymentForm.selected_invoice_id)
-                  );
-                  return bill
-                    ? `${bill.supplier_invoice_number} - Pending ₹${parseFloat(bill.outstanding_amount || 0).toFixed(2)}`
-                    : 'No pending invoice';
-                })()}
-                readOnly
-                className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm bg-slate-50 text-slate-700"
-              />
-            </div>
-
-            <div>
               <label className="block text-xs font-semibold text-slate-600 mb-1">Payment Amount (₹) *</label>
               <input
                 type="number"
@@ -946,7 +1066,7 @@ const PurchaseInvoiceManagement = () => {
             </div>
 
             <div>
-              <label className="block text-xs font-semibold text-slate-600 mb-1">Payment Date</label>
+              <label className="block text-xs font-semibold text-slate-600 mb-1">Payment Date *</label>
               <input
                 type="date"
                 value={paymentForm.payment_date}
@@ -960,18 +1080,10 @@ const PurchaseInvoiceManagement = () => {
               <label className="block text-xs font-semibold text-slate-600 mb-1">Payment Mode</label>
               <select
                 value={paymentForm.payment_mode}
-                onChange={(e) => {
-                  const mode = e.target.value;
-                  setPaymentForm(prev => ({
-                    ...prev,
-                    payment_mode: mode,
-                    instrument_type: mode === 'CASH' ? 'CASH' : 'NEFT',
-                    bank_account_id: mode === 'BANK' ? (prev.bank_account_id || (bankAccounts[0] ? String(bankAccounts[0].bank_account_id) : '')) : ''
-                  }));
-                }}
-                className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm bg-slate-50 focus:bg-white focus:outline-none"
+                onChange={(e) => handlePaymentModeChange(e.target.value)}
+                className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm bg-slate-50 focus:bg-white focus:outline-none font-medium"
               >
-                <option value="BANK">Bank Account (NEFT / RTGS / IMPS / UPI)</option>
+                <option value="BANK">Bank Account (NEFT / RTGS / IMPS / UPI / Cheque)</option>
                 <option value="CASH">Cash in Hand</option>
               </select>
             </div>
@@ -981,67 +1093,95 @@ const PurchaseInvoiceManagement = () => {
                 <label className="block text-xs font-semibold text-slate-600 mb-1">
                   Select Bank Account *
                 </label>
-                <select
-                  value={paymentForm.bank_account_id || ''}
-                  onChange={(e) => setPaymentForm(prev => ({ ...prev, bank_account_id: e.target.value }))}
-                  className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm bg-slate-50 focus:bg-white focus:outline-none"
-                  required
-                >
-                  <option value="">-- Choose Bank Account --</option>
-                  {bankAccounts.map((acc) => (
-                    <option key={acc.bank_account_id} value={acc.bank_account_id}>
-                      {acc.bank_name} - {acc.account_number} (Bal: ₹{parseFloat(acc.current_balance || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })} {acc.current_balance_type || 'DR'})
-                    </option>
-                  ))}
-                </select>
-                {(() => {
-                  const selectedBank = bankAccounts.find(b => String(b.bank_account_id) === String(paymentForm.bank_account_id));
-                  if (!selectedBank) {
-                    return bankAccounts.length === 0 ? (
-                      <p className="text-[11px] text-amber-600 mt-1">No registered bank accounts found. Please add a bank account in Accounting.</p>
-                    ) : null;
-                  }
-                  const curBal = parseFloat(selectedBank.current_balance || 0);
-                  const payAmt = parseFloat(paymentForm.amount || 0);
-                  const remaining = curBal - (Number.isFinite(payAmt) ? payAmt : 0);
-                  return (
-                    <div className="mt-1 flex items-center justify-between text-[11px]">
-                      <span className="text-slate-500 font-medium">
-                        Current: <strong className="text-slate-800">₹{curBal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</strong> {selectedBank.current_balance_type || 'DR'}
-                      </span>
-                      {payAmt > 0 && (
-                        <span className={`font-semibold ${remaining < 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
-                          After: ₹{remaining.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                        </span>
-                      )}
-                    </div>
-                  );
-                })()}
+                {bankAccounts.length === 0 ? (
+                  <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-800">
+                    No registered bank accounts found. Please add a bank account in Ledger & Banking.
+                  </div>
+                ) : (
+                  <>
+                    <select
+                      value={paymentForm.bank_account_id || ''}
+                      onChange={(e) => setPaymentForm(prev => ({ ...prev, bank_account_id: e.target.value }))}
+                      className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm bg-slate-50 focus:bg-white focus:outline-none font-medium text-slate-800"
+                      required
+                    >
+                      {bankAccounts.map((acc) => (
+                        <option key={acc.bank_account_id} value={acc.bank_account_id}>
+                          {acc.bank_name} - {acc.account_number} (Bal: ₹{parseFloat(acc.current_balance || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })} {acc.current_balance_type || 'DR'})
+                        </option>
+                      ))}
+                    </select>
+                    {(() => {
+                      const selectedBank = bankAccounts.find(b => String(b.bank_account_id) === String(paymentForm.bank_account_id)) || bankAccounts[0];
+                      if (!selectedBank) return null;
+                      const curBal = parseFloat(selectedBank.current_balance || 0);
+                      const payAmt = parseFloat(paymentForm.amount || 0);
+                      const remaining = curBal - (Number.isFinite(payAmt) ? payAmt : 0);
+                      return (
+                        <div className="mt-1 flex items-center justify-between text-[11px] px-1">
+                          <span className="text-slate-500 font-medium">
+                            Current: <strong className="text-slate-800">₹{curBal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</strong> {selectedBank.current_balance_type || 'DR'}
+                          </span>
+                          {payAmt > 0 && (
+                            <span className={`font-semibold ${remaining < 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
+                              After Payment: ₹{remaining.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                            </span>
+                          )}
+                        </div>
+                      );
+                    })()}
+                  </>
+                )}
               </div>
             ) : (
               <div>
-                <label className="block text-xs font-semibold text-slate-600 mb-1">Cash in Hand Ledger</label>
-                <div className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm bg-slate-50 flex items-center justify-between">
-                  <span className="text-slate-700 font-medium">{cashLedger?.ledger_name || 'Cash Account (LED-CASH-MAIN)'}</span>
-                  <span className="font-mono text-xs font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded">
-                    ₹{parseFloat(cashLedger?.current_balance || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })} {cashLedger?.current_balance_type || 'DR'}
-                  </span>
-                </div>
-                {(() => {
-                  const curBal = parseFloat(cashLedger?.current_balance || 0);
-                  const payAmt = parseFloat(paymentForm.amount || 0);
-                  const remaining = curBal - (Number.isFinite(payAmt) ? payAmt : 0);
-                  return payAmt > 0 ? (
-                    <div className="mt-1 flex items-center justify-between text-[11px]">
-                      <span className="text-slate-500">Auto-deducted from Cash</span>
-                      <span className={`font-semibold ${remaining < 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
-                        After: ₹{remaining.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                      </span>
-                    </div>
-                  ) : (
-                    <p className="text-[11px] text-slate-400 mt-1">Amount will be automatically deducted from cash ledger</p>
-                  );
-                })()}
+                <label className="block text-xs font-semibold text-slate-600 mb-1">
+                  Select Cash in Hand Ledger *
+                </label>
+                {cashLedgers.length === 0 ? (
+                  <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-800">
+                    No cash in hand ledger found. Please check Chart of Accounts.
+                  </div>
+                ) : (
+                  <>
+                    <select
+                      value={paymentForm.payment_ledger_id || cashLedger?.ledger_id || ''}
+                      onChange={(e) => {
+                        const ledId = e.target.value;
+                        const chosen = cashLedgers.find(l => String(l.ledger_id) === String(ledId));
+                        setCashLedger(chosen || null);
+                        setPaymentForm(prev => ({ ...prev, payment_ledger_id: ledId }));
+                      }}
+                      className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm bg-slate-50 focus:bg-white focus:outline-none font-medium text-slate-800"
+                      required
+                    >
+                      {cashLedgers.map((cl) => (
+                        <option key={cl.ledger_id} value={cl.ledger_id}>
+                          {cl.ledger_name} ({cl.ledger_code}) - Bal: ₹{parseFloat(cl.current_balance || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })} {cl.current_balance_type || 'DR'}
+                        </option>
+                      ))}
+                    </select>
+                    {(() => {
+                      const activeCash = cashLedgers.find(c => String(c.ledger_id) === String(paymentForm.payment_ledger_id || cashLedger?.ledger_id)) || cashLedgers[0];
+                      if (!activeCash) return null;
+                      const curBal = parseFloat(activeCash.current_balance || 0);
+                      const payAmt = parseFloat(paymentForm.amount || 0);
+                      const remaining = curBal - (Number.isFinite(payAmt) ? payAmt : 0);
+                      return (
+                        <div className="mt-1 flex items-center justify-between text-[11px] px-1">
+                          <span className="text-slate-500 font-medium">
+                            Current: <strong className="text-slate-800">₹{curBal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</strong> {activeCash.current_balance_type || 'DR'}
+                          </span>
+                          {payAmt > 0 && (
+                            <span className={`font-semibold ${remaining < 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
+                              After Payment: ₹{remaining.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                            </span>
+                          )}
+                        </div>
+                      );
+                    })()}
+                  </>
+                )}
               </div>
             )}
 
@@ -1085,7 +1225,7 @@ const PurchaseInvoiceManagement = () => {
                   </thead>
                   <tbody className="divide-y divide-slate-100">
                     {unpaidBills.map(b => (
-                      <tr key={b.purchase_invoice_id} className="hover:bg-slate-50">
+                      <tr key={b.purchase_invoice_id} className={`hover:bg-slate-50 ${String(b.purchase_invoice_id) === String(paymentForm.selected_invoice_id) ? 'bg-indigo-50/50' : ''}`}>
                         <td className="py-2.5 px-3 font-mono font-bold text-slate-800">{b.supplier_invoice_number}</td>
                         <td className="py-2.5 px-3 text-slate-600">{new Date(b.supplier_invoice_date).toLocaleDateString()}</td>
                         <td className="py-2.5 px-3 text-slate-600">{new Date(b.due_date).toLocaleDateString()}</td>

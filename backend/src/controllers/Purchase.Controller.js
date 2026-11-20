@@ -725,23 +725,41 @@ export const recordVendorPayment = async (req, res) => {
                     WHERE ba.bank_account_id = $1 AND ba.company_id = $2 AND ba.is_active = TRUE
                 `, [bank_account_id, companyId]);
 
-                if (bankRes.rows.length === 0) {
-                    await client.query('ROLLBACK');
-                    return res.status(400).json({
-                        success: false,
-                        message: 'Selected bank account not found or is inactive.'
-                    });
+                if (bankRes.rows.length > 0) {
+                    paymentLedgerId = bankRes.rows[0].ledger_id;
+                    selectedBankDetails = bankRes.rows[0];
+                } else {
+                    const ledCheck = await client.query(`
+                        SELECT l.ledger_id, l.ledger_name, l.ledger_code, l.current_balance, l.current_balance_type
+                        FROM ledgers l
+                        JOIN account_groups ag ON ag.group_id = l.group_id
+                        WHERE l.ledger_id = $1 AND l.company_id = $2 AND ag.group_code IN ('GRP-BANK', 'BANK_ACCOUNTS') AND l.is_active = TRUE
+                    `, [bank_account_id, companyId]);
+                    if (ledCheck.rows.length > 0) {
+                        paymentLedgerId = ledCheck.rows[0].ledger_id;
+                        selectedBankDetails = {
+                            bank_account_id: ledCheck.rows[0].ledger_id,
+                            bank_name: ledCheck.rows[0].ledger_name,
+                            account_number: ledCheck.rows[0].ledger_code,
+                            ledger_id: ledCheck.rows[0].ledger_id
+                        };
+                    }
                 }
-                paymentLedgerId = bankRes.rows[0].ledger_id;
-                selectedBankDetails = bankRes.rows[0];
             } else if (payment_ledger_id) {
                 const ledCheck = await client.query(`
-                    SELECT l.ledger_id FROM ledgers l
+                    SELECT l.ledger_id, l.ledger_name, l.ledger_code, l.current_balance, l.current_balance_type
+                    FROM ledgers l
                     JOIN account_groups ag ON ag.group_id = l.group_id
-                    WHERE l.ledger_id = $1 AND l.company_id = $2 AND ag.group_code IN ('GRP-BANK', 'BANK_ACCOUNTS')
+                    WHERE l.ledger_id = $1 AND l.company_id = $2 AND ag.group_code IN ('GRP-BANK', 'BANK_ACCOUNTS') AND l.is_active = TRUE
                 `, [payment_ledger_id, companyId]);
                 if (ledCheck.rows.length > 0) {
                     paymentLedgerId = ledCheck.rows[0].ledger_id;
+                    selectedBankDetails = {
+                        bank_account_id: ledCheck.rows[0].ledger_id,
+                        bank_name: ledCheck.rows[0].ledger_name,
+                        account_number: ledCheck.rows[0].ledger_code,
+                        ledger_id: ledCheck.rows[0].ledger_id
+                    };
                 }
             }
 
@@ -757,20 +775,22 @@ export const recordVendorPayment = async (req, res) => {
                     paymentLedgerId = defaultBankRes.rows[0].ledger_id;
                     selectedBankDetails = defaultBankRes.rows[0];
                 } else {
-                    let payLedRes = await client.query(
-                        `SELECT ledger_id FROM ledgers WHERE company_id = $1 AND ledger_code = 'LED-BANK-MAIN'`,
-                        [companyId]
-                    );
-                    if (payLedRes.rows.length > 0) {
-                        paymentLedgerId = payLedRes.rows[0].ledger_id;
-                    } else {
-                        const fallbackRes = await client.query(`
-                            SELECT l.ledger_id FROM ledgers l
-                            JOIN account_groups ag ON l.group_id = ag.group_id
-                            WHERE l.company_id = $1 AND ag.group_code IN ('GRP-BANK', 'BANK_ACCOUNTS')
-                            LIMIT 1
-                        `, [companyId]);
-                        paymentLedgerId = fallbackRes.rows[0]?.ledger_id;
+                    const fallbackRes = await client.query(`
+                        SELECT l.ledger_id, l.ledger_name, l.ledger_code
+                        FROM ledgers l
+                        JOIN account_groups ag ON l.group_id = ag.group_id
+                        WHERE l.company_id = $1 AND ag.group_code IN ('GRP-BANK', 'BANK_ACCOUNTS') AND l.is_active = TRUE
+                        ORDER BY (l.ledger_code = 'LED-BANK-MAIN') DESC, l.ledger_id ASC
+                        LIMIT 1
+                    `, [companyId]);
+                    if (fallbackRes.rows.length > 0) {
+                        paymentLedgerId = fallbackRes.rows[0].ledger_id;
+                        selectedBankDetails = {
+                            bank_account_id: fallbackRes.rows[0].ledger_id,
+                            bank_name: fallbackRes.rows[0].ledger_name,
+                            account_number: fallbackRes.rows[0].ledger_code,
+                            ledger_id: fallbackRes.rows[0].ledger_id
+                        };
                     }
                 }
             }
@@ -786,9 +806,10 @@ export const recordVendorPayment = async (req, res) => {
             // CASH mode
             if (payment_ledger_id) {
                 const ledCheck = await client.query(`
-                    SELECT l.ledger_id FROM ledgers l
+                    SELECT l.ledger_id, l.ledger_name, l.current_balance, l.current_balance_type
+                    FROM ledgers l
                     JOIN account_groups ag ON ag.group_id = l.group_id
-                    WHERE l.ledger_id = $1 AND l.company_id = $2 AND ag.group_code IN ('GRP-CASH', 'CASH_IN_HAND')
+                    WHERE l.ledger_id = $1 AND l.company_id = $2 AND ag.group_code IN ('GRP-CASH', 'CASH_IN_HAND') AND l.is_active = TRUE
                 `, [payment_ledger_id, companyId]);
                 if (ledCheck.rows.length > 0) {
                     paymentLedgerId = ledCheck.rows[0].ledger_id;
@@ -796,20 +817,32 @@ export const recordVendorPayment = async (req, res) => {
             }
 
             if (!paymentLedgerId) {
-                let payLedRes = await client.query(
-                    `SELECT ledger_id FROM ledgers WHERE company_id = $1 AND ledger_code = 'LED-CASH-MAIN'`,
-                    [companyId]
-                );
-                if (payLedRes.rows.length > 0) {
-                    paymentLedgerId = payLedRes.rows[0].ledger_id;
+                // Pick funded cash ledger first
+                const fundedCashRes = await client.query(`
+                    SELECT l.ledger_id FROM ledgers l
+                    JOIN account_groups ag ON ag.group_id = l.group_id
+                    WHERE l.company_id = $1 AND ag.group_code IN ('GRP-CASH', 'CASH_IN_HAND') AND l.current_balance > 0 AND l.is_active = TRUE
+                    ORDER BY l.current_balance DESC
+                    LIMIT 1
+                `, [companyId]);
+                if (fundedCashRes.rows.length > 0) {
+                    paymentLedgerId = fundedCashRes.rows[0].ledger_id;
                 } else {
-                    const fallbackRes = await client.query(`
-                        SELECT l.ledger_id FROM ledgers l
-                        JOIN account_groups ag ON l.group_id = ag.group_id
-                        WHERE l.company_id = $1 AND ag.group_code IN ('GRP-CASH', 'CASH_IN_HAND')
-                        LIMIT 1
-                    `, [companyId]);
-                    paymentLedgerId = fallbackRes.rows[0]?.ledger_id;
+                    let payLedRes = await client.query(
+                        `SELECT ledger_id FROM ledgers WHERE company_id = $1 AND ledger_code = 'LED-CASH-MAIN' AND is_active = TRUE`,
+                        [companyId]
+                    );
+                    if (payLedRes.rows.length > 0) {
+                        paymentLedgerId = payLedRes.rows[0].ledger_id;
+                    } else {
+                        const fallbackRes = await client.query(`
+                            SELECT l.ledger_id FROM ledgers l
+                            JOIN account_groups ag ON l.group_id = ag.group_id
+                            WHERE l.company_id = $1 AND ag.group_code IN ('GRP-CASH', 'CASH_IN_HAND') AND l.is_active = TRUE
+                            LIMIT 1
+                        `, [companyId]);
+                        paymentLedgerId = fallbackRes.rows[0]?.ledger_id;
+                    }
                 }
             }
 

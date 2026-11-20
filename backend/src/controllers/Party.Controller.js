@@ -35,10 +35,8 @@ export const getParties = async (req, res) => {
             WHERE pm.company_id = $1
         `;
         if (role === 'CUSTOMER') {
-            params.push(role);
             query += ` AND pm.party_type IN ('CUSTOMER', 'BOTH')`;
         } else if (role === 'SUPPLIER') {
-            params.push(role);
             query += ` AND pm.party_type IN ('SUPPLIER', 'BOTH')`;
         }
         if (search) {

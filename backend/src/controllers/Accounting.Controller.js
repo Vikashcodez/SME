@@ -219,8 +219,18 @@ export const getLedgers = async (req, res) => {
         const params = [companyId];
 
         if (groupCode) {
-            params.push(groupCode);
-            query += ` AND ag.group_code = $${params.length}`;
+            if (groupCode === 'GRP-CASH' || groupCode === 'CASH_IN_HAND') {
+                query += ` AND ag.group_code IN ('GRP-CASH', 'CASH_IN_HAND')`;
+            } else if (groupCode === 'GRP-BANK' || groupCode === 'BANK_ACCOUNTS') {
+                query += ` AND ag.group_code IN ('GRP-BANK', 'BANK_ACCOUNTS')`;
+            } else if (groupCode.includes(',')) {
+                const codes = groupCode.split(',').map(c => c.trim().toUpperCase());
+                params.push(codes);
+                query += ` AND ag.group_code = ANY($${params.length})`;
+            } else {
+                params.push(groupCode);
+                query += ` AND ag.group_code = $${params.length}`;
+            }
         }
         if (nature) {
             params.push(nature);
@@ -598,12 +608,31 @@ export const getBankAccounts = async (req, res) => {
         }
 
         const result = await pool.query(`
-            SELECT ba.*, l.ledger_name, l.ledger_code, l.current_balance,
-                   l.current_balance_type, l.opening_balance, l.opening_balance_type
-            FROM bank_accounts ba
-            JOIN ledgers l ON l.ledger_id = ba.ledger_id
-            WHERE ba.company_id = $1 AND ba.is_active = TRUE
-            ORDER BY ba.bank_name ASC, ba.account_number ASC
+            SELECT 
+                COALESCE(ba.bank_account_id, l.ledger_id) AS bank_account_id,
+                ba.bank_account_id AS registered_bank_account_id,
+                l.company_id,
+                l.ledger_id,
+                COALESCE(ba.bank_name, l.ledger_name) AS bank_name,
+                COALESCE(ba.account_number, l.ledger_code) AS account_number,
+                ba.ifsc_code,
+                ba.branch_name,
+                ba.account_holder_name,
+                COALESCE(ba.account_type, 'CURRENT') AS account_type,
+                COALESCE(ba.is_active, l.is_active) AS is_active,
+                l.ledger_name,
+                l.ledger_code,
+                l.current_balance,
+                l.current_balance_type,
+                l.opening_balance,
+                l.opening_balance_type
+            FROM ledgers l
+            JOIN account_groups ag ON l.group_id = ag.group_id
+            LEFT JOIN bank_accounts ba ON ba.ledger_id = l.ledger_id AND ba.company_id = l.company_id
+            WHERE l.company_id = $1 
+              AND ag.group_code IN ('GRP-BANK', 'BANK_ACCOUNTS')
+              AND l.is_active = TRUE
+            ORDER BY (ba.bank_account_id IS NOT NULL) DESC, COALESCE(ba.bank_name, l.ledger_name) ASC
         `, [companyId]);
 
         return res.json({ success: true, data: result.rows });
