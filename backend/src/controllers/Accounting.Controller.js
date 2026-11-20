@@ -91,21 +91,32 @@ export const getChartOfAccounts = async (req, res) => {
             ORDER BY l.ledger_name ASC
         `, [companyId]);
 
+        // Real-time physical inventory valuation
+        const stockRawRes = await pool.query(`
+            SELECT COALESCE(SUM(available_quantity * unit_cost), 0)::NUMERIC(16,2) AS val
+            FROM raw_material_inventory WHERE company_id = $1 AND available_quantity > 0
+        `, [companyId]);
+        const stockFgRes = await pool.query(`
+            SELECT COALESCE(SUM(available_quantity * unit_cost), 0)::NUMERIC(16,2) AS val
+            FROM product_inventory WHERE company_id = $1 AND available_quantity > 0
+        `, [companyId]);
+        const rawStockVal = parseFloat(stockRawRes.rows[0]?.val || 0);
+        const fgStockVal = parseFloat(stockFgRes.rows[0]?.val || 0);
+
         ledgersRes.rows = ledgersRes.rows.map(ledger => {
             const isBankCash = ['GRP-BANK','BANK_ACCOUNTS','GRP-CASH','CASH_IN_HAND'].includes(ledger.group_code);
             if (isBankCash) {
                 const balance = Math.abs(parseFloat(ledger.current_balance) || 0);
                 return { ...ledger, current_balance: balance.toFixed(2), current_balance_type: 'DR' };
             }
-            const isInputTax = String(ledger.ledger_code || '').startsWith('LED-TAX-IN-');
-            if (isInputTax) {
-                const balance = parseFloat(ledger.current_balance) || 0;
-                const legacyFullSplit = ['LED-TAX-IN-CGST', 'LED-TAX-IN-SGST'].includes(ledger.ledger_code) &&
-                    [12, 18, 28].includes(balance);
-                return {
-                    ...ledger,
-                    current_balance: (legacyFullSplit ? balance / 2 : balance).toFixed(2)
-                };
+            if (['GRP-STOCK', 'STOCK_IN_HAND'].includes(ledger.group_code)) {
+                let stockVal = parseFloat(ledger.current_balance) || 0;
+                if (ledger.ledger_code === 'LED-STOCK-RAW') {
+                    stockVal = rawStockVal;
+                } else if (ledger.ledger_code === 'LED-STOCK-FG') {
+                    stockVal = fgStockVal;
+                }
+                return { ...ledger, current_balance: Math.abs(stockVal).toFixed(2), current_balance_type: 'DR' };
             }
             return ledger;
         });
@@ -928,7 +939,11 @@ export const createVoucher = async (req, res) => {
 
         const companyId = req.body.company_id || req.user?.company_id;
         const branchId = req.body.branch_id || req.user?.branch_id || null;
-        const createdBy = req.user?.employee_id || null;
+        let createdBy = req.user?.employee_id || null;
+        if (createdBy) {
+            const empCheck = await client.query('SELECT employee_id FROM employees WHERE employee_id = $1 LIMIT 1', [createdBy]);
+            if (empCheck.rows.length === 0) createdBy = null;
+        }
 
         if (!companyId || !voucher_type_code || lines.length < 2) {
             await client.query('ROLLBACK');
@@ -1751,17 +1766,6 @@ export const getDayBook = async (req, res) => {
         let totalCreditSum = 0;
         const vouchers = vouchersRes.rows.map(v => {
             let lines = linesByVoucher[v.voucher_id] || [];
-            if (v.source_module === 'PURCHASE_INVOICE') {
-                lines = lines.map(line => {
-                    const amount = parseFloat(line.debit_amount) || 0;
-                    const legacyFullSplit =
-                        ['LED-TAX-IN-CGST', 'LED-TAX-IN-SGST'].includes(line.ledger_code) &&
-                        [12, 18, 28].includes(amount);
-                    return legacyFullSplit
-                        ? { ...line, debit_amount: (amount / 2).toFixed(2) }
-                        : line;
-                });
-            }
             const debitLines = lines.filter(l => parseFloat(l.debit_amount) > 0);
             const creditLines = lines.filter(l => parseFloat(l.credit_amount) > 0);
             let particulars = '';
@@ -1854,7 +1858,6 @@ export const getProfitAndLoss = async (req, res) => {
             JOIN account_groups ag ON l.group_id = ag.group_id
             LEFT JOIN voucher_lines vl ON l.ledger_id = vl.ledger_id
             LEFT JOIN vouchers v ON vl.voucher_id = v.voucher_id AND v.is_posted = TRUE AND v.voucher_date >= $2 AND v.voucher_date <= $3
-              AND v.source_module IS DISTINCT FROM 'PURCHASE_INVOICE'
             WHERE l.company_id = $1 AND ag.nature IN ('INCOME', 'EXPENSE')
             GROUP BY l.ledger_id, l.ledger_name, l.ledger_code, ag.group_name, ag.group_code, ag.nature, ag.affects_gross_profit, l.opening_balance, l.opening_balance_type
             ORDER BY ag.nature, l.ledger_name ASC
@@ -1904,10 +1907,23 @@ export const getProfitAndLoss = async (req, res) => {
             }
         }
 
-        // Stock purchases are recorded in the Stock-in-Hand asset, not in P&L.
-        // Therefore closing/opening stock must not create artificial profit.
-        const tradingCreditTotal = +totalSales.toFixed(2);
-        const tradingDebitTotal = +(totalPurchases + totalDirectExpenses).toFixed(2);
+        // Real-time physical inventory valuation
+        const closingRawRes = await pool.query(`
+            SELECT COALESCE(SUM(available_quantity * unit_cost), 0)::NUMERIC(16,2) AS val
+            FROM raw_material_inventory
+            WHERE company_id = $1 AND available_quantity > 0
+        `, [companyId]);
+        const closingFgRes = await pool.query(`
+            SELECT COALESCE(SUM(available_quantity * unit_cost), 0)::NUMERIC(16,2) AS val
+            FROM product_inventory
+            WHERE company_id = $1 AND available_quantity > 0
+        `, [companyId]);
+        const rawVal = parseFloat(closingRawRes.rows[0]?.val || 0) || 0;
+        const fgVal = parseFloat(closingFgRes.rows[0]?.val || 0) || 0;
+        const closingStock = +(rawVal + fgVal).toFixed(2);
+
+        const tradingCreditTotal = +(totalSales + closingStock).toFixed(2);
+        const tradingDebitTotal = +(openingStock + totalPurchases + totalDirectExpenses).toFixed(2);
         const grossProfit = +(tradingCreditTotal - tradingDebitTotal).toFixed(2);
 
         const plCreditTotal = +(grossProfit + totalIndirectIncomes).toFixed(2);
@@ -1920,7 +1936,7 @@ export const getProfitAndLoss = async (req, res) => {
                 to_date: toDate,
                 trading_account: {
                     debit: {
-                        opening_stock: '0.00',
+                        opening_stock: openingStock.toFixed(2),
                         purchases: {
                             total: totalPurchases.toFixed(2),
                             ledgers: purchaseLedgers
@@ -1937,9 +1953,9 @@ export const getProfitAndLoss = async (req, res) => {
                             ledgers: salesLedgers
                         },
                         closing_stock: {
-                            total: '0.00',
-                            raw_materials: '0.00',
-                            finished_goods: '0.00'
+                            total: closingStock.toFixed(2),
+                            raw_materials: rawVal.toFixed(2),
+                            finished_goods: fgVal.toFixed(2)
                         },
                         total_credit: tradingCreditTotal.toFixed(2)
                     },
@@ -1991,7 +2007,6 @@ export const getBalanceSheet = async (req, res) => {
             JOIN account_groups ag ON l.group_id = ag.group_id
             LEFT JOIN voucher_lines vl ON l.ledger_id = vl.ledger_id
             LEFT JOIN vouchers v ON vl.voucher_id = v.voucher_id AND v.is_posted = TRUE AND v.voucher_date <= $2
-              AND v.source_module IS DISTINCT FROM 'PURCHASE_INVOICE'
             WHERE l.company_id = $1 AND ag.nature IN ('INCOME', 'EXPENSE')
             GROUP BY l.ledger_id, ag.nature, l.opening_balance, l.opening_balance_type
         `, [companyId, asOnDate]);
@@ -2032,9 +2047,8 @@ export const getBalanceSheet = async (req, res) => {
               AND (ag.group_code = 'GRP-STOCK' OR ag.group_code = 'STOCK_IN_HAND')
         `, [companyId]);
         const openingStock = parseFloat(openingStockRes.rows[0]?.val || 0) || 0;
-        // Purchase invoices debit stock rather than expense and are therefore
-        // already excluded from P&L. Do not also add inventory as trading profit.
-        const currentPeriodNetProfit = +(netIncomeFromOps - netExpenseFromOps).toFixed(2);
+        // Trading gross profit integrates purchases and physical inventory valuation
+        const currentPeriodNetProfit = +(netIncomeFromOps - netExpenseFromOps + (closingStock - openingStock)).toFixed(2);
 
         // 2. Fetch Assets & Liabilities Ledgers with running balances
         const balLedgersRes = await pool.query(`
@@ -2133,12 +2147,7 @@ export const getBalanceSheet = async (req, res) => {
             const netDr = normalizedOpBal + dr - cr;
             const netCr = -netDr;
             const taxInputLedger = l.ledger_code?.startsWith('LED-TAX-IN-');
-            const normalizedInputTaxDebit =
-                taxInputLedger &&
-                ['LED-TAX-IN-CGST', 'LED-TAX-IN-SGST'].includes(l.ledger_code) &&
-                [12, 18, 28].includes(Math.abs(netDr))
-                    ? Math.abs(netDr) / 2
-                    : Math.abs(netDr);
+            const normalizedInputTaxDebit = Math.abs(netDr);
 
             const isNormalOpeningAsset =
                 ['GRP-CASH', 'CASH_IN_HAND', 'GRP-BANK', 'BANK_ACCOUNTS'].includes(l.group_code);
@@ -2208,6 +2217,9 @@ export const getBalanceSheet = async (req, res) => {
                         // Physical stock valuation is taken from inventory tables.
                     }
                 } else {
+                    if (l.group_code === 'GRP-STOCK' || l.group_code === 'STOCK_IN_HAND') {
+                        continue;
+                    }
                     const contraBalance = Math.abs(netDr);
                     if (l.group_code === 'GRP-BANK' || l.group_code === 'BANK_ACCOUNTS') {
                         liabilities.loans_and_borrowings.total += contraBalance;
@@ -2256,6 +2268,9 @@ export const getBalanceSheet = async (req, res) => {
                     liabilities.current_liabilities.other_liabilities.ledgers.push({ ...l, amount: netCr.toFixed(2) });
                 }
             } else if (l.nature === 'ASSET') {
+                if (l.group_code === 'GRP-STOCK' || l.group_code === 'STOCK_IN_HAND') {
+                    continue;
+                }
                 if (netDr < 0) {
                     const overdraft = Math.abs(netDr);
                     liabilities.current_liabilities.other_liabilities.total += overdraft;
@@ -2399,7 +2414,6 @@ export const getExpenseStatement = async (req, res) => {
             JOIN voucher_lines vl ON l.ledger_id = vl.ledger_id
             JOIN vouchers v ON vl.voucher_id = v.voucher_id AND v.is_posted = TRUE
             WHERE l.company_id = $1 AND v.voucher_date >= $2 AND v.voucher_date <= $3
-              AND v.source_module IS DISTINCT FROM 'PURCHASE_INVOICE'
               AND ag.nature = 'EXPENSE'
             GROUP BY l.ledger_id, l.ledger_name, l.ledger_code, ag.group_name, ag.group_code, ag.affects_gross_profit
             ORDER BY ag.affects_gross_profit DESC, total_expense DESC
@@ -2533,6 +2547,11 @@ export const reverseVoucher = async (req, res) => {
 
         const linesRes = await client.query(`SELECT * FROM voucher_lines WHERE voucher_id = $1 ORDER BY line_number`, [voucherId]);
         const voucherNumber = await generateVoucherNumber(client, companyId, original.voucher_number.slice(0, 8) + '-REV');
+        let reversalCreatedBy = req.user?.employee_id || null;
+        if (reversalCreatedBy) {
+            const empCheck = await client.query('SELECT employee_id FROM employees WHERE employee_id = $1 LIMIT 1', [reversalCreatedBy]);
+            if (empCheck.rows.length === 0) reversalCreatedBy = null;
+        }
         const reversalRes = await client.query(`
             INSERT INTO vouchers (
                 company_id, branch_id, financial_year_id, voucher_type_id, voucher_number, voucher_date,
@@ -2542,7 +2561,7 @@ export const reverseVoucher = async (req, res) => {
             RETURNING *
         `, [companyId, original.branch_id, original.financial_year_id, original.voucher_type_id, voucherNumber,
             `Reversal of ${original.voucher_number}: ${original.narration || ''}`, original.voucher_number, voucherId,
-            req.user?.employee_id || null]);
+            reversalCreatedBy]);
         const reversal = reversalRes.rows[0];
 
         const affectedLedgerIds = new Set();

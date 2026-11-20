@@ -34,6 +34,15 @@ export const getPendingGrns = async (req, res) => {
     }
 };
 
+// Helper: Ensure employee ID exists to avoid foreign key violations with stale tokens or super admins
+const getValidEmployeeId = async (client, employeeId) => {
+    if (!employeeId) return null;
+    const cleanId = String(employeeId).trim();
+    if (!cleanId || cleanId === 'null' || cleanId === 'undefined') return null;
+    const res = await client.query('SELECT employee_id FROM employees WHERE employee_id = $1 LIMIT 1', [cleanId]);
+    return res.rows.length > 0 ? res.rows[0].employee_id : null;
+};
+
 // Helper: Document Number Generation
 const generateDocNumber = async (client, companyId, prefix) => {
     const year = new Date().getFullYear();
@@ -103,25 +112,28 @@ export const createPurchaseInvoice = async (req, res) => {
             freight_charges = 0,
             other_charges = 0,
             purchase_order_id = null,
-            grn_id = null
+            grn_id = null,
+            purchase_ledger_id: requestPurchaseLedgerId = null
         } = req.body;
 
-        const companyId = req.body.company_id || req.user?.company_id;
-        const branchId = req.body.branch_id || req.user?.branch_id || null;
-        const createdBy = req.user?.employee_id || null;
+        const companyId = (req.body.company_id || req.user?.company_id) ? String(req.body.company_id || req.user?.company_id).trim() : null;
+        const cleanBranchId = (req.body.branch_id || req.user?.branch_id) && String(req.body.branch_id || req.user?.branch_id).trim() !== '' ? String(req.body.branch_id || req.user?.branch_id).trim() : null;
+        const createdBy = await getValidEmployeeId(client, req.user?.employee_id);
+        const cleanGrnId = grn_id && String(grn_id).trim() !== '' ? grn_id : null;
+        const cleanPurchaseOrderId = purchase_order_id && String(purchase_order_id).trim() !== '' ? purchase_order_id : null;
         let vendor_id = requestVendorId;
         let supplier_invoice_number = requestSupplierInvoiceNumber;
         let supplier_invoice_date = requestSupplierInvoiceDate;
         let due_date = requestDueDate;
         let invoiceItems = items;
 
-        if (grn_id) {
+        if (cleanGrnId) {
             const grnRes = await client.query(`
                 SELECT g.*, v.vendor_name
                 FROM grns g
                 LEFT JOIN vendors v ON v.vendor_id = g.vendor_id
                 WHERE g.id = $1 AND g.company_id = $2
-            `, [grn_id, companyId]);
+            `, [cleanGrnId, companyId]);
             if (grnRes.rows.length === 0) {
                 await client.query('ROLLBACK');
                 return res.status(404).json({ success: false, message: 'GRN not found.' });
@@ -133,7 +145,7 @@ export const createPurchaseInvoice = async (req, res) => {
                  JOIN raw_materials rm ON rm.material_id = gi.raw_material_id
                  WHERE gi.grn_id = $1
                  ORDER BY gi.id`,
-                [grn_id]
+                [cleanGrnId]
             );
             vendor_id = grn.vendor_id;
             supplier_invoice_number = supplier_invoice_number || grn.invoice_number || grn.grn_number;
@@ -159,10 +171,10 @@ export const createPurchaseInvoice = async (req, res) => {
             });
         }
 
-        if (grn_id) {
+        if (cleanGrnId) {
             const existingGrnInvoice = await client.query(
                 `SELECT purchase_invoice_id FROM purchase_invoices WHERE grn_id = $1 LIMIT 1`,
-                [grn_id]
+                [cleanGrnId]
             );
             if (existingGrnInvoice.rows.length > 0) {
                 await client.query('ROLLBACK');
@@ -269,18 +281,20 @@ export const createPurchaseInvoice = async (req, res) => {
         const isIntraState = companyStateCode === vendorStateCode;
 
         // 3. Find or Create Default Purchase Ledger (Direct Expense)
-        let purchLedRes = await client.query(`SELECT ledger_id FROM ledgers WHERE company_id = $1 AND ledger_code = 'LED-PURCH-GEN'`, [companyId]);
-        let purchaseLedgerId;
-        if (purchLedRes.rows.length === 0) {
-            const grp = await client.query(`SELECT group_id FROM account_groups WHERE (company_id = $1 OR company_id IS NULL) AND group_code = 'GRP-PURCHASE' LIMIT 1`, [companyId]);
-            const gid = grp.rows[0]?.group_id;
-            const newL = await client.query(`
-                INSERT INTO ledgers (company_id, group_id, ledger_name, ledger_code, opening_balance_type, current_balance_type)
-                VALUES ($1, $2, 'General Purchase Account', 'LED-PURCH-GEN', 'DR', 'DR') RETURNING ledger_id
-            `, [companyId, gid]);
-            purchaseLedgerId = newL.rows[0].ledger_id;
-        } else {
-            purchaseLedgerId = purchLedRes.rows[0].ledger_id;
+        let purchaseLedgerId = requestPurchaseLedgerId;
+        if (!purchaseLedgerId) {
+            let purchLedRes = await client.query(`SELECT ledger_id FROM ledgers WHERE company_id = $1 AND ledger_code = 'LED-PURCH-GEN'`, [companyId]);
+            if (purchLedRes.rows.length === 0) {
+                const grp = await client.query(`SELECT group_id FROM account_groups WHERE (company_id = $1 OR company_id IS NULL) AND group_code = 'GRP-PURCHASE' LIMIT 1`, [companyId]);
+                const gid = grp.rows[0]?.group_id;
+                const newL = await client.query(`
+                    INSERT INTO ledgers (company_id, group_id, ledger_name, ledger_code, opening_balance_type, current_balance_type)
+                    VALUES ($1, $2, 'General Purchase Account', 'LED-PURCH-GEN', 'DR', 'DR') RETURNING ledger_id
+                `, [companyId, gid]);
+                purchaseLedgerId = newL.rows[0].ledger_id;
+            } else {
+                purchaseLedgerId = purchLedRes.rows[0].ledger_id;
+            }
         }
 
         // 4. Calculate Items & Taxes
@@ -363,7 +377,7 @@ export const createPurchaseInvoice = async (req, res) => {
                 $18, 'UNPAID', 'POSTED', $19
             ) RETURNING *
         `, [
-            companyId, branchId, vendorProfile.vendor_profile_id, purchaseLedgerId, purchase_order_id, grn_id,
+            companyId, cleanBranchId, vendorProfile.vendor_profile_id, purchaseLedgerId, cleanPurchaseOrderId, cleanGrnId,
             internalEntryNo, supplier_invoice_number.trim(), supplier_invoice_date,
             calculatedDueDate, vendorStateCode,
             totalTaxable, totalCgst, totalSgst, totalIgst,
@@ -456,26 +470,25 @@ export const createPurchaseInvoice = async (req, res) => {
         // Increment Vendor Current Balance (Credit increases liability)
         await applyLedgerBalance(client, companyId, vendorProfile.ledger_id, 0, roundedTotal);
 
-        // Line 2+: DEBIT the asset received. A purchase of stock is not an
-        // expense until that stock is consumed or sold.
-        const stockTotals = new Map();
-        for (const item of calculatedItems) {
-            const stockCode = item.raw_material_id ? 'LED-STOCK-RAW' : 'LED-STOCK-FG';
-            const stockName = item.raw_material_id ? 'Raw Material Stock' : 'Finished Goods Stock';
-            const stockLedgerId = await getStockLedger(client, companyId, stockCode, stockName);
-            stockTotals.set(stockLedgerId, (stockTotals.get(stockLedgerId) || 0) + item.taxable_amount);
-        }
-        if (stockTotals.size === 0) {
-            const stockLedgerId = await getStockLedger(client, companyId, 'LED-STOCK-GEN', 'Stock-in-Hand');
-            stockTotals.set(stockLedgerId, totalTaxable);
-        }
-        for (const [stockLedgerId, stockAmount] of stockTotals) {
+        // Line 2: DEBIT Purchase Ledger (Direct Expense / Purchase Accounts)
+        await client.query(`
+            INSERT INTO voucher_lines (
+                voucher_id, line_number, ledger_id, debit_amount, credit_amount, narration
+            ) VALUES ($1, $2, $3, $4, 0.00, $5)
+        `, [voucher.voucher_id, lineNo++, purchaseLedgerId, totalTaxable, `Purchases from ${vendorProfile.vendor_trade_name} (Inv: ${supplier_invoice_number})`]);
+        await applyLedgerBalance(client, companyId, purchaseLedgerId, totalTaxable, 0);
+
+        // Line 2b: DEBIT Other Charges / Freight (if any)
+        const totalOtherExp = +(parseFloat(other_charges || 0) + parseFloat(freight_charges || 0)).toFixed(2);
+        let expLedId = null;
+        if (totalOtherExp > 0) {
+            expLedId = await getTaxLedger(client, companyId, 'LED-EXP-GEN', 'General Expense Account', 'EXPENSE');
             await client.query(`
                 INSERT INTO voucher_lines (
                     voucher_id, line_number, ledger_id, debit_amount, credit_amount, narration
-                ) VALUES ($1, $2, $3, $4, 0.00, $5)
-            `, [voucher.voucher_id, lineNo++, stockLedgerId, stockAmount, 'Stock received from vendor']);
-            await applyLedgerBalance(client, companyId, stockLedgerId, stockAmount, 0);
+                ) VALUES ($1, $2, $3, $4, 0.00, 'Other Charges / Freight Expense')
+            `, [voucher.voucher_id, lineNo++, expLedId, totalOtherExp]);
+            await applyLedgerBalance(client, companyId, expLedId, totalOtherExp, 0);
         }
 
         // Line 3: DEBIT CGST Input
@@ -522,6 +535,27 @@ export const createPurchaseInvoice = async (req, res) => {
                 ) VALUES ($1, $2, $3, $4, $5, 'Round Off Adjustment')
             `, [voucher.voucher_id, lineNo++, roLedId, roDr, roCr]);
             await applyLedgerBalance(client, companyId, roLedId, roDr, roCr);
+        }
+
+        // Recalculate balances for all affected ledgers
+        await recalculateLedgerBalance(client, purchaseLedgerId, companyId);
+        await recalculateLedgerBalance(client, vendorProfile.ledger_id, companyId);
+        if (expLedId) await recalculateLedgerBalance(client, expLedId, companyId);
+        if (totalCgst > 0) {
+            const cgstLedId = await getTaxLedger(client, companyId, 'LED-TAX-IN-CGST', 'Input CGST', 'CGST');
+            await recalculateLedgerBalance(client, cgstLedId, companyId);
+        }
+        if (totalSgst > 0) {
+            const sgstLedId = await getTaxLedger(client, companyId, 'LED-TAX-IN-SGST', 'Input SGST', 'SGST');
+            await recalculateLedgerBalance(client, sgstLedId, companyId);
+        }
+        if (totalIgst > 0) {
+            const igstLedId = await getTaxLedger(client, companyId, 'LED-TAX-IN-IGST', 'Input IGST', 'IGST');
+            await recalculateLedgerBalance(client, igstLedId, companyId);
+        }
+        if (roundOff !== 0) {
+            const roLedId = await getTaxLedger(client, companyId, 'LED-ROUND-OFF', 'Round Off Account', 'NONE');
+            await recalculateLedgerBalance(client, roLedId, companyId);
         }
 
         // Update purchase invoice with voucher reference
@@ -679,7 +713,7 @@ export const recordVendorPayment = async (req, res) => {
 
         const companyId = req.body.company_id || req.user?.company_id;
         const branchId = req.body.branch_id || req.user?.branch_id || null;
-        const createdBy = req.user?.employee_id || null;
+        const createdBy = await getValidEmployeeId(client, req.user?.employee_id);
 
         const paymentAmount = parseFloat(amount);
         if (!companyId || !vendor_id || !paymentAmount || paymentAmount <= 0) {

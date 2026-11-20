@@ -27,7 +27,9 @@ import {
   ShieldCheck,
   CreditCard,
   Package,
-  Wrench
+  Wrench,
+  Building2,
+  Wallet
 } from 'lucide-react';
 
 const SalesInvoiceManagement = () => {
@@ -43,6 +45,21 @@ const SalesInvoiceManagement = () => {
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
+  const [bankAccounts, setBankAccounts] = useState([]);
+  const [cashLedgers, setCashLedgers] = useState([]);
+  const [collectModalOpen, setCollectModalOpen] = useState(false);
+  const [collectingInvoice, setCollectingInvoice] = useState(null);
+  const [collectForm, setCollectForm] = useState({
+    amount: '',
+    payment_mode: 'BANK',
+    bank_account_id: '',
+    payment_ledger_id: '',
+    instrument_type: 'NEFT',
+    instrument_reference_number: '',
+    settlement_date: new Date().toISOString().split('T')[0],
+    narration: ''
+  });
+  const [submittingPayment, setSubmittingPayment] = useState(false);
 
   // Modals
   const [isCreateOpen, setIsCreateOpen] = useState(false);
@@ -291,6 +308,68 @@ const SalesInvoiceManagement = () => {
     };
   }, [form.items, form.freight_charges, form.other_charges, selectedCustomer, selectedQuotation, quotationEditMode]);
 
+  const handleOpenCollectModal = (invoice) => {
+    const preferredBank = bankAccounts.find(b => parseFloat(b.current_balance || 0) > 0) || bankAccounts[0];
+    const preferredCash = cashLedgers.find(c => parseFloat(c.current_balance || 0) > 0) || cashLedgers[0];
+    setCollectingInvoice(invoice);
+    setCollectForm({
+      amount: String(parseFloat(invoice.outstanding_amount || 0)),
+      payment_mode: 'BANK',
+      bank_account_id: preferredBank ? String(preferredBank.bank_account_id) : '',
+      payment_ledger_id: preferredCash ? String(preferredCash.ledger_id) : '',
+      instrument_type: 'NEFT',
+      instrument_reference_number: '',
+      settlement_date: new Date().toISOString().split('T')[0],
+      narration: `Receipt for invoice ${invoice.invoice_number}`
+    });
+    setCollectModalOpen(true);
+  };
+
+  const handleCollectSubmit = async (e) => {
+    e.preventDefault();
+    if (!collectingInvoice) return;
+    const amt = parseFloat(collectForm.amount);
+    if (!amt || amt <= 0) {
+      toast.error('Please enter a valid payment amount');
+      return;
+    }
+    const maxDue = parseFloat(collectingInvoice.outstanding_amount || 0);
+    if (amt > maxDue + 0.01) {
+      toast.error(`Amount cannot exceed outstanding due of ₹${maxDue.toFixed(2)}`);
+      return;
+    }
+
+    try {
+      setSubmittingPayment(true);
+      await salesApi.recordReceipt({
+        company_id: companyId,
+        customer_id: collectingInvoice.customer_id,
+        amount: amt,
+        payment_mode: collectForm.payment_mode,
+        bank_account_id: collectForm.payment_mode === 'BANK' ? collectForm.bank_account_id : null,
+        payment_ledger_id: collectForm.payment_mode === 'CASH' ? collectForm.payment_ledger_id : null,
+        payment_instrument_type: collectForm.instrument_type,
+        instrument_reference_number: collectForm.instrument_reference_number,
+        settlement_date: collectForm.settlement_date,
+        narration: collectForm.narration || `Payment collected for invoice ${collectingInvoice.invoice_number}`,
+        allocations: [{
+          invoice_id: collectingInvoice.sales_invoice_id,
+          allocated_amount: amt
+        }]
+      });
+
+      toast.success('Payment collected and deposited into account successfully!');
+      setCollectModalOpen(false);
+      setCollectingInvoice(null);
+      await Promise.all([fetchInvoices(), fetchDropdowns()]);
+    } catch (err) {
+      console.error(err);
+      toast.error(err.response?.data?.message || 'Failed to collect payment');
+    } finally {
+      setSubmittingPayment(false);
+    }
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!form.customer_id) {
@@ -310,8 +389,14 @@ const SalesInvoiceManagement = () => {
       setSubmitting(true);
       await salesApi.createInvoice({
         ...form,
+        quotation_id: form.quotation_id ? form.quotation_id : null,
         company_id: companyId,
-        branch_id: user?.branch_id || null
+        branch_id: user?.branch_id || null,
+        items: form.items.map(it => ({
+          ...it,
+          product_id: it.product_id ? it.product_id : null,
+          service_id: it.service_id ? it.service_id : null
+        }))
       });
       toast.success('Tax Invoice & Double-Entry Voucher posted successfully!');
       setIsCreateOpen(false);
@@ -474,16 +559,28 @@ const SalesInvoiceManagement = () => {
                       </div>
                     </td>
                     <td className="px-6 py-4 text-right">
-                      <button
-                        onClick={async () => {
-                          const res = await salesApi.getInvoiceById(inv.sales_invoice_id);
-                          setViewInvoice(res.data.data);
-                        }}
-                        className="p-1.5 hover:bg-slate-100 text-slate-600 rounded-lg transition inline-flex items-center gap-1 text-xs"
-                      >
-                        <Eye className="w-4 h-4" />
-                        Invoice
-                      </button>
+                      <div className="flex items-center justify-end gap-2">
+                        {parseFloat(inv.outstanding_amount || 0) > 0 && (
+                          <button
+                            onClick={() => handleOpenCollectModal(inv)}
+                            className="px-2.5 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 font-semibold rounded-lg transition inline-flex items-center gap-1 text-xs border border-emerald-200 shadow-xs"
+                            title="Collect Payment from Customer"
+                          >
+                            <DollarSign className="w-3.5 h-3.5" />
+                            Collect
+                          </button>
+                        )}
+                        <button
+                          onClick={async () => {
+                            const res = await salesApi.getInvoiceById(inv.sales_invoice_id);
+                            setViewInvoice(res.data.data);
+                          }}
+                          className="p-1.5 hover:bg-slate-100 text-slate-600 rounded-lg transition inline-flex items-center gap-1 text-xs"
+                        >
+                          <Eye className="w-4 h-4" />
+                          Invoice
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))

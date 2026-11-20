@@ -219,7 +219,12 @@ const ChartOfAccounts = () => {
       if (l.nature === 'LIABILITY' && !isInputTax) return acc + (l.current_balance_type === 'CR' ? balance : 0);
       return acc;
     }, 0);
-    return { totalLedgers, totalGroups, assetBal, liabBal };
+    const expBal = data.ledgers.reduce((acc, l) => {
+      const balance = parseFloat(l.current_balance || 0);
+      if (l.nature === 'EXPENSE') return acc + balance;
+      return acc;
+    }, 0);
+    return { totalLedgers, totalGroups, assetBal, liabBal, expBal };
   }, [data]);
 
   return (
@@ -247,7 +252,7 @@ const ChartOfAccounts = () => {
       </div>
 
       {/* KPI Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
         <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-sm">
           <p className="text-xs font-medium text-slate-500 uppercase tracking-wider">Total Groups</p>
           <h3 className="text-2xl font-bold text-slate-900 mt-1">{totals.totalGroups}</h3>
@@ -261,12 +266,17 @@ const ChartOfAccounts = () => {
         <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-sm">
           <p className="text-xs font-medium text-slate-500 uppercase tracking-wider">Current Assets Bal</p>
           <h3 className="text-2xl font-bold text-blue-600 mt-1">₹{totals.assetBal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</h3>
-          <p className="text-xs text-slate-500 mt-1">Bank, Cash, Sundry Debtors</p>
+          <p className="text-xs text-slate-500 mt-1">Bank, Cash, Stock, Debtors</p>
         </div>
         <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-sm">
           <p className="text-xs font-medium text-slate-500 uppercase tracking-wider">Liabilities & Tax Bal</p>
           <h3 className="text-2xl font-bold text-amber-600 mt-1">₹{totals.liabBal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</h3>
           <p className="text-xs text-slate-500 mt-1">Duties, Creditors, Capital</p>
+        </div>
+        <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-sm">
+          <p className="text-xs font-medium text-slate-500 uppercase tracking-wider">Total Expenses Bal</p>
+          <h3 className="text-2xl font-bold text-rose-600 mt-1">₹{totals.expBal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</h3>
+          <p className="text-xs text-slate-500 mt-1">Purchases, Direct & Indirect</p>
         </div>
       </div>
 

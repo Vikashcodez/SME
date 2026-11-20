@@ -31,6 +31,12 @@ const ReceiptManagement = () => {
   const [unpaidInvoices, setUnpaidInvoices] = useState([]);
   const [loadingInvoices, setLoadingInvoices] = useState(false);
 
+  // Bank & Cash accounts
+  const [bankAccounts, setBankAccounts] = useState([]);
+  const [selectedBankAccountId, setSelectedBankAccountId] = useState('');
+  const [cashLedgers, setCashLedgers] = useState([]);
+  const [selectedCashLedgerId, setSelectedCashLedgerId] = useState('');
+
   // Settlement Form
   const [receiptAmount, setReceiptAmount] = useState('');
   const [paymentMode, setPaymentMode] = useState('BANK'); // 'BANK' or 'CASH'
@@ -42,19 +48,61 @@ const ReceiptManagement = () => {
   const [selectedInvoiceId, setSelectedInvoiceId] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
-  // Fetch Customers
-  const fetchCustomers = async () => {
+  // Fetch Customers, Bank Accounts, and Cash Ledgers
+  const fetchDropdowns = async () => {
     if (!companyId) return;
     try {
-      const res = await customersApi.getAll({ company_id: companyId });
-      setCustomersList(res.data.data || []);
+      const [cRes, bRes, cashRes, coaRes] = await Promise.allSettled([
+        customersApi.getAll({ company_id: companyId }),
+        accountingApi.getBankAccounts({ company_id: companyId }),
+        accountingApi.getLedgers({ company_id: companyId, group_code: 'GRP-CASH,CASH_IN_HAND' }),
+        accountingApi.getChartOfAccounts({ company_id: companyId })
+      ]);
+
+      if (cRes.status === 'fulfilled') setCustomersList(cRes.value.data?.data || []);
+
+      // Extract bank accounts
+      let banks = [];
+      if (bRes.status === 'fulfilled' && bRes.value.data?.data?.length > 0) {
+        banks = bRes.value.data.data;
+      } else if (coaRes.status === 'fulfilled') {
+        const groups = coaRes.value.data?.data || [];
+        const bankGroup = groups.find(g => ['GRP-BANK', 'BANK_ACCOUNTS'].includes(g.group_code));
+        const bankLedgers = bankGroup?.ledgers || [];
+        banks = bankLedgers.map(l => ({
+          bank_account_id: l.ledger_id,
+          ledger_id: l.ledger_id,
+          bank_name: l.ledger_name,
+          account_number: l.ledger_code,
+          current_balance: l.current_balance,
+          current_balance_type: l.current_balance_type || 'DR'
+        }));
+      }
+      setBankAccounts(banks);
+      const fundedBank = banks.find(b => parseFloat(b.current_balance || 0) > 0) || banks[0];
+      if (fundedBank) {
+        setSelectedBankAccountId(prev => banks.some(b => String(b.bank_account_id) === String(prev)) && prev ? prev : String(fundedBank.bank_account_id));
+      }
+
+      // Extract cash ledgers
+      let cashList = (cashRes.status === 'fulfilled' && cashRes.value.data?.data) || [];
+      if (cashList.length === 0 && coaRes.status === 'fulfilled') {
+        const groups = coaRes.value.data?.data || [];
+        const cashGroup = groups.find(g => ['GRP-CASH', 'CASH_IN_HAND'].includes(g.group_code));
+        cashList = cashGroup?.ledgers || [];
+      }
+      setCashLedgers(cashList);
+      const fundedCash = cashList.find(c => parseFloat(c.current_balance || 0) > 0) || cashList[0];
+      if (fundedCash) {
+        setSelectedCashLedgerId(prev => cashList.some(c => String(c.ledger_id) === String(prev)) && prev ? prev : String(fundedCash.ledger_id));
+      }
     } catch (err) {
-      console.error(err);
+      console.error('Error loading dropdowns:', err);
     }
   };
 
   useEffect(() => {
-    fetchCustomers();
+    fetchDropdowns();
   }, [companyId]);
 
   // Fetch Unpaid Invoices when Customer changes
@@ -142,6 +190,8 @@ const ReceiptManagement = () => {
         customer_id: parseInt(selectedCustomerId),
         amount: amt,
         payment_mode: paymentMode,
+        bank_account_id: paymentMode === 'BANK' ? selectedBankAccountId : null,
+        payment_ledger_id: paymentMode === 'CASH' ? selectedCashLedgerId : null,
         payment_instrument_type: instrumentType,
         instrument_reference_number: refNumber,
         settlement_date: settlementDate,
@@ -157,7 +207,7 @@ const ReceiptManagement = () => {
       setAllocations({});
       setSelectedInvoiceId('');
       // Refresh customer invoices & data
-      fetchCustomers();
+      fetchDropdowns();
       const res = await salesApi.getInvoices({ company_id: companyId, customer_id: selectedCustomerId });
       setUnpaidInvoices((res.data.data || []).filter(inv => inv.payment_status !== 'PAID'));
     } catch (err) {
@@ -248,18 +298,120 @@ const ReceiptManagement = () => {
               />
             </div>
 
-            <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-3">
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1">Deposit To</label>
-                <select
-                  value={paymentMode}
-                  onChange={(e) => setPaymentMode(e.target.value)}
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:ring-2 focus:ring-indigo-500/20"
-                >
-                  <option value="BANK">Primary Bank Account</option>
-                  <option value="CASH">Cash in Hand</option>
-                </select>
+                <div className="grid grid-cols-2 gap-2 p-1 bg-slate-100 rounded-xl border border-slate-200">
+                  <button
+                    type="button"
+                    onClick={() => setPaymentMode('BANK')}
+                    className={`py-2 px-3 text-xs font-semibold rounded-lg transition flex items-center justify-center gap-1.5 ${
+                      paymentMode === 'BANK'
+                        ? 'bg-white text-indigo-700 shadow-sm'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    <Building2 className="w-3.5 h-3.5" />
+                    Bank Account
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPaymentMode('CASH')}
+                    className={`py-2 px-3 text-xs font-semibold rounded-lg transition flex items-center justify-center gap-1.5 ${
+                      paymentMode === 'CASH'
+                        ? 'bg-white text-emerald-700 shadow-sm'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    <Wallet className="w-3.5 h-3.5" />
+                    Cash in Hand
+                  </button>
+                </div>
               </div>
+
+              {paymentMode === 'BANK' ? (
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Select Bank Account *
+                  </label>
+                  {bankAccounts.length === 0 ? (
+                    <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-800">
+                      No registered bank accounts found. Please add a bank account in Ledger & Banking.
+                    </div>
+                  ) : (
+                    <>
+                      <select
+                        value={selectedBankAccountId}
+                        onChange={(e) => setSelectedBankAccountId(e.target.value)}
+                        className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-800 focus:ring-2 focus:ring-indigo-500/20"
+                        required
+                      >
+                        {bankAccounts.map((acc) => (
+                          <option key={acc.bank_account_id} value={acc.bank_account_id}>
+                            {acc.bank_name} - {acc.account_number} (Bal: ₹{parseFloat(acc.current_balance || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })} {acc.current_balance_type || 'DR'})
+                          </option>
+                        ))}
+                      </select>
+                      {(() => {
+                        const selBank = bankAccounts.find(b => String(b.bank_account_id) === String(selectedBankAccountId)) || bankAccounts[0];
+                        if (!selBank) return null;
+                        const curBal = parseFloat(selBank.current_balance || 0);
+                        const recAmt = parseFloat(receiptAmount || 0);
+                        const newBal = curBal + (Number.isFinite(recAmt) ? recAmt : 0);
+                        return (
+                          <div className="mt-2 p-2.5 bg-indigo-50/70 border border-indigo-100 rounded-xl text-xs flex justify-between items-center">
+                            <div>
+                              <span className="text-slate-500">Current Balance: </span>
+                              <span className="font-semibold text-slate-800">₹{curBal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                            </div>
+                            <div className="text-right">
+                              <span className="text-slate-500">After Deposit: </span>
+                              <span className="font-bold text-emerald-600">₹{newBal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                            </div>
+                          </div>
+                        );
+                      })()}
+                    </>
+                  )}
+                </div>
+              ) : (
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Cash in Hand Account
+                  </label>
+                  {cashLedgers.length > 1 ? (
+                    <select
+                      value={selectedCashLedgerId}
+                      onChange={(e) => setSelectedCashLedgerId(e.target.value)}
+                      className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-800 focus:ring-2 focus:ring-emerald-500/20"
+                    >
+                      {cashLedgers.map((c) => (
+                        <option key={c.ledger_id} value={c.ledger_id}>
+                          {c.ledger_name} (Bal: ₹{parseFloat(c.current_balance || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })} {c.current_balance_type || 'DR'})
+                        </option>
+                      ))}
+                    </select>
+                  ) : null}
+                  {(() => {
+                    const selCash = cashLedgers.find(c => String(c.ledger_id) === String(selectedCashLedgerId)) || cashLedgers[0];
+                    const curBal = parseFloat(selCash?.current_balance || 0);
+                    const recAmt = parseFloat(receiptAmount || 0);
+                    const newBal = curBal + (Number.isFinite(recAmt) ? recAmt : 0);
+                    return (
+                      <div className="mt-2 p-2.5 bg-emerald-50/70 border border-emerald-100 rounded-xl text-xs flex justify-between items-center">
+                        <div>
+                          <span className="text-slate-500">Current Cash in Hand: </span>
+                          <span className="font-semibold text-slate-800">₹{curBal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                        </div>
+                        <div className="text-right">
+                          <span className="text-slate-500">After Deposit: </span>
+                          <span className="font-bold text-emerald-600">₹{newBal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                        </div>
+                      </div>
+                    );
+                  })()}
+                </div>
+              )}
 
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1">Instrument Type</label>
@@ -313,8 +465,8 @@ const ReceiptManagement = () => {
             {/* Posting Summary Box */}
             <div className="bg-indigo-50/60 p-3 rounded-xl border border-indigo-100 text-xs space-y-1 font-mono">
               <div className="font-bold text-indigo-900 mb-1">Auto Double-Entry Posting:</div>
-              <div className="text-slate-700">DR: {paymentMode === 'CASH' ? 'Cash in Hand' : 'Bank Account'} ₹{parseFloat(receiptAmount || 0).toFixed(2)}</div>
-              <div className="text-slate-700">CR: Customer Ledger ₹{parseFloat(receiptAmount || 0).toFixed(2)}</div>
+              <div className="text-slate-700">DR: {paymentMode === 'CASH' ? 'Cash in Hand' : 'Selected Bank Account'} ₹{parseFloat(receiptAmount || 0).toFixed(2)}</div>
+              <div className="text-slate-700">CR: General Sales Account (Income) ₹{parseFloat(receiptAmount || 0).toFixed(2)}</div>
             </div>
 
             <button

@@ -1,6 +1,23 @@
 import pool from '../config/database.js';
 import { applyLedgerBalance } from '../services/AccountingPosting.js';
 import { resolveTaxRates } from '../services/TaxMaster.js';
+import { recalculateLedgerBalance } from './Accounting.Controller.js';
+
+// Helper: Sanitize foreign keys / BigInt IDs (convert empty string, 'null', etc. to null)
+const sanitizeId = (id) => {
+    if (id === undefined || id === null) return null;
+    const str = String(id).trim();
+    if (str === '' || str === 'null' || str === 'undefined') return null;
+    return str;
+};
+
+// Helper: Ensure employee ID exists to avoid foreign key violations with stale tokens or super admins
+const getValidEmployeeId = async (client, employeeId) => {
+    const cleanId = sanitizeId(employeeId);
+    if (!cleanId) return null;
+    const res = await client.query('SELECT employee_id FROM employees WHERE employee_id = $1 LIMIT 1', [cleanId]);
+    return res.rows.length > 0 ? res.rows[0].employee_id : null;
+};
 
 // Helper: Generate sequential invoice / quotation / order numbers
 const generateDocNumber = async (client, companyId, prefix) => {
@@ -35,19 +52,21 @@ export const createSalesInvoice = async (req, res) => {
             invoice_type = 'TAX_INVOICE'
         } = req.body;
 
-        const companyId = req.body.company_id || req.user?.company_id;
-        const branchId = req.body.branch_id || req.user?.branch_id || null;
-        const createdBy = req.user?.employee_id || null;
-        let customer_id = requestCustomerId;
+        const companyId = sanitizeId(req.body.company_id || req.user?.company_id);
+        const branchId = sanitizeId(req.body.branch_id || req.user?.branch_id);
+        const createdBy = await getValidEmployeeId(client, req.user?.employee_id);
+        let customer_id = sanitizeId(requestCustomerId);
+        const cleanSalesOrderId = sanitizeId(sales_order_id);
+        const cleanQuotationId = sanitizeId(quotation_id);
         let items = requestItems;
         let quotation = null;
 
-        if (quotation_id) {
+        if (cleanQuotationId) {
             const quotationRes = await client.query(`
                 SELECT * FROM quotations
                 WHERE quotation_id = $1 AND company_id = $2
                 FOR UPDATE
-            `, [quotation_id, companyId]);
+            `, [cleanQuotationId, companyId]);
             if (quotationRes.rows.length === 0) {
                 throw new Error('Quotation not found.');
             }
@@ -58,7 +77,7 @@ export const createSalesInvoice = async (req, res) => {
 
             const existingInvoice = await client.query(
                 `SELECT sales_invoice_id FROM sales_invoices WHERE quotation_id = $1 LIMIT 1`,
-                [quotation_id]
+                [cleanQuotationId]
             );
             if (existingInvoice.rows.length > 0) {
                 throw new Error('This quotation is already converted to a sales invoice.');
@@ -239,7 +258,7 @@ export const createSalesInvoice = async (req, res) => {
 
         // Fetch / Ensure General Sales Ledger
         const salesLedRes = await client.query(
-            `SELECT ledger_id FROM ledgers WHERE company_id = $1 AND ledger_code = 'SALES_GEN'`,
+            `SELECT ledger_id FROM ledgers WHERE company_id = $1 AND (ledger_code = 'LED-SALES-GEN' OR ledger_code = 'SALES_GEN') ORDER BY (ledger_code = 'LED-SALES-GEN') DESC LIMIT 1`,
             [companyId]
         );
         let salesLedgerId;
@@ -249,7 +268,7 @@ export const createSalesInvoice = async (req, res) => {
             const gid = grpRes.rows[0]?.group_id;
             const newLed = await client.query(`
                 INSERT INTO ledgers (company_id, group_id, ledger_name, ledger_code, opening_balance_type, current_balance_type)
-                VALUES ($1, $2, 'General Sales', 'SALES_GEN', 'CR', 'CR') RETURNING ledger_id
+                VALUES ($1, $2, 'General Sales Account', 'LED-SALES-GEN', 'CR', 'CR') RETURNING ledger_id
             `, [companyId, gid]);
             salesLedgerId = newLed.rows[0].ledger_id;
         } else {
@@ -260,7 +279,12 @@ export const createSalesInvoice = async (req, res) => {
         const invoiceNumber = await generateDocNumber(client, companyId, 'INV');
         const calculatedDueDate = due_date || invoice_date;
 
-        // 1. Insert Sales Invoice Header
+        // 1. Insert Sales Invoice Header (Default: UNPAID with full amount in outstanding customer due)
+        const isPaidImmediately = Boolean(req.body.is_paid || req.body.payment_received);
+        const initialPaid = isPaidImmediately ? roundedTotal : 0.00;
+        const initialOutstanding = isPaidImmediately ? 0.00 : roundedTotal;
+        const initialPaymentStatus = isPaidImmediately ? 'PAID' : 'UNPAID';
+
         const invRes = await client.query(`
             INSERT INTO sales_invoices (
                 company_id, branch_id, customer_id, sales_ledger_id,
@@ -277,15 +301,16 @@ export const createSalesInvoice = async (req, res) => {
                 $12, $13,
                 $14, $15, $16,
                 $17, $18, $19, $20,
-                0.00, $20, 'UNPAID', 'POSTED', $21
+                $21, $22, $23, 'POSTED', $24
             ) RETURNING *
         `, [
             companyId, branchId, customer_id, salesLedgerId,
-            invoiceNumber, invoice_date, calculatedDueDate, sales_order_id, quotation_id,
+            invoiceNumber, invoice_date, calculatedDueDate, cleanSalesOrderId, cleanQuotationId,
             invoice_type, customerStateCode,
             totalTaxable, totalDiscount,
             totalCgst, totalSgst, totalIgst,
             freight, other, roundOff, roundedTotal,
+            initialPaid, initialOutstanding, initialPaymentStatus,
             createdBy
         ]);
         const invoice = invRes.rows[0];
@@ -308,7 +333,7 @@ export const createSalesInvoice = async (req, res) => {
                     $20, $21, $22
                 )
             `, [
-                invoice.sales_invoice_id, i + 1, it.item_type || 'PRODUCT', it.product_id, it.service_id,
+                invoice.sales_invoice_id, i + 1, it.item_type || 'PRODUCT', sanitizeId(it.product_id), sanitizeId(it.service_id),
                 it.item_name, it.item_code, it.hsn_sac_code,
                 it.quantity, it.unit_of_measure, it.unit_rate, it.discount_percentage, it.discount_amount,
                 it.taxable_amount, it.tax_rate, it.cgst_rate, it.cgst_amount, it.sgst_rate, it.sgst_amount,
@@ -338,27 +363,27 @@ export const createSalesInvoice = async (req, res) => {
                 is_posted, created_by, posted_by, posted_at
             ) VALUES (
                 $1, $2, $3, $4, $5,
-                $6, $5, $7, 'SALES_INVOICE', $9,
-                TRUE, $8, $8, CURRENT_TIMESTAMP
+                $6, $5, $7, 'SALES_INVOICE', $8,
+                $9, $10, $10, CURRENT_TIMESTAMP
             ) RETURNING *
         `, [
             companyId, branchId, voucherTypeId, vNum, invoice_date,
             invoiceNumber, `Sales Invoice ${invoiceNumber} issued to ${customer.trade_name}`,
-            createdBy, invoice.sales_invoice_id
+            invoice.sales_invoice_id, isPaidImmediately, createdBy
         ]);
         const voucher = voucherRes.rows[0];
 
         // Voucher Lines
         let lineNo = 1;
 
-        // Line 1: DEBIT Customer Ledger
+        // Line 1: Customer Bill Reference
         const custVl = await client.query(`
             INSERT INTO voucher_lines (
                 voucher_id, line_number, ledger_id, debit_amount, credit_amount, narration
             ) VALUES ($1, $2, $3, $4, 0.00, $5) RETURNING line_id
         `, [voucher.voucher_id, lineNo++, customer.ledger_id, roundedTotal, `Bill: ${invoiceNumber}`]);
 
-        // Bill Allocation: NEW_REF for Customer
+        // Bill Allocation: NEW_REF for Customer Outstanding Due
         await client.query(`
             INSERT INTO bill_allocations (
                 voucher_line_id, ledger_id, reference_type, bill_reference_no,
@@ -366,17 +391,17 @@ export const createSalesInvoice = async (req, res) => {
             ) VALUES ($1, $2, 'NEW_REF', $3, $4, 'DR', $5)
         `, [custVl.rows[0].line_id, customer.ledger_id, invoiceNumber, roundedTotal, calculatedDueDate]);
 
-        // Update Customer Ledger Current Balance (Increase Debit)
-        await applyLedgerBalance(client, companyId, customer.ledger_id, roundedTotal, 0);
-
-        // Line 2: CREDIT Sales Ledger
+        // Line 2: Sales Revenue Ledger
         await client.query(`
             INSERT INTO voucher_lines (
                 voucher_id, line_number, ledger_id, debit_amount, credit_amount, narration
             ) VALUES ($1, $2, $3, 0.00, $4, 'Sales Revenue')
         `, [voucher.voucher_id, lineNo++, salesLedgerId, totalTaxable]);
 
-        await applyLedgerBalance(client, companyId, salesLedgerId, 0, totalTaxable);
+        // If paid immediately at sale time, update ledger balances; otherwise do not add to accounts until customer pays
+        if (isPaidImmediately) {
+            await applyLedgerBalance(client, companyId, salesLedgerId, 0, totalTaxable);
+        }
 
         // Helper: Find or create tax ledgers
         const getTaxLedger = async (code, name, taxType = 'NONE') => {
@@ -445,10 +470,12 @@ export const createSalesInvoice = async (req, res) => {
             WHERE sales_invoice_id = $2
         `, [voucher.voucher_id, invoice.sales_invoice_id]);
 
-        if (quotation_id) {
+        await recalculateLedgerBalance(client, salesLedgerId, companyId);
+
+        if (cleanQuotationId) {
             await client.query(
                 `UPDATE quotations SET status = 'CONVERTED', updated_at = CURRENT_TIMESTAMP WHERE quotation_id = $1`,
-                [quotation_id]
+                [cleanQuotationId]
             );
         }
 
@@ -587,20 +614,24 @@ export const recordReceiptSettlement = async (req, res) => {
         const {
             customer_id,
             payment_mode = 'BANK', // 'BANK' or 'CASH'
+            bank_account_id = null,
+            payment_ledger_id = null,
             payment_instrument_type = 'NEFT', // CASH, CHEQUE, NEFT, RTGS, IMPS, UPI, CARD
             settlement_date = new Date().toISOString().split('T')[0],
             amount,
             instrument_reference_number,
             narration,
-            allocations = [] // [{ invoice_id, allocated_amount }]
+            allocations = [], // [{ invoice_id, allocated_amount }]
+            invoices_to_settle = []
         } = req.body;
 
-        const companyId = req.body.company_id || req.user?.company_id;
-        const branchId = req.body.branch_id || req.user?.branch_id || null;
-        const createdBy = req.user?.employee_id || null;
+        const companyId = sanitizeId(req.body.company_id || req.user?.company_id);
+        const branchId = sanitizeId(req.body.branch_id || req.user?.branch_id);
+        const createdBy = await getValidEmployeeId(client, req.user?.employee_id);
+        const cleanCustomerId = sanitizeId(customer_id);
 
         const receiptAmount = parseFloat(amount);
-        if (!companyId || !customer_id || !receiptAmount || receiptAmount <= 0) {
+        if (!companyId || !cleanCustomerId || !receiptAmount || receiptAmount <= 0) {
             await client.query('ROLLBACK');
             return res.status(400).json({
                 success: false,
@@ -608,44 +639,44 @@ export const recordReceiptSettlement = async (req, res) => {
             });
         }
 
-        // Fetch customer ledger
+        // Fetch customer ledger & profile
         const custRes = await client.query(`
-            SELECT cp.*, l.ledger_id 
+            SELECT cp.*, l.ledger_id, l.ledger_name
             FROM customer_profiles cp 
             JOIN ledgers l ON cp.ledger_id = l.ledger_id 
             WHERE cp.customer_id = $1
-        `, [customer_id]);
+        `, [cleanCustomerId]);
         if (custRes.rows.length === 0) {
             await client.query('ROLLBACK');
             return res.status(404).json({ success: false, message: 'Customer not found' });
         }
-        const customerLedgerId = custRes.rows[0].ledger_id;
+        const customer = custRes.rows[0];
+        const customerLedgerId = customer.ledger_id;
 
-        const normalizedAllocations = allocations
+        const rawAllocs = (allocations && allocations.length > 0)
+            ? allocations
+            : (invoices_to_settle && invoices_to_settle.length > 0)
+            ? invoices_to_settle
+            : (req.body.invoice_id ? [{ invoice_id: req.body.invoice_id, allocated_amount: receiptAmount }] : []);
+
+        const normalizedAllocations = rawAllocs
             .map((allocation) => ({
-                invoice_id: Number(allocation.invoice_id),
-                allocated_amount: Number(allocation.allocated_amount)
+                invoice_id: Number(allocation.invoice_id || allocation.sales_invoice_id),
+                allocated_amount: Number(allocation.allocated_amount || allocation.amount)
             }))
             .filter((allocation) => Number.isInteger(allocation.invoice_id) && allocation.allocated_amount > 0);
 
-        if (normalizedAllocations.length > 1) {
-            await client.query('ROLLBACK');
-            return res.status(400).json({
-                success: false,
-                message: 'Select only one invoice for a receipt settlement.'
-            });
-        }
-
+        let settledInvoice = null;
         if (normalizedAllocations.length === 1) {
             const allocation = normalizedAllocations[0];
             const invoiceRes = await client.query(`
-                SELECT sales_invoice_id, outstanding_amount, payment_status
+                SELECT sales_invoice_id, invoice_number, outstanding_amount, paid_amount, net_total_amount, payment_status, sales_ledger_id
                 FROM sales_invoices
                 WHERE sales_invoice_id = $1
                   AND customer_id = $2
                   AND company_id = $3
                 FOR UPDATE
-            `, [allocation.invoice_id, customer_id, companyId]);
+            `, [allocation.invoice_id, cleanCustomerId, companyId]);
 
             if (invoiceRes.rows.length === 0) {
                 await client.query('ROLLBACK');
@@ -655,8 +686,9 @@ export const recordReceiptSettlement = async (req, res) => {
                 });
             }
 
-            const outstandingAmount = Number(invoiceRes.rows[0].outstanding_amount) || 0;
-            if (invoiceRes.rows[0].payment_status === 'PAID' || outstandingAmount <= 0) {
+            settledInvoice = invoiceRes.rows[0];
+            const outstandingAmount = Number(settledInvoice.outstanding_amount) || 0;
+            if (settledInvoice.payment_status === 'PAID' || outstandingAmount <= 0) {
                 await client.query('ROLLBACK');
                 return res.status(400).json({
                     success: false,
@@ -679,90 +711,225 @@ export const recordReceiptSettlement = async (req, res) => {
                     message: 'The invoice allocation must equal the receipt amount.'
                 });
             }
-        } else if (allocations.length > 0) {
-            await client.query('ROLLBACK');
-            return res.status(400).json({
-                success: false,
-                message: 'A valid invoice selection is required for this receipt.'
-            });
         }
 
-        // Fetch payment ledger (Cash or Bank)
-        const paymentCode = payment_mode === 'CASH' ? 'CASH' : 'BANK_PRIMARY';
-        const payLedRes = await client.query(
-            `SELECT ledger_id FROM ledgers WHERE company_id = $1 AND ledger_code = $2`,
-            [companyId, paymentCode]
-        );
-        let paymentLedgerId;
-        if (payLedRes.rows.length === 0) {
-            // Fallback to any Cash/Bank ledger
-            const fallbackRes = await client.query(`
-                SELECT l.ledger_id FROM ledgers l
-                JOIN account_groups ag ON l.group_id = ag.group_id
-                WHERE l.company_id = $1 AND ag.group_code IN ('GRP-CASH', 'GRP-BANK', 'CASH_IN_HAND', 'BANK_ACCOUNTS')
-                LIMIT 1
-            `, [companyId]);
-            paymentLedgerId = fallbackRes.rows[0]?.ledger_id;
+        // Resolve Bank or Cash Payment Ledger
+        let targetPaymentLedgerId = null;
+        let selectedBankDetails = null;
+
+        if (payment_mode === 'BANK') {
+            if (bank_account_id) {
+                const baRes = await client.query(`
+                    SELECT ba.bank_account_id, ba.ledger_id, ba.bank_name, ba.account_number
+                    FROM bank_accounts ba
+                    WHERE (ba.bank_account_id::TEXT = $1 OR ba.ledger_id::TEXT = $1)
+                      AND ba.company_id = $2 AND ba.is_active = TRUE
+                `, [String(bank_account_id), companyId]);
+                if (baRes.rows.length > 0) {
+                    targetPaymentLedgerId = baRes.rows[0].ledger_id;
+                    selectedBankDetails = baRes.rows[0];
+                } else {
+                    const ledCheck = await client.query(`
+                        SELECT l.ledger_id, l.ledger_name, l.ledger_code
+                        FROM ledgers l
+                        JOIN account_groups ag ON ag.group_id = l.group_id
+                        WHERE l.ledger_id::TEXT = $1 AND l.company_id = $2 AND ag.group_code IN ('GRP-BANK', 'BANK_ACCOUNTS') AND l.is_active = TRUE
+                    `, [String(bank_account_id), companyId]);
+                    if (ledCheck.rows.length > 0) {
+                        targetPaymentLedgerId = ledCheck.rows[0].ledger_id;
+                        selectedBankDetails = {
+                            bank_account_id: ledCheck.rows[0].ledger_id,
+                            bank_name: ledCheck.rows[0].ledger_name,
+                            account_number: ledCheck.rows[0].ledger_code,
+                            ledger_id: ledCheck.rows[0].ledger_id
+                        };
+                    }
+                }
+            }
+
+            if (!targetPaymentLedgerId) {
+                const defaultBankRes = await client.query(`
+                    SELECT ba.bank_account_id, ba.ledger_id, ba.bank_name, ba.account_number
+                    FROM bank_accounts ba
+                    WHERE ba.company_id = $1 AND ba.is_active = TRUE
+                    ORDER BY ba.bank_account_id ASC LIMIT 1
+                `, [companyId]);
+                if (defaultBankRes.rows.length > 0) {
+                    targetPaymentLedgerId = defaultBankRes.rows[0].ledger_id;
+                    selectedBankDetails = defaultBankRes.rows[0];
+                } else {
+                    const fallbackRes = await client.query(`
+                        SELECT l.ledger_id, l.ledger_name, l.ledger_code
+                        FROM ledgers l
+                        JOIN account_groups ag ON l.group_id = ag.group_id
+                        WHERE l.company_id = $1 AND ag.group_code IN ('GRP-BANK', 'BANK_ACCOUNTS') AND l.is_active = TRUE
+                        ORDER BY (l.ledger_code = 'LED-BANK-MAIN') DESC, l.ledger_id ASC
+                        LIMIT 1
+                    `, [companyId]);
+                    if (fallbackRes.rows.length > 0) {
+                        targetPaymentLedgerId = fallbackRes.rows[0].ledger_id;
+                        selectedBankDetails = {
+                            bank_account_id: fallbackRes.rows[0].ledger_id,
+                            bank_name: fallbackRes.rows[0].ledger_name,
+                            account_number: fallbackRes.rows[0].ledger_code,
+                            ledger_id: fallbackRes.rows[0].ledger_id
+                        };
+                    }
+                }
+            }
+
+            if (!targetPaymentLedgerId) {
+                await client.query('ROLLBACK');
+                return res.status(400).json({
+                    success: false,
+                    message: 'No registered bank accounts found. Please add a bank account in Ledger & Banking.'
+                });
+            }
         } else {
-            paymentLedgerId = payLedRes.rows[0].ledger_id;
+            // CASH mode
+            if (payment_ledger_id) {
+                const ledCheck = await client.query(`
+                    SELECT l.ledger_id, l.ledger_name, l.current_balance, l.current_balance_type
+                    FROM ledgers l
+                    JOIN account_groups ag ON ag.group_id = l.group_id
+                    WHERE l.ledger_id::TEXT = $1 AND l.company_id = $2 AND ag.group_code IN ('GRP-CASH', 'CASH_IN_HAND') AND l.is_active = TRUE
+                `, [String(payment_ledger_id), companyId]);
+                if (ledCheck.rows.length > 0) {
+                    targetPaymentLedgerId = ledCheck.rows[0].ledger_id;
+                }
+            }
+
+            if (!targetPaymentLedgerId) {
+                const fundedCashRes = await client.query(`
+                    SELECT l.ledger_id FROM ledgers l
+                    JOIN account_groups ag ON ag.group_id = l.group_id
+                    WHERE l.company_id = $1 AND ag.group_code IN ('GRP-CASH', 'CASH_IN_HAND') AND l.current_balance > 0 AND l.is_active = TRUE
+                    ORDER BY l.current_balance DESC
+                    LIMIT 1
+                `, [companyId]);
+                if (fundedCashRes.rows.length > 0) {
+                    targetPaymentLedgerId = fundedCashRes.rows[0].ledger_id;
+                } else {
+                    let payLedRes = await client.query(
+                        `SELECT ledger_id FROM ledgers WHERE company_id = $1 AND ledger_code = 'LED-CASH-MAIN' AND is_active = TRUE`,
+                        [companyId]
+                    );
+                    if (payLedRes.rows.length > 0) {
+                        targetPaymentLedgerId = payLedRes.rows[0].ledger_id;
+                    } else {
+                        const fallbackRes = await client.query(`
+                            SELECT l.ledger_id FROM ledgers l
+                            JOIN account_groups ag ON l.group_id = ag.group_id
+                            WHERE l.company_id = $1 AND ag.group_code IN ('GRP-CASH', 'CASH_IN_HAND') AND l.is_active = TRUE
+                            LIMIT 1
+                        `, [companyId]);
+                        targetPaymentLedgerId = fallbackRes.rows[0]?.ledger_id;
+                    }
+                }
+            }
+
+            if (!targetPaymentLedgerId) {
+                await client.query('ROLLBACK');
+                return res.status(400).json({
+                    success: false,
+                    message: 'No cash in hand ledger found. Please check Chart of Accounts.'
+                });
+            }
         }
 
-        // Post Double-Entry Receipt Voucher
+        // Resolve General Sales Ledger for Income Recognition
+        let targetSalesLedgerId = settledInvoice?.sales_ledger_id;
+        if (!targetSalesLedgerId) {
+            const salesLedRes = await client.query(
+                `SELECT ledger_id FROM ledgers WHERE company_id = $1 AND (ledger_code = 'LED-SALES-GEN' OR ledger_code = 'SALES_GEN')`,
+                [companyId]
+            );
+            if (salesLedRes.rows.length > 0) {
+                targetSalesLedgerId = salesLedRes.rows[0].ledger_id;
+            } else {
+                const grpRes = await client.query(`SELECT group_id FROM account_groups WHERE (company_id = $1 OR company_id IS NULL) AND (group_code = 'GRP-SALES' OR group_code = 'SALES_ACCOUNTS') LIMIT 1`, [companyId]);
+                const gid = grpRes.rows[0]?.group_id;
+                const newLed = await client.query(`
+                    INSERT INTO ledgers (company_id, group_id, ledger_name, ledger_code, opening_balance_type, current_balance_type)
+                    VALUES ($1, $2, 'General Sales Account', 'LED-SALES-GEN', 'CR', 'CR') RETURNING ledger_id
+                `, [companyId, gid]);
+                targetSalesLedgerId = newLed.rows[0].ledger_id;
+            }
+        }
+
+        // Post Double-Entry Receipt Voucher (VCH-RECEIPT)
         const vtRes = await client.query(`SELECT voucher_type_id FROM voucher_types WHERE voucher_type_code IN ('VCH-RECEIPT', 'RECEIPT') LIMIT 1`);
         const voucherTypeId = vtRes.rows[0]?.voucher_type_id;
 
         const countV = await client.query(`SELECT COUNT(*)::INT AS cnt FROM vouchers WHERE company_id = $1`, [companyId]);
         const vNum = `RCT-${new Date().getFullYear()}-${(countV.rows[0].cnt + 1).toString().padStart(4, '0')}`;
 
-        // 1. Voucher Header
+        const receiptNarration = narration || (
+            payment_mode === 'BANK' && selectedBankDetails
+                ? `Receipt of ₹${receiptAmount.toFixed(2)} from ${customer.trade_name} to ${selectedBankDetails.bank_name} (${selectedBankDetails.account_number})`
+                : `Receipt of ₹${receiptAmount.toFixed(2)} from ${customer.trade_name} via ${payment_mode === 'CASH' ? 'Cash in Hand' : 'Bank'}`
+        );
+
+        // 1. Voucher Header (is_posted = TRUE, source_module = 'RECEIPT')
         const voucherRes = await client.query(`
             INSERT INTO vouchers (
                 company_id, branch_id, voucher_type_id, voucher_number, voucher_date,
-                reference_number, narration, source_module, source_document_id,
+                reference_number, reference_date, narration, source_module, source_document_id,
                 is_posted, created_by, posted_by, posted_at
             ) VALUES (
                 $1, $2, $3, $4, $5,
-                $6, $7, 'RECEIPT', NULL, TRUE, $8, $8, CURRENT_TIMESTAMP
+                $6, $5, $7, 'RECEIPT', $8,
+                TRUE, $9, $9, CURRENT_TIMESTAMP
             ) RETURNING *
         `, [
             companyId, branchId, voucherTypeId, vNum, settlement_date,
-            instrument_reference_number || null,
-            narration || `Receipt of ₹${receiptAmount.toFixed(2)} from ${custRes.rows[0].trade_name}`,
+            instrument_reference_number || vNum,
+            receiptNarration,
+            settledInvoice ? settledInvoice.sales_invoice_id : null,
             createdBy
         ]);
         const voucher = voucherRes.rows[0];
 
-        // 2. Line 1: DEBIT Bank / Cash Ledger
+        // 2. Line 1: DEBIT Bank / Cash Ledger (Adds money to Bank or Cash in Hand)
+        const line1Narration = payment_mode === 'BANK' && selectedBankDetails
+            ? `Deposited to ${selectedBankDetails.bank_name} (${selectedBankDetails.account_number}) ref: ${instrument_reference_number || vNum}`
+            : `Received via ${payment_mode} ref: ${instrument_reference_number || vNum}`;
+
         await client.query(`
             INSERT INTO voucher_lines (
                 voucher_id, line_number, ledger_id, debit_amount, credit_amount, narration
             ) VALUES ($1, 1, $2, $3, 0.00, $4)
-        `, [voucher.voucher_id, paymentLedgerId, receiptAmount, `Receipt Ref: ${instrument_reference_number || vNum}`]);
+        `, [voucher.voucher_id, targetPaymentLedgerId, receiptAmount, line1Narration]);
 
-        // Update Bank/Cash balance (Increase Debit)
-        await applyLedgerBalance(client, companyId, paymentLedgerId, receiptAmount, 0);
+        await applyLedgerBalance(client, companyId, targetPaymentLedgerId, receiptAmount, 0);
 
-        // 3. Line 2: CREDIT Customer Ledger
-        const custLineRes = await client.query(`
+        // 3. Line 2: CREDIT General Sales / Income Ledger (Recognizes revenue into accounts)
+        const line2Narration = settledInvoice
+            ? `Sales income from ${customer.trade_name} (Inv: ${settledInvoice.invoice_number})`
+            : `Sales income from ${customer.trade_name}`;
+
+        const creditLineRes = await client.query(`
             INSERT INTO voucher_lines (
                 voucher_id, line_number, ledger_id, debit_amount, credit_amount, narration
             ) VALUES ($1, 2, $2, 0.00, $3, $4) RETURNING line_id
-        `, [voucher.voucher_id, customerLedgerId, receiptAmount, `Settlement for ${custRes.rows[0].trade_name}`]);
-        const custVoucherLineId = custLineRes.rows[0].line_id;
+        `, [voucher.voucher_id, targetSalesLedgerId, receiptAmount, line2Narration]);
+        const creditVoucherLineId = creditLineRes.rows[0].line_id;
 
-        // Update Customer Ledger balance (Decrease Debit)
-        await applyLedgerBalance(client, companyId, customerLedgerId, 0, receiptAmount);
+        await applyLedgerBalance(client, companyId, targetSalesLedgerId, 0, receiptAmount);
 
-        // 4. Process Bill-Wise Allocations & Update Invoices
+        // 4. Update Invoices & Bill Allocations
         let allocatedTotal = 0;
         for (const alloc of normalizedAllocations) {
             const allocAmt = parseFloat(alloc.allocated_amount);
             if (alloc.invoice_id && allocAmt > 0) {
-                const invCheck = await client.query(`SELECT * FROM sales_invoices WHERE sales_invoice_id = $1`, [alloc.invoice_id]);
+                const invCheck = await client.query(
+                    `SELECT * FROM sales_invoices WHERE sales_invoice_id = $1 FOR UPDATE`,
+                    [alloc.invoice_id]
+                );
                 if (invCheck.rows.length > 0) {
                     const inv = invCheck.rows[0];
-                    const newPaid = parseFloat(inv.paid_amount) + allocAmt;
-                    const newOutstanding = Math.max(0, parseFloat(inv.net_total_amount) - newPaid);
+                    const newPaid = +(parseFloat(inv.paid_amount || 0) + allocAmt).toFixed(2);
+                    const newOutstanding = Math.max(0, +(parseFloat(inv.net_total_amount) - newPaid).toFixed(2));
                     const newStatus = newOutstanding <= 0.01 ? 'PAID' : 'PARTIALLY_PAID';
 
                     await client.query(`
@@ -777,7 +944,7 @@ export const recordReceiptSettlement = async (req, res) => {
                             voucher_line_id, ledger_id, reference_type, bill_reference_no,
                             amount, dr_cr
                         ) VALUES ($1, $2, 'AGST_REF', $3, $4, 'CR')
-                    `, [custVoucherLineId, customerLedgerId, inv.invoice_number, allocAmt]);
+                    `, [creditVoucherLineId, customerLedgerId, inv.invoice_number, allocAmt]);
 
                     allocatedTotal += allocAmt;
                 }
@@ -801,22 +968,29 @@ export const recordReceiptSettlement = async (req, res) => {
             ) RETURNING *
         `, [
             companyId, branchId, vNum, settlement_date,
-            customerLedgerId, paymentLedgerId, receiptAmount, unallocatedAmount,
+            customerLedgerId, targetPaymentLedgerId, receiptAmount, unallocatedAmount,
             payment_instrument_type, instrument_reference_number || null,
             voucher.voucher_id, createdBy
         ]);
+
+        // Recalculate balances from audit lines to guarantee consistency
+        await recalculateLedgerBalance(client, targetPaymentLedgerId, companyId);
+        await recalculateLedgerBalance(client, targetSalesLedgerId, companyId);
+        if (customerLedgerId) {
+            await recalculateLedgerBalance(client, customerLedgerId, companyId);
+        }
 
         await client.query('COMMIT');
 
         return res.status(201).json({
             success: true,
-            message: 'Receipt recorded and allocated against invoices successfully',
+            message: 'Receipt recorded, deposited into account, and posted to accounts successfully',
             data: {
                 settlement: settlementRes.rows[0],
-                voucher: voucher
+                voucher_id: voucher.voucher_id,
+                voucher_number: voucher.voucher_number
             }
         });
-
     } catch (error) {
         await client.query('ROLLBACK');
         console.error('Error in recordReceiptSettlement:', error);
@@ -825,7 +999,6 @@ export const recordReceiptSettlement = async (req, res) => {
         client.release();
     }
 };
-
 // =========================================================================
 // 5. SALES QUOTATIONS
 // =========================================================================
@@ -856,11 +1029,12 @@ export const createQuotation = async (req, res) => {
     try {
         await client.query('BEGIN');
         const { customer_id, quotation_date = new Date().toISOString().split('T')[0], valid_until, items = [], terms_and_conditions } = req.body;
-        const companyId = req.body.company_id || req.user?.company_id;
-        const branchId = req.body.branch_id || req.user?.branch_id || null;
-        const createdBy = req.user?.employee_id || null;
+        const companyId = sanitizeId(req.body.company_id || req.user?.company_id);
+        const branchId = sanitizeId(req.body.branch_id || req.user?.branch_id);
+        const createdBy = await getValidEmployeeId(client, req.user?.employee_id);
+        const cleanCustomerId = sanitizeId(customer_id);
 
-        if (!companyId || !customer_id || items.length === 0) {
+        if (!companyId || !cleanCustomerId || items.length === 0) {
             await client.query('ROLLBACK');
             return res.status(400).json({ success: false, message: 'Company ID, Customer, and Items are required' });
         }
@@ -902,7 +1076,7 @@ export const createQuotation = async (req, res) => {
                 $6, $7, $8, $9,
                 'DRAFT', $10, $11
             ) RETURNING *
-        `, [companyId, branchId, customer_id, qNum, quotation_date, validDate, totalTaxable, totalTax, net, terms_and_conditions, createdBy]);
+        `, [companyId, branchId, cleanCustomerId, qNum, quotation_date, validDate, totalTaxable, totalTax, net, terms_and_conditions, createdBy]);
         const quote = qRes.rows[0];
 
         for (const item of parsedItems) {
@@ -915,7 +1089,7 @@ export const createQuotation = async (req, res) => {
                 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
             `, [
                 quote.quotation_id, item.line_number, isService ? 'SERVICE' : 'PRODUCT',
-                isService ? null : item.product_id, isService ? (item.service_id || item.product_id) : null,
+                isService ? null : sanitizeId(item.product_id), isService ? sanitizeId(item.service_id || item.product_id) : null,
                 item.hsn_sac_code || (isService ? '9983' : '9988'),
                 item.quantity, item.unit_of_measure || (isService ? 'HRS' : 'PCS'), item.quoted_rate, item.taxable_amount, item.tax_rate,
                 +(item.tax_amount / 2).toFixed(2), +(item.tax_amount / 2).toFixed(2), 0, item.total_amount
@@ -957,11 +1131,13 @@ export const createSalesOrder = async (req, res) => {
     try {
         await client.query('BEGIN');
         const { customer_id, quotation_id = null, order_date = new Date().toISOString().split('T')[0], delivery_due_date, customer_po_reference, items = [], terms_and_conditions } = req.body;
-        const companyId = req.body.company_id || req.user?.company_id;
-        const branchId = req.body.branch_id || req.user?.branch_id || null;
-        const createdBy = req.user?.employee_id || null;
+        const companyId = sanitizeId(req.body.company_id || req.user?.company_id);
+        const branchId = sanitizeId(req.body.branch_id || req.user?.branch_id);
+        const createdBy = await getValidEmployeeId(client, req.user?.employee_id);
+        const cleanCustomerId = sanitizeId(customer_id);
+        const cleanQuotationId = sanitizeId(quotation_id);
 
-        if (!companyId || !customer_id || items.length === 0) {
+        if (!companyId || !cleanCustomerId || items.length === 0) {
             await client.query('ROLLBACK');
             return res.status(400).json({ success: false, message: 'Company ID, Customer, and Items are required' });
         }
@@ -1002,7 +1178,7 @@ export const createSalesOrder = async (req, res) => {
                 $7, $8, $9, $10,
                 $11, 'PENDING', 'UNBILLED', $12, $13
             ) RETURNING *
-        `, [companyId, branchId, customer_id, quotation_id, soNum, order_date, delivery_due_date || order_date, customer_po_reference, totalTaxable, totalTax, net, terms_and_conditions, createdBy]);
+        `, [companyId, branchId, cleanCustomerId, cleanQuotationId, soNum, order_date, delivery_due_date || order_date, customer_po_reference, totalTaxable, totalTax, net, terms_and_conditions, createdBy]);
         const so = soRes.rows[0];
 
         for (const item of parsedItems) {
@@ -1013,7 +1189,7 @@ export const createSalesOrder = async (req, res) => {
                     cgst_amount, sgst_amount, igst_amount, total_amount
                 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
             `, [
-                so.sales_order_id, item.line_number, item.product_id, item.hsn_sac_code || '9988',
+                so.sales_order_id, item.line_number, sanitizeId(item.product_id), item.hsn_sac_code || '9988',
                 item.ordered_quantity, item.unit_of_measure || 'PCS', item.unit_rate, item.taxable_amount, item.tax_rate,
                 +(item.tax_amount / 2).toFixed(2), +(item.tax_amount / 2).toFixed(2), 0, item.total_amount
             ]);
@@ -1071,7 +1247,7 @@ export const convertQuotationToSalesOrder = async (req, res) => {
             RETURNING *
         `, [companyId, quotation.branch_id, quotation.customer_id, quotationId, orderNumber,
             quotation.total_taxable_amount, quotation.total_tax_amount, quotation.net_amount,
-            quotation.terms_and_conditions, req.user?.employee_id || null]);
+            quotation.terms_and_conditions, sanitizeId(req.user?.employee_id)]);
 
         for (const item of itemsRes.rows) {
             await client.query(`
@@ -1081,7 +1257,7 @@ export const convertQuotationToSalesOrder = async (req, res) => {
                     discount_amount, taxable_amount, tax_rate, cgst_rate, cgst_amount,
                     sgst_rate, sgst_amount, igst_rate, igst_amount, total_amount
                 ) VALUES ($1, $2, $3, $4, $5, $6, $7, 0, 0, $8, $9, 0, $10, 0, $11, 0, $12, $13)
-            `, [orderRes.rows[0].sales_order_id, item.line_number, item.product_id, item.hsn_sac_code,
+            `, [orderRes.rows[0].sales_order_id, item.line_number, sanitizeId(item.product_id), item.hsn_sac_code,
                 item.quantity, item.unit_of_measure, item.quoted_rate, item.taxable_amount, item.tax_rate,
                 item.cgst_amount, item.sgst_amount, item.igst_amount, item.total_amount]);
         }
