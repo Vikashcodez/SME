@@ -7,7 +7,7 @@
   "scripts": {
     "start": "node src/app.js",
     "dev": "nodemon src/app.js",
-    "test": "node --test test/global-project.test.js"
+    "test": "node --test test/global-project.test.js test/foreign-key-import.test.js"
   },
   "dependencies": {
     "bcrypt": "^6.0.0",

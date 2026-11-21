@@ -21,8 +21,56 @@ import {
   Building,
   Building2,
   Clock,
-  ChevronRight
+  ChevronRight,
+  FileSpreadsheet
 } from 'lucide-react';
+import ExcelImportModal from '../../components/ExcelImportModal';
+
+const GRN_IMPORT_COLUMNS = [
+  { key: 'vendor', label: 'Vendor (Name / GSTIN / PAN / Code)', required: true, example: 'Tata Steel Processing Ltd' },
+  { key: 'raw_material', label: 'Raw Material (Name or Code)', required: true, example: 'Stainless Steel Rod 20mm' },
+  { key: 'received_quantity', label: 'Received Quantity', required: true, example: 100 },
+  { key: 'unit_cost', label: 'Unit Cost (₹)', required: false, example: 145 },
+  { key: 'free_quantity', label: 'Free Quantity', required: false, example: 0 },
+  { key: 'batch_number', label: 'Batch / Lot Number', required: false, example: 'BATCH-2024-001' },
+  { key: 'invoice_number', label: 'Invoice / Bill Number', required: false, example: 'INV-2024-889' },
+  { key: 'invoice_date', label: 'Invoice Date (YYYY-MM-DD)', required: false, example: '2024-03-15' },
+  { key: 'received_date', label: 'Received Date (YYYY-MM-DD)', required: false, example: '2024-03-16' },
+  { key: 'branch', label: 'Branch (Name or Code)', required: false, example: 'Main Plant' },
+  { key: 'warehouse_location', label: 'Warehouse / Rack Location', required: false, example: 'Raw Store - Rack B2' },
+  { key: 'remarks', label: 'Remarks / Notes', required: false, example: 'Imported via Excel Batch' }
+];
+
+const GRN_IMPORT_SAMPLES = [
+  {
+    'Vendor (Name / GSTIN / PAN / Code)': 'Tata Steel Processing Ltd',
+    'Raw Material (Name or Code)': 'Stainless Steel Rod 20mm',
+    'Received Quantity': 100,
+    'Unit Cost (₹)': 145,
+    'Free Quantity': 0,
+    'Batch / Lot Number': 'BATCH-2024-001',
+    'Invoice / Bill Number': 'INV-2024-889',
+    'Invoice Date (YYYY-MM-DD)': '2024-03-15',
+    'Received Date (YYYY-MM-DD)': '2024-03-16',
+    'Branch (Name or Code)': 'Main Plant',
+    'Warehouse / Rack Location': 'Raw Store - Rack B2',
+    'Remarks / Notes': 'Verified and received'
+  },
+  {
+    'Vendor (Name / GSTIN / PAN / Code)': '27AABCU9603R1ZM',
+    'Raw Material (Name or Code)': 'Aluminium Ingot Grade A',
+    'Received Quantity': 250,
+    'Unit Cost (₹)': 220,
+    'Free Quantity': 5,
+    'Batch / Lot Number': 'BATCH-2024-002',
+    'Invoice / Bill Number': 'INV-9021',
+    'Invoice Date (YYYY-MM-DD)': '2024-03-18',
+    'Received Date (YYYY-MM-DD)': '2024-03-18',
+    'Branch (Name or Code)': 'Main Plant',
+    'Warehouse / Rack Location': 'Raw Store - Section C',
+    'Remarks / Notes': 'Matched vendor by GSTIN foreign key'
+  }
+];
 
 const API_BASE_URL = import.meta.env.VITE_API_URL ? import.meta.env.VITE_API_URL.replace('/api', '') : 'http://localhost:5000';
 
@@ -47,8 +95,36 @@ const GrnManagement = () => {
   // Modals
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showDetailModal, setShowDetailModal] = useState(false);
+  const [showImportModal, setShowImportModal] = useState(false);
   const [selectedGrn, setSelectedGrn] = useState(null);
   const [submitting, setSubmitting] = useState(false);
+
+  const handleBulkImportGrn = async (rows) => {
+    try {
+      const payload = {
+        items: rows,
+        company_id: selectedCompanyId || user?.company_id,
+        branch_id: (selectedBranchId && selectedBranchId !== 'all') ? selectedBranchId : (user?.branch_id || null)
+      };
+      const res = await grnApi.bulkImport(payload);
+      if (res?.data?.success) {
+        fetchGrns();
+        return {
+          success: true,
+          message: res.data.message || `Successfully imported ${rows.length} GRN records!`
+        };
+      }
+      return {
+        success: false,
+        message: res?.data?.message || 'Failed to import GRN.'
+      };
+    } catch (err) {
+      return {
+        success: false,
+        message: err.response?.data?.message || err.message || 'Import failed.'
+      };
+    }
+  };
 
   // Auto-generate unique batch code helper
   const generateBatchCode = () => `BATCH-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
@@ -333,13 +409,23 @@ const GrnManagement = () => {
           </div>
         </div>
 
-        <button
-          onClick={() => setShowCreateModal(true)}
-          className="flex items-center gap-2 px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-lg shadow-sm transition"
-        >
-          <Plus className="w-4 h-4" />
-          Create New GRN
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setShowImportModal(true)}
+            className="flex items-center gap-2 px-3.5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold rounded-lg shadow-sm transition"
+            title="Import GRN from Excel or Google Sheet"
+          >
+            <FileSpreadsheet className="w-4 h-4" />
+            Import Data
+          </button>
+          <button
+            onClick={() => setShowCreateModal(true)}
+            className="flex items-center gap-2 px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-lg shadow-sm transition"
+          >
+            <Plus className="w-4 h-4" />
+            Create New GRN
+          </button>
+        </div>
       </div>
 
       {/* Scope and Search Filters */}
@@ -948,6 +1034,17 @@ const GrnManagement = () => {
           </div>
         </div>
       )}
+
+      {/* Excel / Spreadsheet Import Modal */}
+      <ExcelImportModal
+        isOpen={showImportModal}
+        onClose={() => setShowImportModal(false)}
+        title="Import Goods Receipt Notes (GRN)"
+        moduleName="GRN (Goods Receipt Note)"
+        columns={GRN_IMPORT_COLUMNS}
+        sampleData={GRN_IMPORT_SAMPLES}
+        onImport={handleBulkImportGrn}
+      />
     </div>
   );
 };

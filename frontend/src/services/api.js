@@ -237,6 +237,7 @@ export const categories = {
 export const grn = {
   getAll: (params) => api.get('/grn', { params }),
   getById: (id) => api.get(`/grn/${id}`),
+  bulkImport: (data) => api.post('/grn/bulk-import', data),
   create: (data) => {
     if (data instanceof FormData) {
       return api.post('/grn', data, {

@@ -31,7 +31,7 @@ test('global project inventory is complete', () => {
 
 test('backend package exposes the global test command', () => {
     const packageJson = JSON.parse(read(path.join(backendRoot, 'package.json')));
-    assert.equal(packageJson.scripts.test, 'node --test test/global-project.test.js');
+    assert.equal(packageJson.scripts.test, 'node --test test/global-project.test.js test/foreign-key-import.test.js');
 });
 
 test('frontend package exposes build and lint commands', () => {
@@ -146,4 +146,34 @@ test('compliance payroll is integrated with accounting and statutory records', (
     assert.match(routes, /\/payroll-runs/);
     assert.match(routes, /\/challans/);
     assert.match(routes, /\/form16/);
+});
+
+test('GRN and Spreadsheet Excel import contracts: foreign key resolution and bulk import endpoints', () => {
+    const grnController = read(path.join(backendSourceRoot, 'controllers', 'Grn.Controller.js'));
+    const grnRoutes = read(path.join(backendSourceRoot, 'routes', 'Grn.Routes.js'));
+    const fkResolver = read(path.join(backendSourceRoot, 'services', 'ForeignKeyResolver.js'));
+    const apiService = read(path.join(frontendSourceRoot, 'services', 'api.js'));
+    const grnPage = read(path.join(frontendSourceRoot, 'pages', 'Inventory', 'GrnManagement.jsx'));
+
+    // Check backend foreign key resolver
+    assert.match(fkResolver, /export const resolveVendorId/);
+    assert.match(fkResolver, /export const resolveCustomerId/);
+    assert.match(fkResolver, /export const resolveBranchId/);
+    assert.match(fkResolver, /export const resolveRawMaterialId/);
+    assert.match(fkResolver, /export const resolveProductId/);
+    assert.match(fkResolver, /export const resolveAccountGroupId/);
+
+    // Check GRN bulk import controller and routes
+    assert.match(grnController, /export const bulkImportGrns/);
+    assert.match(grnController, /resolveVendorId/);
+    assert.match(grnController, /resolveRawMaterialId/);
+    assert.match(grnController, /resolveBranchId/);
+    assert.match(grnRoutes, /router\.post\('\/bulk-import',\s*bulkImportGrns\)/);
+
+    // Check frontend API and GRN Management UI
+    assert.match(apiService, /bulkImport:\s*\(data\)\s*=>\s*api\.post\('\/grn\/bulk-import'/);
+    assert.match(grnPage, /ExcelImportModal/);
+    assert.match(grnPage, /GRN_IMPORT_COLUMNS/);
+    assert.match(grnPage, /handleBulkImportGrn/);
+    assert.match(grnPage, /Import Data/);
 });

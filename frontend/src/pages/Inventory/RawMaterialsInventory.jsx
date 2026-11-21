@@ -333,8 +333,8 @@ const RawMaterialsInventory = () => {
     try {
       const branchParam = branchVal && branchVal !== 'all' ? branchVal : undefined;
       const [deptRes, empRes] = await Promise.all([
-        branchParam ? departmentsApi.getByBranch(branchParam) : Promise.resolve({ data: [] }),
-        employeesApi.getAll({ company_id: compVal, branch_id: branchParam })
+        branchParam ? departmentsApi.getByBranch(branchParam).catch(() => ({ data: { data: [] } })) : Promise.resolve({ data: [] }),
+        employeesApi.getAll({ company_id: compVal, branch_id: branchParam }).catch(() => ({ data: { data: [] } }))
       ]);
       setDepartmentsList(deptRes.data?.data || deptRes.data || []);
       setEmployeesList(empRes.data?.data || empRes.data || []);

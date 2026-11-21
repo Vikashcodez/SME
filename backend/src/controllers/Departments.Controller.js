@@ -187,16 +187,9 @@ export const getDepartmentsByBranch = async (req, res) => {
 
         const result = await pool.query(query, values);
 
-        if (result.rows.length === 0) {
-            return res.status(404).json({
-                success: false,
-                message: 'No departments found for this branch'
-            });
-        }
-
         res.status(200).json({
             success: true,
-            message: 'Departments retrieved successfully',
+            message: result.rows.length === 0 ? 'No departments found for this branch' : 'Departments retrieved successfully',
             count: result.rows.length,
             data: result.rows
         });

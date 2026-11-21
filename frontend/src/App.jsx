@@ -43,6 +43,8 @@ import Compliance from './pages/Commercial/Compliance';
 import LedgerManagement from './pages/Commercial/LedgerManagement';
 import TaxMaster from './pages/Master Data/TaxMaster';
 import PartyMaster from './pages/Master Data/PartyMaster';
+import TutorialChatbot from './components/TutorialChatbot';
+import ErrorBoundary from './components/ErrorBoundary';
 
 const AppContent = () => {
   const { isAuthenticated, isSuperAdmin, isCompanyAdmin, isBranchAdmin, isEmployee } = useAuth();
@@ -828,6 +830,9 @@ function App() {
           }}
         />
         <AppContent />
+        <ErrorBoundary fallback={null}>
+          <TutorialChatbot />
+        </ErrorBoundary>
       </AuthProvider>
     </Router>
   );

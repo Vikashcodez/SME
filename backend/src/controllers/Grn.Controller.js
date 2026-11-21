@@ -1,9 +1,10 @@
 import pool from '../config/database.js';
 import { resolveTaxRates } from '../services/TaxMaster.js';
 import { createPurchaseInvoice } from './Purchase.Controller.js';
+import { resolveVendorId, resolveRawMaterialId, resolveBranchId } from '../services/ForeignKeyResolver.js';
 
 // Helper to auto-generate GRN number
-const generateGrnNumber = async (client) => {
+export const generateGrnNumber = async (client) => {
     const year = new Date().getFullYear();
     const countRes = await client.query(`SELECT COUNT(*) FROM grns WHERE grn_number LIKE $1`, [`GRN-${year}-%`]);
     const nextSeq = String(parseInt(countRes.rows[0].count, 10) + 1).padStart(4, '0');
@@ -493,5 +494,227 @@ export const updateGrn = async (req, res) => {
             message: 'Failed to update GRN',
             error: error.message
         });
+    }
+};
+
+// Bulk Import GRNs from Excel / Google Sheets
+export const bulkImportGrns = async (req, res) => {
+    const client = await pool.connect();
+    try {
+        const { items, company_id, branch_id } = req.body;
+        const effectiveCompanyId = company_id || req.user?.company_id;
+        const defaultBranchId = branch_id || req.user?.branch_id || null;
+        const createdBy = req.user?.employee_id || null;
+
+        if (!effectiveCompanyId) {
+            return res.status(400).json({ success: false, message: 'Company ID is required.' });
+        }
+
+        if (!Array.isArray(items) || items.length === 0) {
+            return res.status(400).json({ success: false, message: 'No GRN items provided for import.' });
+        }
+
+        await client.query('BEGIN');
+
+        let importedCount = 0;
+        const errors = [];
+        const createdGrns = [];
+
+        for (let i = 0; i < items.length; i++) {
+            const row = items[i];
+            const rowNum = i + 1;
+
+            const resolvedBranchId = await resolveBranchId(client, effectiveCompanyId, row.branch || row.branch_id || defaultBranchId) || defaultBranchId;
+            const vendorIdentifier = row.vendor || row.vendor_id || row.vendor_name || row.supplier || row.party;
+            const resolvedVendorId = await resolveVendorId(client, effectiveCompanyId, vendorIdentifier);
+
+            if (!resolvedVendorId) {
+                errors.push(`Row ${rowNum}: Could not resolve Vendor/Supplier "${vendorIdentifier || 'empty'}". Provide Vendor Name, GSTIN, PAN, or Code.`);
+                continue;
+            }
+
+            const rawMaterialIdentifier = row.raw_material || row.raw_material_id || row.material_name || row.material || row.item;
+            const resolvedRawMaterialId = await resolveRawMaterialId(client, effectiveCompanyId, rawMaterialIdentifier);
+
+            if (!resolvedRawMaterialId) {
+                errors.push(`Row ${rowNum}: Could not resolve Raw Material "${rawMaterialIdentifier || 'empty'}". Provide Material Name or Code.`);
+                continue;
+            }
+
+            const receivedQty = parseFloat(row.received_quantity || row.quantity || row.qty || 0);
+            if (isNaN(receivedQty) || receivedQty <= 0) {
+                errors.push(`Row ${rowNum}: Received Quantity must be greater than 0.`);
+                continue;
+            }
+
+            const freeQty = parseFloat(row.free_quantity || 0) || 0;
+            const unitCost = parseFloat(row.unit_cost || row.unit_price || row.rate || row.price || 0) || 0;
+            const invoiceNumber = (row.invoice_number || row.bill_number || row.challan_number || '').toString().trim() || null;
+            const invoiceDate = row.invoice_date || row.bill_date || new Date().toISOString().split('T')[0];
+            const receivedDate = row.received_date || new Date().toISOString().split('T')[0];
+            const batchNumber = (row.batch_number || row.batch || '').toString().trim() || `BATCH-${Date.now().toString().slice(-6)}-${i + 1}`;
+            const remarks = (row.remarks || row.notes || 'Imported via Excel').toString().trim();
+            const location = (row.warehouse_location || row.location || 'Main Store').toString().trim();
+            const invoiceUrl = (row.invoice_file || row.invoice_url || row.photo_1 || null);
+
+            let grnNumber = (row.grn_number || '').toString().trim().toUpperCase();
+            if (!grnNumber) {
+                grnNumber = await generateGrnNumber(client);
+            }
+
+            // Check uniqueness of GRN number
+            const dupCheck = await client.query('SELECT id FROM grns WHERE grn_number = $1', [grnNumber]);
+            if (dupCheck.rows.length > 0) {
+                grnNumber = await generateGrnNumber(client);
+            }
+
+            // Insert GRN Header
+            const grnInsertQuery = `
+                INSERT INTO grns (
+                    company_id, branch_id, grn_number, vendor_id,
+                    invoice_number, invoice_date, received_date,
+                    invoice_file, remarks, created_by
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                RETURNING *
+            `;
+
+            const grnRes = await client.query(grnInsertQuery, [
+                effectiveCompanyId,
+                resolvedBranchId,
+                grnNumber,
+                resolvedVendorId,
+                invoiceNumber,
+                invoiceDate,
+                receivedDate,
+                invoiceUrl,
+                remarks,
+                createdBy
+            ]);
+
+            const grn = grnRes.rows[0];
+
+            // Resolve tax and calculate amounts
+            const materialRes = await client.query(
+                `SELECT hsn_code, gst_rate, unit_price FROM raw_materials WHERE material_id = $1 AND company_id = $2`,
+                [resolvedRawMaterialId, effectiveCompanyId]
+            );
+            const material = materialRes.rows[0];
+            const gstRate = parseFloat(row.gst_rate ?? material?.gst_rate ?? 0) || 0;
+            const masterRates = await resolveTaxRates(client, effectiveCompanyId, gstRate);
+            const taxableAmount = +(receivedQty * unitCost).toFixed(2);
+            const taxAmount = +(taxableAmount * (masterRates.total / 100)).toFixed(2);
+            const totalReceivedBatchQty = receivedQty + freeQty;
+
+            // Insert GRN Item
+            const itemInsertQuery = `
+                INSERT INTO grn_items (
+                    grn_id, raw_material_id, batch_number,
+                    received_quantity, free_quantity, unit_cost,
+                    tax, remarks
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                RETURNING *
+            `;
+
+            const itemRes = await client.query(itemInsertQuery, [
+                grn.id,
+                resolvedRawMaterialId,
+                batchNumber,
+                receivedQty,
+                freeQty,
+                unitCost,
+                taxAmount,
+                remarks
+            ]);
+
+            const createdItem = itemRes.rows[0];
+
+            // Insert into raw_material_inventory
+            const invInsertQuery = `
+                INSERT INTO raw_material_inventory (
+                    company_id, branch_id, raw_material_id, material_id,
+                    grn_item_id, batch_number, received_quantity,
+                    available_quantity, reserved_quantity, unit_cost,
+                    current_stock, available_stock, average_unit_cost, total_value,
+                    warehouse_location, status
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+                RETURNING *
+            `;
+
+            await client.query(invInsertQuery, [
+                effectiveCompanyId,
+                resolvedBranchId,
+                resolvedRawMaterialId,
+                resolvedRawMaterialId,
+                createdItem.id,
+                batchNumber,
+                totalReceivedBatchQty,
+                totalReceivedBatchQty,
+                0,
+                unitCost,
+                totalReceivedBatchQty,
+                totalReceivedBatchQty,
+                unitCost,
+                totalReceivedBatchQty * unitCost,
+                location,
+                'AVAILABLE'
+            ]);
+
+            // Stock movement audit record
+            await client.query(`
+                INSERT INTO raw_material_stock_movements (
+                    company_id, branch_id, material_id, vendor_id,
+                    movement_type, item_type, quantity, unit_cost, total_cost,
+                    reference_no, batch_no, invoice_number, invoice_date, invoice_url,
+                    performed_by
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+            `, [
+                effectiveCompanyId,
+                resolvedBranchId,
+                resolvedRawMaterialId,
+                resolvedVendorId,
+                'GRN Inward (Excel Import)',
+                'Raw Material',
+                totalReceivedBatchQty,
+                unitCost,
+                totalReceivedBatchQty * unitCost,
+                grnNumber,
+                batchNumber,
+                invoiceNumber,
+                invoiceDate,
+                invoiceUrl,
+                createdBy
+            ]);
+
+            importedCount++;
+            createdGrns.push(grn);
+        }
+
+        if (errors.length > 0 && importedCount === 0) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({
+                success: false,
+                message: 'GRN import failed with errors.',
+                errors
+            });
+        }
+
+        await client.query('COMMIT');
+
+        return res.status(201).json({
+            success: true,
+            message: `Successfully imported ${importedCount} GRN record(s).${errors.length > 0 ? ` (${errors.length} skipped)` : ''}`,
+            count: importedCount,
+            data: createdGrns,
+            errors: errors.length > 0 ? errors : undefined
+        });
+    } catch (error) {
+        await client.query('ROLLBACK');
+        console.error('Error in bulkImportGrns:', error);
+        return res.status(500).json({
+            success: false,
+            message: error.message || 'Failed to bulk import GRNs.'
+        });
+    } finally {
+        client.release();
     }
 };
